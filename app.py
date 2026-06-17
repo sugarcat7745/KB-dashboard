@@ -8,6 +8,40 @@ from anthropic import Anthropic
 from datetime import datetime, date
 import base64, urllib.request
 
+# 한국 공휴일 (2026년)
+KR_HOLIDAYS_2026 = {
+    date(2026,1,1),   # 신정
+    date(2026,1,28),  # 설날 전날
+    date(2026,1,29),  # 설날
+    date(2026,1,30),  # 설날 다음날
+    date(2026,3,1),   # 삼일절
+    date(2026,5,5),   # 어린이날
+    date(2026,5,15),  # 부처님오신날
+    date(2026,6,6),   # 현충일
+    date(2026,8,15),  # 광복절
+    date(2026,9,24),  # 추석 전날
+    date(2026,9,25),  # 추석
+    date(2026,9,26),  # 추석 다음날
+    date(2026,10,3),  # 개천절
+    date(2026,10,9),  # 한글날
+    date(2026,12,25), # 크리스마스
+}
+
+def get_date_color(d):
+    """날짜 색상 반환: 토요일=파란색, 일요일/공휴일=빨간색, 평일=기본"""
+    if isinstance(d, str):
+        try:
+            # "06 /01(월)" 형식 파싱
+            clean = d.replace(" ","").split("(")[0]
+            parsed = datetime.strptime(f"2026.{clean}", "%Y.%m/%d")
+            d = parsed.date()
+        except:
+            return "normal"
+    if d in KR_HOLIDAYS_2026: return "holiday"
+    if d.weekday() == 5: return "saturday"
+    if d.weekday() == 6: return "sunday"
+    return "normal"
+
 st.set_page_config(page_title="법무법인 KB | 광고 대시보드", page_icon="⚖️", layout="wide")
 
 st.markdown("""
@@ -136,26 +170,43 @@ def load_inq_tab(tab_name):
     try:
         ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet(tab_name)
         data = ws.get_all_values()
+
+        # 헤더 행 찾기 (문의일자 or 이름+접수방식 포함)
         hr = None
         for i, row in enumerate(data):
-            if "문의일자" in row or ("이름" in row and "접수방식" in row):
+            row_str = " ".join(row)
+            if "문의일자" in row_str or ("이름" in row_str and "접수방식" in row_str):
                 hr = i
                 break
         if hr is None: return pd.DataFrame()
+
         header = data[hr]
-        rows = [row[:len(header)] for row in data[hr+1:] if any(r.strip() for r in row)]
-        return pd.DataFrame(rows, columns=header)
-    except:
+        rows = []
+        for row in data[hr+1:]:
+            # B열(index 1)에 날짜 숫자가 있는 행만 (260601 형식)
+            if len(row) > 1 and str(row[1]).strip().isdigit() and len(str(row[1]).strip()) == 6:
+                padded = row + [""] * (len(header) - len(row))
+                rows.append(padded[:len(header)])
+
+        if not rows: return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=header)
+
+        # 날짜 파싱 (YYMMDD → datetime)
+        date_col = next((c for c in df.columns if "문의일자" in c), None)
+        if date_col:
+            df["_dt"] = pd.to_datetime(df[date_col].astype(str).str.strip(), format="%y%m%d", errors="coerce")
+
+        return df
+    except Exception as e:
         return pd.DataFrame()
 
 # ── 여러 탭 문의 합치기 ───────────────────────
 def load_inq_range(start_dt, end_dt):
     """기간에 해당하는 문의 탭들을 모두 합쳐서 반환"""
-    # 탭 목록 생성 (YY.MM 형식)
     tabs_needed = []
     cur = date(start_dt.year, start_dt.month, 1)
-    end = date(end_dt.year, end_dt.month, 1)
-    while cur <= end:
+    end_m = date(end_dt.year, end_dt.month, 1)
+    while cur <= end_m:
         tabs_needed.append(f"{str(cur.year)[2:]}.{str(cur.month).zfill(2)}")
         if cur.month == 12:
             cur = date(cur.year+1, 1, 1)
@@ -171,19 +222,12 @@ def load_inq_range(start_dt, end_dt):
     if not dfs: return pd.DataFrame()
     combined = pd.concat(dfs, ignore_index=True)
 
-    # 날짜 필터 적용
-    if "문의일자" in combined.columns:
-        try:
-            combined["_dt"] = pd.to_datetime(
-                combined["문의일자"].astype(str).str.strip(),
-                format="%y%m%d", errors="coerce"
-            )
-            combined = combined[
-                (combined["_dt"] >= pd.Timestamp(start_dt)) &
-                (combined["_dt"] <= pd.Timestamp(end_dt))
-            ]
-        except:
-            pass
+    # _dt 컬럼으로 날짜 필터
+    if "_dt" in combined.columns:
+        combined = combined[
+            (combined["_dt"] >= pd.Timestamp(start_dt)) &
+            (combined["_dt"] <= pd.Timestamp(end_dt))
+        ]
 
     return combined
 
@@ -408,19 +452,44 @@ def main():
         st.markdown(f'<div class="section-title">기간별 광고 상세 ({period_str})</div>', unsafe_allow_html=True)
 
         if not df_ad.empty:
-            cl2, cr2 = st.columns(2)
-            with cl2:
-                fig3 = go.Figure()
-                fig3.add_trace(go.Bar(x=df_ad["날짜"], y=df_ad["총광고비"], marker_color="#3b82f6", opacity=0.85))
-                fig3.update_layout(title=dict(text="일자별 총광고비", font=dict(color="#94a3b8",size=13)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#64748b",size=10), xaxis=dict(gridcolor="#1e293b",tickangle=-45), yaxis=dict(gridcolor="#1e293b",tickformat=","), height=280, margin=dict(l=10,r=10,t=40,b=60), showlegend=False)
-                st.plotly_chart(fig3, use_container_width=True)
-            with cr2:
-                fig4 = go.Figure()
-                for cn,color in [("문의","#3b82f6"),("상담","#10b981"),("수임","#f59e0b")]:
-                    if cn in df_ad.columns:
-                        fig4.add_trace(go.Scatter(x=df_ad["날짜"], y=df_ad[cn], name=cn, mode="lines+markers", line=dict(color=color,width=2), marker=dict(size=5)))
-                fig4.update_layout(title=dict(text="일자별 문의/상담/수임", font=dict(color="#94a3b8",size=13)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#64748b",size=10), legend=dict(bgcolor="rgba(0,0,0,0)"), xaxis=dict(gridcolor="#1e293b",tickangle=-45), yaxis=dict(gridcolor="#1e293b"), height=280, margin=dict(l=10,r=10,t=40,b=60))
-                st.plotly_chart(fig4, use_container_width=True)
+            # 총광고비 단순 라인차트
+            fig3 = go.Figure()
+            fig3.add_trace(go.Scatter(
+                x=df_ad["날짜"], y=df_ad["총광고비"],
+                mode="lines+markers",
+                line=dict(color="#3b82f6", width=2),
+                marker=dict(size=5, color="#3b82f6"),
+                fill="tozeroy", fillcolor="rgba(59,130,246,0.08)",
+                name="총광고비"
+            ))
+            fig3.update_layout(
+                title=dict(text="일자별 총광고비", font=dict(color="#94a3b8",size=13)),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#64748b",size=10),
+                xaxis=dict(gridcolor="#1e293b", tickangle=-45),
+                yaxis=dict(gridcolor="#1e293b", tickformat=","),
+                height=260, margin=dict(l=10,r=10,t=40,b=60), showlegend=False
+            )
+            st.plotly_chart(fig3, use_container_width=True)
+
+            # 문의 단순 라인차트
+            fig4 = go.Figure()
+            fig4.add_trace(go.Scatter(
+                x=df_ad["날짜"], y=df_ad["문의"],
+                mode="lines+markers",
+                line=dict(color="#10b981", width=2),
+                marker=dict(size=5, color="#10b981"),
+                name="문의"
+            ))
+            fig4.update_layout(
+                title=dict(text="일자별 문의", font=dict(color="#94a3b8",size=13)),
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#64748b",size=10),
+                xaxis=dict(gridcolor="#1e293b", tickangle=-45),
+                yaxis=dict(gridcolor="#1e293b"),
+                height=260, margin=dict(l=10,r=10,t=40,b=60), showlegend=False
+            )
+            st.plotly_chart(fig4, use_container_width=True)
 
             disp2 = df_ad.copy()
             for c in ["네이버","구글","카카오모먼트","모비온","총광고비","문의당비용"]:
@@ -428,7 +497,18 @@ def main():
             for c in ["문의","상담","수임"]:
                 if c in disp2.columns: disp2[c] = disp2[c].apply(lambda x: f"{int(x):,}")
             show2 = [c for c in ["날짜","네이버","구글","카카오모먼트","모비온","총광고비","문의","문의당비용","상담","수임"] if c in disp2.columns]
-            st.dataframe(disp2[show2], use_container_width=True, hide_index=True, height=400)
+
+            # 날짜 색상 스타일 적용
+            def style_date_row(row):
+                color = get_date_color(str(row["날짜"]) if "날짜" in row.index else "")
+                if color == "saturday":
+                    return ["color: #60a5fa; font-weight:600"] + [""] * (len(row)-1)
+                elif color in ["sunday","holiday"]:
+                    return ["color: #f87171; font-weight:600"] + [""] * (len(row)-1)
+                return [""] * len(row)
+
+            styled = disp2[show2].style.apply(style_date_row, axis=1)
+            st.dataframe(styled, use_container_width=True, hide_index=True, height=400)
         else:
             st.warning(f"선택한 기간({period_str})의 광고 데이터가 없습니다.")
 
@@ -467,10 +547,9 @@ def main():
             # 유효 행 (이름 있는 행)
             valid = df_inq[df_inq["이름"].str.strip() != ""].copy() if "이름" in df_inq.columns else df_inq.copy()
 
-            # 상담: L열(상담), 수임: M열(수임완료및입금)
-            # 컬럼명 찾기
-            consult_col = next((c for c in valid.columns if "상담" in c and "사무소" not in c and "전환" not in c), None)
-            contract_col = next((c for c in valid.columns if "수임" in c), None)
+            # 상담: M열, 수임: N열 (컬럼명으로 찾기)
+            consult_col = next((c for c in valid.columns if c.strip() == "상담"), None)
+            contract_col = next((c for c in valid.columns if "수임완료" in c or c.strip() == "수임완료및입금"), None)
 
             total_cnt = len(valid)
             consult_cnt = len(valid[valid[consult_col].str.strip().str.len() > 0]) if consult_col else 0
