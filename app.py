@@ -65,28 +65,84 @@ def load_annual_summary():
         sh = gc.open_by_key(AD_SHEET_ID)
         ws = sh.worksheet("연간요약")
         data = ws.get_all_values()
-        rows = []
-        current_year = None
+
+        # 헤더 찾기 (날짜, 네이버 포함된 행)
         header = None
-        for row in data:
+        header_col_start = 1  # B열부터 시작
+        for i, row in enumerate(data):
             if "날짜" in row and "네이버" in row:
                 header = row
+                break
+
+        if not header:
+            return pd.DataFrame(), "헤더를 찾을 수 없습니다"
+
+        # 컬럼명 추출 (B열부터)
+        col_names = ["연도", "월", "네이버", "구글", "카카오모먼트", "카카오키워드", "모비온", "총광고비", "문의", "문의당비용", "상담", "수임", "계약서금액", "보드"]
+
+        rows = []
+        current_year = None
+
+        for row in data:
+            # 연도 감지 (B열 = index 1)
+            if len(row) > 1 and str(row[1]).strip() in ["2024", "2025", "2026"]:
+                current_year = str(row[1]).strip()
                 continue
-            if row and any(y in str(row[0]) for y in ["2024","2025","2026"]):
-                current_year = str(row[0]).strip()
-                continue
-            if header and current_year and len(row) > 1 and "월" in str(row[1]):
-                rows.append([current_year] + row[1:])
-        if not rows or not header:
-            return pd.DataFrame(), None
-        cols = ["연도"] + [h for h in header[1:] if h]
-        df = pd.DataFrame(rows, columns=cols[:len(rows[0])])
-        for c in ["네이버","구글","카카오모먼트","카카오키워드","모비온","총광고비","문의","문의당비용","상담","수임","계약서금액"]:
+
+            # 월 데이터 행 감지 (C열 = index 2에 "월" 포함, 숫자나 ▲▼ 없음)
+            if current_year and len(row) > 2:
+                month_val = str(row[2]).strip()
+                # "1월"~"12월" 또는 "합계" 형태
+                if ("월" in month_val and "▲" not in month_val and "▼" not in month_val and "%" not in month_val) or month_val == "합계":
+                    # 숫자 데이터 추출 (D~O열 = index 3~14)
+                    vals = row[3:15] if len(row) >= 15 else row[3:] + ["0"] * (12 - len(row[3:]))
+                    rows.append([current_year, month_val] + vals)
+
+        if not rows:
+            return pd.DataFrame(), "데이터 행을 찾을 수 없습니다"
+
+        df = pd.DataFrame(rows, columns=col_names[:len(rows[0])])
+
+        # 숫자 변환
+        for c in ["네이버","구글","카카오모먼트","카카오키워드","모비온","총광고비","문의","문의당비용","상담","수임","계약서금액","보드"]:
             if c in df.columns:
-                df[c] = pd.to_numeric(df[c].astype(str).str.replace(",","").str.replace("-","0").str.strip(), errors="coerce").fillna(0)
+                df[c] = pd.to_numeric(
+                    df[c].astype(str).str.replace(",","").str.replace("-","0").str.replace("▲","").str.replace("▼","").str.replace("%","").str.strip(),
+                    errors="coerce"
+                ).fillna(0)
+
         return df, None
     except Exception as e:
         return pd.DataFrame(), str(e)
+
+@st.cache_data(ttl=300)
+def load_monthly_detail(tab_name="2026.06"):
+    try:
+        gc, err = get_gspread_client()
+        if err:
+            return pd.DataFrame()
+        sh = gc.open_by_key(AD_SHEET_ID)
+        ws = sh.worksheet(tab_name)
+        data = ws.get_all_values()
+        header_row = None
+        for i, row in enumerate(data):
+            if "날짜" in row and "네이버" in row:
+                header_row = i
+                break
+        if header_row is None:
+            return pd.DataFrame()
+        header = data[header_row]
+        rows = []
+        for row in data[header_row+1:]:
+            if len(row) > 0 and row[0] and "/" in str(row[0]):
+                rows.append(row[:len(header)])
+        df = pd.DataFrame(rows, columns=header)
+        for c in ["네이버","구글","카카오모먼트","모비온","총광고비","문의","문의당비용","상담","수임"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c].astype(str).str.replace(",","").str.strip(), errors="coerce").fillna(0)
+        return df
+    except:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def load_inquiry(tab_name="26.06"):
@@ -152,42 +208,30 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
-    # 디버그: Secrets 키 확인
-    with st.expander("🔧 연결 상태 확인 (문제해결용)"):
-        try:
-            sa_keys = list(st.secrets["gcp_service_account"].keys())
-            st.success(f"✅ gcp_service_account 키 목록: {sa_keys}")
-            gc, err = get_gspread_client()
-            if err:
-                st.error(f"❌ 구글 연결 오류: {err}")
-            else:
-                st.success("✅ 구글 시트 연결 성공!")
-        except Exception as e:
-            st.error(f"❌ Secrets 오류: {e}")
-
     with st.spinner("데이터 불러오는 중..."):
         df_annual, err = load_annual_summary()
-        df_inq    = load_inquiry("26.06")
-        df_naver  = load_keyword("네이버키워드")
-        df_google = load_keyword("구글키워드")
+        df_monthly = load_monthly_detail("2026.06")
+        df_inq     = load_inquiry("26.06")
+        df_naver   = load_keyword("네이버키워드")
+        df_google  = load_keyword("구글키워드")
 
-    if df_annual.empty:
-        if err:
-            st.error(f"⚠️ 오류: {err}")
-        return
+    if err:
+        st.error(f"⚠️ 데이터 오류: {err}")
 
-    df26 = df_annual[df_annual["연도"].astype(str).str.contains("2026")].copy()
-    df26 = df26[df26["월"].str.contains("월") & ~df26["월"].str.contains("합계")]
+    # 연도별 필터
+    df2026 = df_annual[(df_annual["연도"] == "2026") & (df_annual["월"].str.contains("월")) & (~df_annual["월"].str.contains("합계"))].copy() if not df_annual.empty else pd.DataFrame()
+    df2025 = df_annual[(df_annual["연도"] == "2025") & (df_annual["월"].str.contains("월")) & (~df_annual["월"].str.contains("합계"))].copy() if not df_annual.empty else pd.DataFrame()
 
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 연간 요약", "🔍 키워드 분석", "📞 문의 현황", "🤖 AI 인사이트"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 연간 요약", "📅 이번달 상세", "🔍 키워드 분석", "📞 문의 현황", "🤖 AI 인사이트"])
 
+    # ── TAB 1: 연간 요약 ──
     with tab1:
         st.markdown('<div class="section-title">2026년 누적 성과</div>', unsafe_allow_html=True)
-        if not df26.empty:
-            total_ad  = df26["총광고비"].sum()
-            total_inq = df26["문의"].sum()
-            total_con = df26["수임"].sum()
-            total_cnt = df26["상담"].sum()
+        if not df2026.empty:
+            total_ad  = df2026["총광고비"].sum()
+            total_inq = df2026["문의"].sum()
+            total_con = df2026["수임"].sum()
+            total_cnt = df2026["상담"].sum()
             avg_cpi   = (total_ad / total_inq) if total_inq > 0 else 0
             conv_rate = (total_con / total_inq * 100) if total_inq > 0 else 0
             c1,c2,c3,c4,c5,c6 = st.columns(6)
@@ -202,30 +246,47 @@ def main():
                 with col:
                     st.markdown(f'<div class="metric-card"><div class="metric-label">{label}</div><div class="metric-value">{value}</div><div class="metric-sub">{sub}</div></div>', unsafe_allow_html=True)
 
-            st.markdown('<div class="section-title">월별 광고비 추이</div>', unsafe_allow_html=True)
+            st.markdown("&nbsp;", unsafe_allow_html=True)
             col_l, col_r = st.columns(2)
             with col_l:
                 fig = go.Figure()
                 for p, c in zip(["네이버","구글","카카오모먼트","카카오키워드","모비온"],["#3b82f6","#ef4444","#f59e0b","#8b5cf6","#10b981"]):
-                    if p in df26.columns:
-                        fig.add_trace(go.Bar(name=p, x=df26["월"], y=df26[p], marker_color=c, opacity=0.85))
-                fig.update_layout(barmode="stack", title=dict(text="플랫폼별 광고비", font=dict(color="#e2e8f0",size=14)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#6b7db3"), legend=dict(bgcolor="rgba(0,0,0,0)"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b",tickformat=","), height=320, margin=dict(l=0,r=0,t=40,b=0))
+                    if p in df2026.columns:
+                        fig.add_trace(go.Bar(name=p, x=df2026["월"], y=df2026[p], marker_color=c, opacity=0.85))
+                fig.update_layout(barmode="stack", title=dict(text="플랫폼별 월별 광고비", font=dict(color="#e2e8f0",size=14)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#6b7db3"), legend=dict(bgcolor="rgba(0,0,0,0)"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b",tickformat=","), height=320, margin=dict(l=0,r=0,t=40,b=0))
                 st.plotly_chart(fig, use_container_width=True)
             with col_r:
                 fig2 = go.Figure()
                 for cn, color, name in [("문의","#3b82f6","문의"),("상담","#10b981","상담"),("수임","#f59e0b","수임")]:
-                    if cn in df26.columns:
-                        fig2.add_trace(go.Scatter(x=df26["월"], y=df26[cn], name=name, mode="lines+markers", line=dict(color=color,width=3), marker=dict(size=8,color=color)))
+                    if cn in df2026.columns:
+                        fig2.add_trace(go.Scatter(x=df2026["월"], y=df2026[cn], name=name, mode="lines+markers", line=dict(color=color,width=3), marker=dict(size=8,color=color)))
                 fig2.update_layout(title=dict(text="문의→상담→수임 퍼널", font=dict(color="#e2e8f0",size=14)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#6b7db3"), legend=dict(bgcolor="rgba(0,0,0,0)"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b"), height=320, margin=dict(l=0,r=0,t=40,b=0))
                 st.plotly_chart(fig2, use_container_width=True)
 
-            st.markdown('<div class="section-title">연간 데이터 테이블</div>', unsafe_allow_html=True)
-            show_cols = [c for c in ["월","네이버","구글","카카오모먼트","모비온","총광고비","문의","문의당비용","상담","수임"] if c in df26.columns]
-            st.dataframe(df26[show_cols], use_container_width=True, hide_index=True)
+            st.markdown('<div class="section-title">2026년 월별 데이터</div>', unsafe_allow_html=True)
+            show_cols = [c for c in ["월","네이버","구글","카카오모먼트","모비온","총광고비","문의","문의당비용","상담","수임"] if c in df2026.columns]
+            st.dataframe(df2026[show_cols], use_container_width=True, hide_index=True)
         else:
-            st.warning("2026년 데이터가 없습니다.")
+            st.warning("2026년 데이터를 불러오지 못했습니다.")
+            if not df_annual.empty:
+                st.write("전체 데이터 샘플:", df_annual.head(10))
 
+    # ── TAB 2: 이번달 상세 ──
     with tab2:
+        st.markdown('<div class="section-title">2026년 6월 일자별 상세</div>', unsafe_allow_html=True)
+        if not df_monthly.empty:
+            fig3 = go.Figure()
+            if "총광고비" in df_monthly.columns:
+                fig3.add_trace(go.Scatter(x=df_monthly["날짜"], y=df_monthly["총광고비"], name="총광고비", fill="tozeroy", line=dict(color="#3b82f6",width=2), fillcolor="rgba(59,130,246,0.1)"))
+            fig3.update_layout(title=dict(text="일자별 총광고비", font=dict(color="#e2e8f0",size=14)), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#6b7db3"), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(gridcolor="#1e293b",tickformat=","), height=280, margin=dict(l=0,r=0,t=40,b=0))
+            st.plotly_chart(fig3, use_container_width=True)
+            show_cols = [c for c in ["날짜","네이버","구글","카카오모먼트","모비온","총광고비","문의","문의당비용","상담","수임"] if c in df_monthly.columns]
+            st.dataframe(df_monthly[show_cols], use_container_width=True, hide_index=True)
+        else:
+            st.warning("이번달 데이터가 없습니다.")
+
+    # ── TAB 3: 키워드 분석 ──
+    with tab3:
         k1, k2 = st.tabs(["네이버 키워드", "구글 키워드"])
         with k1:
             if not df_naver.empty and "키워드" in df_naver.columns and "총비용" in df_naver.columns:
@@ -246,7 +307,8 @@ def main():
             else:
                 st.warning("구글 키워드 데이터가 없습니다.")
 
-    with tab3:
+    # ── TAB 4: 문의 현황 ──
+    with tab4:
         st.markdown('<div class="section-title">6월 문의 현황</div>', unsafe_allow_html=True)
         if not df_inq.empty:
             col_a, col_b = st.columns(2)
@@ -270,23 +332,31 @@ def main():
         else:
             st.warning("문의 데이터가 없습니다.")
 
-    with tab4:
+    # ── TAB 5: AI 인사이트 ──
+    with tab5:
         st.markdown('<div class="section-title">Claude AI 광고 인사이트</div>', unsafe_allow_html=True)
         st.markdown('<div style="background:#1a1f2e;border:1px solid #2a3550;border-radius:12px;padding:20px;margin-bottom:20px;"><div style="color:#6b7db3;font-size:13px;">⚖️ Claude API 크레딧 충전 후 사용 가능합니다.</div></div>', unsafe_allow_html=True)
         if st.button("🤖 AI 인사이트 생성"):
             api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
             if not api_key:
-                st.warning("⚠️ ANTHROPIC_API_KEY가 없습니다.")
+                st.warning("⚠️ ANTHROPIC_API_KEY가 없습니다. Secrets에 추가해주세요.")
             else:
-                with st.spinner("분석중..."):
+                with st.spinner("Claude AI가 분석중입니다..."):
                     try:
                         client = Anthropic(api_key=api_key)
-                        df26d = df_annual[df_annual["연도"].astype(str).str.contains("2026")] if not df_annual.empty else pd.DataFrame()
-                        summary = f"총광고비: {fmt_won(df26d['총광고비'].sum())}원 | 총문의: {fmt_num(df26d['문의'].sum())}건 | 수임: {fmt_num(df26d['수임'].sum())}건" if not df26d.empty else "데이터 없음"
-                        response = client.messages.create(model="claude-sonnet-4-6", max_tokens=1000, messages=[{"role":"user","content":f"법무법인 KB 광고 분석:\n{summary}\n\n1.성과요약 2.주요발견 3.개선제안 4.주의사항 순으로 분석해주세요."}])
+                        summary = ""
+                        if not df2026.empty:
+                            summary += f"[2026년 누적]\n총광고비: {fmt_won(df2026['총광고비'].sum())}원 | 총문의: {fmt_num(df2026['문의'].sum())}건 | 수임: {fmt_num(df2026['수임'].sum())}건\n"
+                            summary += f"\n[월별]\n{df2026[['월','총광고비','문의','수임']].to_string(index=False)}"
+                        if not df_inq.empty and "광고카테고리" in df_inq.columns:
+                            summary += f"\n\n[문의 카테고리]\n{df_inq['광고카테고리'].value_counts().head(5).to_string()}"
+                        response = client.messages.create(
+                            model="claude-sonnet-4-6", max_tokens=1000,
+                            messages=[{"role":"user","content":f"법무법인 KB 광고 성과 분석:\n{summary}\n\n1.📊성과요약 2.🔍주요발견 3.💡개선제안 4.⚠️주의사항 순으로 분석해주세요."}]
+                        )
                         st.markdown(f'<div class="insight-box"><div class="insight-text">{response.content[0].text}</div></div>', unsafe_allow_html=True)
                     except Exception as e:
-                        st.error(f"오류: {e}")
+                        st.error(f"AI 오류: {e}")
 
 if __name__ == "__main__":
     main()
