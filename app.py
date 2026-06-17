@@ -275,30 +275,32 @@ def main():
             conv_rate  = total_con/total_inq*100 if total_inq>0 else 0
             cons_rate  = total_cnt/total_inq*100 if total_inq>0 else 0
 
-            # 목표 설정
-            TARGET = 250_000_000  # 2억 5천만원
-            total_contract = df2026["계약서금액"].sum() if "계약서금액" in df2026.columns else 0
-            achieve_rate = total_contract / TARGET * 100 if TARGET > 0 else 0
-            remaining = TARGET - total_contract
+            # 목표 설정 (월 2억 5천만원)
+            MONTHLY_TARGET = 250_000_000
+            current_month_contract = 0  # 계약서 시트 연동 후 자동 반영 예정
+            achieve_rate = current_month_contract / MONTHLY_TARGET * 100
+            remaining = MONTHLY_TARGET - current_month_contract
             achieve_color = "#10b981" if achieve_rate >= 100 else "#f59e0b" if achieve_rate >= 70 else "#ef4444"
 
             # 목표 달성 배너
             st.markdown(f"""
             <div style="background:linear-gradient(135deg,#0a1628,#111827);border:1px solid #1e3a5f;border-radius:14px;padding:20px 28px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between;">
                 <div>
-                    <div style="font-size:11px;color:#4b7aa0;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">🎯 2026년 목표 달성 현황</div>
+                    <div style="font-size:11px;color:#4b7aa0;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">🎯 6월 월간 목표 달성 현황</div>
                     <div style="display:flex;align-items:baseline;gap:12px;">
                         <span style="font-size:28px;font-weight:900;color:{achieve_color};">{achieve_rate:.1f}%</span>
                         <span style="font-size:14px;color:#94a3b8;">달성</span>
-                        <span style="font-size:13px;color:#4b7aa0;">({fmt_won(total_contract)} / 목표 {fmt_won(TARGET)})</span>
+                        <span style="font-size:13px;color:#4b7aa0;">({fmt_won(current_month_contract)} / 월 목표 {fmt_won(MONTHLY_TARGET)})</span>
                     </div>
                     <div style="margin-top:10px;background:#1e293b;border-radius:6px;height:8px;width:400px;overflow:hidden;">
-                        <div style="background:{achieve_color};height:100%;width:{min(achieve_rate,100):.1f}%;border-radius:6px;transition:width 0.3s;"></div>
+                        <div style="background:{achieve_color};height:100%;width:{min(achieve_rate,100):.1f}%;border-radius:6px;"></div>
                     </div>
+                    <div style="margin-top:6px;font-size:11px;color:#3b5a7a;">※ 계약서 데이터 입력 후 자동 반영됩니다</div>
                 </div>
                 <div style="text-align:right;">
                     <div style="font-size:11px;color:#4b7aa0;margin-bottom:4px;">잔여 목표</div>
                     <div style="font-size:22px;font-weight:700;color:#94a3b8;">{fmt_won(max(remaining,0))}</div>
+                    <div style="font-size:11px;color:#3b5a7a;margin-top:4px;">월 목표 2억 5천만원</div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
