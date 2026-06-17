@@ -7,16 +7,16 @@ import plotly.graph_objects as go
 from anthropic import Anthropic
 from datetime import datetime
 
-st.set_page_config(page_title="법무법인 KB | 광고 대시보드", page_icon="⚖️", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="법무법인 KB | 광고 대시보드", page_icon="⚖️", layout="wide")
 
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
     html, body, [class*="css"] { font-family: 'Noto Sans KR', sans-serif; }
     .kb-header { background: linear-gradient(135deg, #1a1f2e 0%, #16213e 50%, #0f3460 100%); border-radius: 16px; padding: 32px 40px; margin-bottom: 24px; border: 1px solid #2a3550; display: flex; align-items: center; justify-content: space-between; }
-    .kb-title { font-size: 28px; font-weight: 900; color: #ffffff; letter-spacing: -0.5px; }
+    .kb-title { font-size: 28px; font-weight: 900; color: #ffffff; }
     .kb-subtitle { font-size: 13px; color: #6b7db3; margin-top: 4px; }
-    .kb-badge { background: #1e40af; color: #93c5fd; padding: 6px 14px; border-radius: 20px; font-size: 12px; font-weight: 500; border: 1px solid #2563eb; }
+    .kb-badge { background: #1e40af; color: #93c5fd; padding: 6px 14px; border-radius: 20px; font-size: 12px; border: 1px solid #2563eb; }
     .metric-card { background: #1a1f2e; border: 1px solid #2a3550; border-radius: 12px; padding: 20px 24px; position: relative; overflow: hidden; }
     .metric-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; background: linear-gradient(90deg, #2563eb, #7c3aed); }
     .metric-label { font-size: 11px; color: #6b7db3; font-weight: 500; letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 8px; }
@@ -39,23 +39,29 @@ SCOPES = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/a
 
 @st.cache_resource(ttl=300)
 def get_gspread_client():
-    creds_info = {
-        "type": "service_account",
-        "project_id": st.secrets["gcp_service_account"]["project_id"],
-        "private_key_id": st.secrets["gcp_service_account"]["private_key_id"],
-        "private_key": st.secrets["gcp_service_account"]["private_key"].replace("\\n", "\n"),
-        "client_email": st.secrets["gcp_service_account"]["client_email"],
-        "client_id": st.secrets["gcp_service_account"]["client_id"],
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
-    creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-    return gspread.authorize(creds)
+    try:
+        sa = st.secrets["gcp_service_account"]
+        creds_info = {
+            "type": "service_account",
+            "project_id": sa["project_id"],
+            "private_key_id": sa["private_key_id"],
+            "private_key": sa["private_key"].replace("\\n", "\n"),
+            "client_email": sa["client_email"],
+            "client_id": sa["client_id"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+        return gspread.authorize(creds), None
+    except Exception as e:
+        return None, str(e)
 
 @st.cache_data(ttl=300)
 def load_annual_summary():
     try:
-        gc = get_gspread_client()
+        gc, err = get_gspread_client()
+        if err:
+            return pd.DataFrame(), err
         sh = gc.open_by_key(AD_SHEET_ID)
         ws = sh.worksheet("연간요약")
         data = ws.get_all_values()
@@ -72,21 +78,22 @@ def load_annual_summary():
             if header and current_year and len(row) > 1 and "월" in str(row[1]):
                 rows.append([current_year] + row[1:])
         if not rows or not header:
-            return pd.DataFrame()
+            return pd.DataFrame(), None
         cols = ["연도"] + [h for h in header[1:] if h]
         df = pd.DataFrame(rows, columns=cols[:len(rows[0])])
         for c in ["네이버","구글","카카오모먼트","카카오키워드","모비온","총광고비","문의","문의당비용","상담","수임","계약서금액"]:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c].astype(str).str.replace(",","").str.replace("-","0").str.strip(), errors="coerce").fillna(0)
-        return df
+        return df, None
     except Exception as e:
-        st.error(f"광고 데이터 로딩 실패: {e}")
-        return pd.DataFrame()
+        return pd.DataFrame(), str(e)
 
 @st.cache_data(ttl=300)
 def load_inquiry(tab_name="26.06"):
     try:
-        gc = get_gspread_client()
+        gc, err = get_gspread_client()
+        if err:
+            return pd.DataFrame()
         sh = gc.open_by_key(INQ_SHEET_ID)
         ws = sh.worksheet(tab_name)
         data = ws.get_all_values()
@@ -100,13 +107,15 @@ def load_inquiry(tab_name="26.06"):
         header = data[header_row]
         rows = [row[:len(header)] for row in data[header_row+1:] if any(row)]
         return pd.DataFrame(rows, columns=header)
-    except Exception as e:
+    except:
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def load_keyword(tab_name="네이버키워드"):
     try:
-        gc = get_gspread_client()
+        gc, err = get_gspread_client()
+        if err:
+            return pd.DataFrame()
         sh = gc.open_by_key(AD_SHEET_ID)
         ws = sh.worksheet(tab_name)
         data = ws.get_all_values()
@@ -124,7 +133,7 @@ def load_keyword(tab_name="네이버키워드"):
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c].astype(str).str.replace(",","").str.replace("%","").str.strip(), errors="coerce").fillna(0)
         return df
-    except Exception as e:
+    except:
         return pd.DataFrame()
 
 def fmt_won(n):
@@ -143,14 +152,28 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
+    # 디버그: Secrets 키 확인
+    with st.expander("🔧 연결 상태 확인 (문제해결용)"):
+        try:
+            sa_keys = list(st.secrets["gcp_service_account"].keys())
+            st.success(f"✅ gcp_service_account 키 목록: {sa_keys}")
+            gc, err = get_gspread_client()
+            if err:
+                st.error(f"❌ 구글 연결 오류: {err}")
+            else:
+                st.success("✅ 구글 시트 연결 성공!")
+        except Exception as e:
+            st.error(f"❌ Secrets 오류: {e}")
+
     with st.spinner("데이터 불러오는 중..."):
-        df_annual = load_annual_summary()
+        df_annual, err = load_annual_summary()
         df_inq    = load_inquiry("26.06")
         df_naver  = load_keyword("네이버키워드")
         df_google = load_keyword("구글키워드")
 
     if df_annual.empty:
-        st.error("⚠️ 구글 시트 연결 실패. Streamlit Secrets를 확인해주세요.")
+        if err:
+            st.error(f"⚠️ 오류: {err}")
         return
 
     df26 = df_annual[df_annual["연도"].astype(str).str.contains("2026")].copy()
@@ -199,6 +222,8 @@ def main():
             st.markdown('<div class="section-title">연간 데이터 테이블</div>', unsafe_allow_html=True)
             show_cols = [c for c in ["월","네이버","구글","카카오모먼트","모비온","총광고비","문의","문의당비용","상담","수임"] if c in df26.columns]
             st.dataframe(df26[show_cols], use_container_width=True, hide_index=True)
+        else:
+            st.warning("2026년 데이터가 없습니다.")
 
     with tab2:
         k1, k2 = st.tabs(["네이버 키워드", "구글 키워드"])
@@ -247,26 +272,21 @@ def main():
 
     with tab4:
         st.markdown('<div class="section-title">Claude AI 광고 인사이트</div>', unsafe_allow_html=True)
-        st.markdown('<div style="background:#1a1f2e;border:1px solid #2a3550;border-radius:12px;padding:20px;margin-bottom:20px;"><div style="color:#6b7db3;font-size:13px;line-height:1.8;">⚖️ 법무법인 KB의 광고 데이터를 분석하여 핵심 인사이트와 개선 방향을 제시합니다.<br>Claude API 크레딧 충전 후 사용 가능합니다.</div></div>', unsafe_allow_html=True)
+        st.markdown('<div style="background:#1a1f2e;border:1px solid #2a3550;border-radius:12px;padding:20px;margin-bottom:20px;"><div style="color:#6b7db3;font-size:13px;">⚖️ Claude API 크레딧 충전 후 사용 가능합니다.</div></div>', unsafe_allow_html=True)
         if st.button("🤖 AI 인사이트 생성"):
             api_key = st.secrets.get("ANTHROPIC_API_KEY", "")
             if not api_key:
-                st.warning("⚠️ ANTHROPIC_API_KEY가 설정되지 않았습니다. Secrets에 추가해주세요.")
+                st.warning("⚠️ ANTHROPIC_API_KEY가 없습니다.")
             else:
-                with st.spinner("Claude AI가 분석중입니다..."):
+                with st.spinner("분석중..."):
                     try:
                         client = Anthropic(api_key=api_key)
-                        df26_data = df_annual[df_annual["연도"].astype(str).str.contains("2026")] if not df_annual.empty else pd.DataFrame()
-                        summary = ""
-                        if not df26_data.empty:
-                            summary += f"총광고비: {fmt_won(df26_data['총광고비'].sum())}원 | 총문의: {fmt_num(df26_data['문의'].sum())}건 | 수임: {fmt_num(df26_data['수임'].sum())}건\n"
-                        response = client.messages.create(
-                            model="claude-sonnet-4-6", max_tokens=1000,
-                            messages=[{"role":"user","content":f"법무법인 KB 광고 데이터 분석:\n{summary}\n\n1. 📊 성과 요약\n2. 🔍 주요 발견점\n3. 💡 개선 제안\n4. ⚠️ 주의사항 순서로 분석해주세요."}]
-                        )
+                        df26d = df_annual[df_annual["연도"].astype(str).str.contains("2026")] if not df_annual.empty else pd.DataFrame()
+                        summary = f"총광고비: {fmt_won(df26d['총광고비'].sum())}원 | 총문의: {fmt_num(df26d['문의'].sum())}건 | 수임: {fmt_num(df26d['수임'].sum())}건" if not df26d.empty else "데이터 없음"
+                        response = client.messages.create(model="claude-sonnet-4-6", max_tokens=1000, messages=[{"role":"user","content":f"법무법인 KB 광고 분석:\n{summary}\n\n1.성과요약 2.주요발견 3.개선제안 4.주의사항 순으로 분석해주세요."}])
                         st.markdown(f'<div class="insight-box"><div class="insight-text">{response.content[0].text}</div></div>', unsafe_allow_html=True)
                     except Exception as e:
-                        st.error(f"AI 오류: {e}")
+                        st.error(f"오류: {e}")
 
 if __name__ == "__main__":
     main()
