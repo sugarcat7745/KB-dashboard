@@ -171,30 +171,48 @@ def load_inq_tab(tab_name):
         ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet(tab_name)
         data = ws.get_all_values()
 
-        # 헤더 행 찾기 (문의일자 or 이름+접수방식 포함)
+        # 헤더 행 찾기 (문의일자 포함된 행)
         hr = None
         for i, row in enumerate(data):
-            row_str = " ".join(row)
-            if "문의일자" in row_str or ("이름" in row_str and "접수방식" in row_str):
+            if "문의일자" in row or "문의시간" in row:
                 hr = i
                 break
         if hr is None: return pd.DataFrame()
 
         header = data[hr]
         rows = []
+        last_date = ""
+
         for row in data[hr+1:]:
-            # B열(index 1)에 날짜 숫자가 있는 행만 (260601 형식)
-            if len(row) > 1 and str(row[1]).strip().isdigit() and len(str(row[1]).strip()) == 6:
-                padded = row + [""] * (len(header) - len(row))
-                rows.append(padded[:len(header)])
+            if not row or len(row) < 2: continue
+
+            # A열(index 0)이 "1"인 행만 실제 문의
+            a_val = str(row[0]).strip()
+            if a_val != "1": continue
+
+            # B열 날짜 처리 (비어있으면 이전 날짜 유지)
+            b_val = str(row[1]).strip()
+            if b_val.isdigit() and len(b_val) == 6:
+                last_date = b_val
+            elif not b_val:
+                row = list(row)
+                row[1] = last_date  # 이전 날짜 채우기
+
+            padded = list(row) + [""] * (len(header) - len(row))
+            rows.append(padded[:len(header)])
 
         if not rows: return pd.DataFrame()
         df = pd.DataFrame(rows, columns=header)
 
-        # 날짜 파싱 (YYMMDD → datetime)
+        # 날짜 파싱
         date_col = next((c for c in df.columns if "문의일자" in c), None)
         if date_col:
-            df["_dt"] = pd.to_datetime(df[date_col].astype(str).str.strip(), format="%y%m%d", errors="coerce")
+            df["_dt"] = pd.to_datetime(
+                df[date_col].astype(str).str.strip(),
+                format="%y%m%d", errors="coerce"
+            )
+            # _dt 없는 행 제거
+            df = df[df["_dt"].notna()]
 
         return df
     except Exception as e:
