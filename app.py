@@ -233,13 +233,26 @@ def fmt_comma(n):
 def main():
     now = datetime.now().strftime("%Y.%m.%d %H:%M")
 
+    # 로고 로드
+    import base64, urllib.request
+    def get_logo():
+        try:
+            url = "https://raw.githubusercontent.com/sugarcat7745/KB-dashboard/main/%ED%99%94%EC%9D%B4%ED%8A%B8.png"
+            with urllib.request.urlopen(url) as r:
+                return base64.b64encode(r.read()).decode()
+        except:
+            return None
+
+    logo_b64 = get_logo()
+    logo_html = f'<img src="data:image/png;base64,{logo_b64}" style="height:52px;object-fit:contain;">' if logo_b64 else '<span style="font-size:24px;font-weight:900;color:#fff;">⚖️ 법무법인 KB</span>'
+
     st.markdown(f"""
     <div class="kb-header">
-        <div style="display:flex;align-items:center;">
-            <span class="kb-logo">⚖️</span>
-            <div>
-                <div class="kb-title">법무법인 KB</div>
-                <div class="kb-subtitle">광고 성과 통합 대시보드 · LEGAL MARKETING INTELLIGENCE</div>
+        <div style="display:flex;align-items:center;gap:20px;">
+            {logo_html}
+            <div style="border-left:1px solid #1e3a5f;padding-left:20px;">
+                <div class="kb-subtitle">광고 성과 통합 대시보드</div>
+                <div class="kb-subtitle">LEGAL MARKETING INTELLIGENCE</div>
             </div>
         </div>
         <div style="text-align:right;">
@@ -249,12 +262,33 @@ def main():
     </div>
     """, unsafe_allow_html=True)
 
+    # 기간 필터
+    with st.expander("📅 기간 설정 필터", expanded=False):
+        col_f1, col_f2, col_f3 = st.columns([2,2,3])
+        with col_f1:
+            start_date = st.date_input("시작일", value=datetime(2026,6,1).date(), min_value=datetime(2024,1,1).date(), max_value=datetime(2026,12,31).date())
+        with col_f2:
+            end_date = st.date_input("종료일", value=datetime(2026,6,30).date(), min_value=datetime(2024,1,1).date(), max_value=datetime(2026,12,31).date())
+        with col_f3:
+            days = (end_date - start_date).days + 1
+            st.markdown(f'<div style="padding:10px 0;color:#4b7aa0;font-size:13px;">📌 선택 기간: <b style="color:#60a5fa;">{start_date.strftime("%Y.%m.%d")} ~ {end_date.strftime("%Y.%m.%d")}</b> &nbsp;({days}일간)</div>', unsafe_allow_html=True)
+
     with st.spinner("📡 데이터 불러오는 중..."):
         df_annual, err = load_annual_summary()
         df_monthly = load_monthly_detail("2026.06")
         df_inq     = load_inquiry("26.06")
         df_naver   = load_keyword("네이버키워드")
         df_google  = load_keyword("구글키워드")
+
+    # 문의 기간 필터 적용
+    if not df_inq.empty and "문의일자" in df_inq.columns:
+        try:
+            df_inq["_dt"] = pd.to_datetime(df_inq["문의일자"].astype(str).str.strip(), format="%y%m%d", errors="coerce")
+            df_inq_filtered = df_inq[(df_inq["_dt"] >= pd.Timestamp(start_date)) & (df_inq["_dt"] <= pd.Timestamp(end_date))].copy()
+        except:
+            df_inq_filtered = df_inq.copy()
+    else:
+        df_inq_filtered = df_inq.copy()
 
     df2026 = df_annual[(df_annual["연도"]=="2026") & df_annual["월"].str.contains("월") & ~df_annual["월"].str.contains("합계")].copy() if not df_annual.empty else pd.DataFrame()
 
@@ -481,12 +515,102 @@ def main():
     # TAB 4: 문의 현황
     # ══════════════════════════════════════
     with tab4:
-        st.markdown('<div class="section-title">6월 문의 현황</div>', unsafe_allow_html=True)
-        if not df_inq.empty:
-            # 유효 행만
-            valid_inq = df_inq[df_inq["이름"].str.strip() != ""].copy() if "이름" in df_inq.columns else df_inq
+        st.markdown('<div class="section-title">문의 현황 요약</div>', unsafe_allow_html=True)
+        if not df_inq_filtered.empty:
+            valid_inq = df_inq_filtered[df_inq_filtered["이름"].str.strip() != ""].copy() if "이름" in df_inq_filtered.columns else df_inq_filtered
 
-            col_a, col_b, col_c = st.columns(3)
+            # ── 상단 KPI ──
+            total_inq_cnt = len(valid_inq)
+            consult_cnt = len(valid_inq[valid_inq["결과"].str.contains("상담", na=False)]) if "결과" in valid_inq.columns else 0
+            contract_cnt = len(valid_inq[valid_inq["결과"].str.contains("수임", na=False)]) if "결과" in valid_inq.columns else 0
+            consult_rate = consult_cnt / total_inq_cnt * 100 if total_inq_cnt > 0 else 0
+            contract_rate = contract_cnt / total_inq_cnt * 100 if total_inq_cnt > 0 else 0
+
+            m1, m2, m3, m4, m5 = st.columns(5)
+            for col, icon, label, value, sub in [
+                (m1, "📞", "총 문의", f"{total_inq_cnt:,}건", "6월 누적"),
+                (m2, "🤝", "상담 전환", f"{consult_cnt:,}건", f"전환율 {consult_rate:.1f}%"),
+                (m3, "✍️", "수임 전환", f"{contract_cnt:,}건", f"전환율 {contract_rate:.1f}%"),
+                (m4, "📱", "전화 문의", f"{len(valid_inq[valid_inq['접수방식'].str.contains('전화', na=False)]) if '접수방식' in valid_inq.columns else 0:,}건", "접수방식별"),
+                (m5, "💬", "비전화 문의", f"{len(valid_inq[~valid_inq['접수방식'].str.contains('전화', na=False)]) if '접수방식' in valid_inq.columns else 0:,}건", "카톡/이메일"),
+            ]:
+                with col:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                        <div class="metric-icon">{icon}</div>
+                        <div class="metric-label">{label}</div>
+                        <div class="metric-value">{value}</div>
+                        <div class="metric-sub">{sub}</div>
+                    </div>""", unsafe_allow_html=True)
+
+            st.markdown("&nbsp;", unsafe_allow_html=True)
+
+            # ── 카테고리별 퍼널 분석 ──
+            st.markdown('<div class="section-title">카테고리별 문의 → 상담 → 수임 퍼널</div>', unsafe_allow_html=True)
+
+            if "광고카테고리" in valid_inq.columns and "결과" in valid_inq.columns:
+                cats = valid_inq[valid_inq["광고카테고리"].str.strip() != ""]["광고카테고리"].unique()
+                funnel_rows = []
+                for cat in cats:
+                    cat_df = valid_inq[valid_inq["광고카테고리"] == cat]
+                    inq_n  = len(cat_df)
+                    con_n  = len(cat_df[cat_df["결과"].str.contains("상담", na=False)])
+                    imp_n  = len(cat_df[cat_df["결과"].str.contains("수임", na=False)])
+                    funnel_rows.append({
+                        "카테고리": cat,
+                        "총문의": inq_n,
+                        "상담": con_n,
+                        "수임": imp_n,
+                        "상담전환율": f"{con_n/inq_n*100:.1f}%" if inq_n > 0 else "0%",
+                        "수임전환율": f"{imp_n/inq_n*100:.1f}%" if inq_n > 0 else "0%",
+                    })
+
+                funnel_df = pd.DataFrame(funnel_rows).sort_values("총문의", ascending=False)
+
+                # 퍼널 차트
+                col_l, col_r = st.columns(2)
+                with col_l:
+                    fig_f = go.Figure()
+                    fig_f.add_trace(go.Bar(name="총문의", x=funnel_df["카테고리"], y=funnel_df["총문의"], marker_color="#3b82f6", opacity=0.85))
+                    fig_f.add_trace(go.Bar(name="상담", x=funnel_df["카테고리"], y=funnel_df["상담"], marker_color="#10b981", opacity=0.85))
+                    fig_f.add_trace(go.Bar(name="수임", x=funnel_df["카테고리"], y=funnel_df["수임"], marker_color="#f59e0b", opacity=0.85))
+                    fig_f.update_layout(
+                        barmode="group", title=dict(text="카테고리별 문의/상담/수임", font=dict(color="#94a3b8",size=13)),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#64748b",size=11),
+                        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#94a3b8",size=10)),
+                        xaxis=dict(gridcolor="#1e293b", color="#64748b"),
+                        yaxis=dict(gridcolor="#1e293b", color="#64748b"),
+                        height=320, margin=dict(l=10,r=10,t=40,b=10)
+                    )
+                    st.plotly_chart(fig_f, use_container_width=True)
+
+                with col_r:
+                    # 수임전환율 차트
+                    funnel_rate = funnel_df[funnel_df["총문의"] >= 3].copy()
+                    funnel_rate["수임전환율_num"] = funnel_rate["수임"] / funnel_rate["총문의"] * 100
+                    funnel_rate["상담전환율_num"] = funnel_rate["상담"] / funnel_rate["총문의"] * 100
+                    fig_r = go.Figure()
+                    fig_r.add_trace(go.Bar(name="상담전환율", x=funnel_rate["카테고리"], y=funnel_rate["상담전환율_num"], marker_color="#10b981", opacity=0.85))
+                    fig_r.add_trace(go.Bar(name="수임전환율", x=funnel_rate["카테고리"], y=funnel_rate["수임전환율_num"], marker_color="#f59e0b", opacity=0.85))
+                    fig_r.update_layout(
+                        barmode="group", title=dict(text="카테고리별 전환율 (%)", font=dict(color="#94a3b8",size=13)),
+                        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#64748b",size=11),
+                        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#94a3b8",size=10)),
+                        xaxis=dict(gridcolor="#1e293b", color="#64748b"),
+                        yaxis=dict(gridcolor="#1e293b", color="#64748b", ticksuffix="%"),
+                        height=320, margin=dict(l=10,r=10,t=40,b=10)
+                    )
+                    st.plotly_chart(fig_r, use_container_width=True)
+
+                # 퍼널 요약 테이블
+                st.markdown('<div class="section-title">카테고리별 퍼널 요약</div>', unsafe_allow_html=True)
+                st.dataframe(funnel_df.reset_index(drop=True), use_container_width=True, hide_index=True)
+
+            # ── 접수방식 + 시간대 ──
+            st.markdown('<div class="section-title">접수방식 · 시간대 분석</div>', unsafe_allow_html=True)
+            col_a, col_b = st.columns(2)
             with col_a:
                 if "접수방식" in valid_inq.columns:
                     mc = valid_inq["접수방식"].value_counts().reset_index()
@@ -498,29 +622,16 @@ def main():
                     st.plotly_chart(fig_m, use_container_width=True)
 
             with col_b:
-                if "광고카테고리" in valid_inq.columns:
-                    cc = valid_inq[valid_inq["광고카테고리"].str.strip() != ""]["광고카테고리"].value_counts().head(8).reset_index()
-                    cc.columns = ["카테고리","건수"]
-                    fig_c = px.bar(cc, x="건수", y="카테고리", orientation="h", title="카테고리별",
-                                   color_discrete_sequence=["#3b82f6"])
-                    fig_c.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#64748b",size=11), title=dict(font=dict(color="#94a3b8",size=13)), xaxis=dict(gridcolor="#1e293b"), yaxis=dict(color="#94a3b8"), height=260, margin=dict(l=0,r=0,t=40,b=0))
-                    st.plotly_chart(fig_c, use_container_width=True)
-
-            with col_c:
                 if "문의시간" in valid_inq.columns:
                     tc = valid_inq[valid_inq["문의시간"].str.strip() != ""]["문의시간"].value_counts().reset_index()
                     tc.columns = ["시간대","건수"]
-                    fig_t = px.bar(tc, x="시간대", y="건수", title="시간대별",
+                    fig_t = px.bar(tc, x="시간대", y="건수", title="시간대별 문의",
                                    color_discrete_sequence=["#8b5cf6"])
                     fig_t.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#64748b",size=11), title=dict(font=dict(color="#94a3b8",size=13)), xaxis=dict(gridcolor="#1e293b",color="#64748b"), yaxis=dict(gridcolor="#1e293b",color="#64748b"), height=260, margin=dict(l=0,r=0,t=40,b=0))
                     st.plotly_chart(fig_t, use_container_width=True)
 
-            st.markdown('<div class="section-title">문의 상세 목록</div>', unsafe_allow_html=True)
-            show_cols = [c for c in ["문의일자","문의시간","이름","접수방식","문의내용","상담사무소","광고카테고리","결과"] if c in valid_inq.columns]
-            if show_cols:
-                st.dataframe(valid_inq[show_cols].head(100), use_container_width=True, hide_index=True, height=400)
         else:
-            st.warning("문의 데이터가 없습니다.")
+            st.warning("선택한 기간의 문의 데이터가 없습니다.")
 
     # ══════════════════════════════════════
     # TAB 5: AI 인사이트
@@ -552,8 +663,8 @@ def main():
                             t_con = df2026["수임"].sum()
                             summary += f"[2026년 누적]\n총광고비: {fmt_won(t_ad)} | 총문의: {fmt_num(t_inq)}건 | 수임: {fmt_num(t_con)}건 | 수임전환율: {t_con/t_inq*100:.1f}%\n"
                             summary += f"\n[월별 추이]\n{df2026[['월','총광고비','문의','상담','수임']].to_string(index=False)}\n"
-                        if not df_inq.empty and "광고카테고리" in df_inq.columns:
-                            summary += f"\n[문의 카테고리 TOP5]\n{df_inq['광고카테고리'].value_counts().head(5).to_string()}\n"
+                        if not df_inq_filtered.empty and "광고카테고리" in df_inq_filtered.columns:
+                            summary += f"\n[문의 카테고리 TOP5]\n{df_inq_filtered['광고카테고리'].value_counts().head(5).to_string()}\n"
                         if not df_naver.empty and "키워드" in df_naver.columns:
                             top5 = df_naver.nlargest(5,"총비용")[["키워드","총비용","클릭률(%)"]].to_string(index=False)
                             summary += f"\n[네이버 TOP5 키워드]\n{top5}\n"
