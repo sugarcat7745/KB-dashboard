@@ -154,18 +154,34 @@ def load_monthly_detail(tab_name="2026.06"):
         if err: return pd.DataFrame()
         ws = gc.open_by_key(AD_SHEET_ID).worksheet(tab_name)
         data = ws.get_all_values()
+
+        # 헤더 행 찾기 (날짜 + 네이버 포함된 행)
         header_row = None
+        header_col = 1  # B열부터 시작
         for i, row in enumerate(data):
             if "날짜" in row and "네이버" in row:
                 header_row = i
+                header_col = row.index("날짜")
                 break
         if header_row is None: return pd.DataFrame()
-        header = data[header_row]
+
+        # 헤더 추출 (날짜 컬럼부터)
+        header = data[header_row][header_col:]
+
         rows = []
         for row in data[header_row+1:]:
-            if len(row) > 0 and row[0] and ("/" in str(row[0]) or "합계" in str(row[0])):
-                if "▲" not in str(row[1]) and "▼" not in str(row[1]) and "전주" not in str(row[0]):
-                    rows.append(row[:len(header)])
+            if len(row) <= header_col:
+                continue
+            date_val = str(row[header_col]).strip()
+            # 날짜 형식: "06 /01(월)" 또는 "06/01" 형태, 합계 포함
+            if "/" in date_val and "▲" not in date_val and "▼" not in date_val and "전주" not in date_val and "주차" not in date_val:
+                row_data = row[header_col:header_col+len(header)]
+                # 부족한 열 채우기
+                while len(row_data) < len(header):
+                    row_data.append("0")
+                rows.append(row_data[:len(header)])
+
+        if not rows: return pd.DataFrame()
         df = pd.DataFrame(rows, columns=header)
         for c in ["네이버","구글","카카오모먼트","모비온","총광고비","문의","문의당비용","상담","수임"]:
             if c in df.columns:
