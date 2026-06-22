@@ -236,8 +236,9 @@ def load_inq_for_date(day):
 @st.cache_data(ttl=300)
 def load_inquiries():
     """문의 시트 전 탭 통합 (통합본 + 월별, 헤더 위치/컬럼 자동 탐지)."""
-    def fidx(hdr, *keys):
-        return next((j for j, v in enumerate(hdr) if any(k in str(v) for k in keys)), None)
+    def fidx(hdr, *keys, exclude=()):
+        return next((j for j, v in enumerate(hdr)
+                     if any(k in str(v) for k in keys) and not any(e in str(v) for e in exclude)), None)
     def pdate(s):
         s = "".join(ch for ch in str(s) if ch.isdigit())
         return pd.to_datetime(s, format="%y%m%d", errors="coerce") if len(s) == 6 else pd.NaT
@@ -262,11 +263,20 @@ def load_inquiries():
         body = raw.iloc[hr+1:].reset_index(drop=True)
         def col(i):
             return body[i].astype(str).str.strip() if (i is not None and i in body.columns) else pd.Series([""] * len(body))
+        def has_lo(txt):  # L·M·N·O(인덱스 11~14)에서 정확히 txt 텍스트 탐색
+            m = pd.Series([False] * len(body))
+            for j in [11, 12, 13, 14]:
+                if j in body.columns:
+                    m = m | (body[j].astype(str).str.strip() == txt)
+            return m
+        contracted_date = (pd.to_datetime(body[ci], errors="coerce").notna()
+                           if (ci is not None and ci in body.columns) else pd.Series([False] * len(body)))
         d = pd.DataFrame({
             "date": body[di].apply(pdate) if (di is not None and di in body.columns) else pd.NaT,
             "name": col(ni),
             "category": col(ti) if (ti is not None and ti in body.columns) else "(미분류)",
-            "contracted": pd.to_datetime(body[ci], errors="coerce").notna() if (ci is not None and ci in body.columns) else False,
+            "consulted": has_lo("상담"),
+            "contracted": has_lo("수임") | contracted_date,
         })
         d["date"] = d["date"].ffill()
         d = d.dropna(subset=["date"])
@@ -969,31 +979,18 @@ def render_inquiries():
     start, end = period_selector("inq", imin, imax, default="전체")
     inqf = inq[(inq["date"].dt.date >= start) & (inq["date"].dt.date <= end)]
 
-    # 상담: 연간요약에서 기간 내 월 합
-    sangdam = 0
-    if not ann.empty and "상담" in ann.columns:
-        a2 = ann.copy()
-        a2["_ym"] = a2["연도"].astype(str).str.strip() + "-" + a2["월"].astype(str).str.replace("월", "").str.strip().str.zfill(2)
-        months = set(pd.period_range(start, end, freq="M").astype(str))
-        sangdam = int(a2[a2["_ym"].isin(months)]["상담"].sum())
-
-    total = len(inqf); suim = int(inqf["contracted"].sum())
+    total = len(inqf); sangdam = int(inqf["consulted"].sum()); suim = int(inqf["contracted"].sum())
     rate = suim / total * 100 if total else 0
     c = st.columns(3)
     kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", desc=f"{start} ~ {end}")
-    kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", desc="연간요약 기준")
+    kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", desc="문의시트 상담 칸")
     kpi(c[2], "fa-handshake", "수임", f"{suim:,}", "건", desc=f"문의→수임 {rate:.1f}%")
 
     # ════ 대단락: 추이 분석 ════
     st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 추이 분석</div>', unsafe_allow_html=True)
     # 월별 문의·상담·수임 추이 (x축 한글)
     st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar"></i> 월별 문의 · 상담 · 수임</div>', unsafe_allow_html=True)
-    bym = inqf.groupby("_ym").agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
-    if not ann.empty and "상담" in ann.columns:
-        sang_m = a2.groupby("_ym")["상담"].sum()
-        bym["상담"] = bym["_ym"].map(sang_m).fillna(0)
-    else:
-        bym["상담"] = 0
+    bym = inqf.groupby("_ym").agg(문의=("name", "size"), 상담=("consulted", "sum"), 수임=("contracted", "sum")).reset_index()
     def kor_ym(s):
         try:
             y, m = s.split("-"); return f"{y[2:]}년 {int(m)}월"
@@ -1107,14 +1104,14 @@ def main():
             kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum), desc="참고용")
             kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(cfn_sum/len(cf_new)/1e4 if len(cf_new) else 0):.0f}", "만", desc="신건 건당")
             if len(cf):
-                st.markdown('<div class="sec-title"><i class="fa-solid fa-list-ul"></i> 계약 내역</div>', unsafe_allow_html=True)
-                rows = "".join(
-                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td><td>{r['_type']}</td>"
-                    f"<td>{'신건' if r['_is_new'] else '파생'}</td><td class='num'>{money(r['_amt'])}</td>"
-                    f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
-                    for _, r in cf.sort_values("_date").iterrows())
-                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>유형</th>'
-                            f'<th>구분</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+                with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
+                    rows = "".join(
+                        f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td><td>{r['_type']}</td>"
+                        f"<td>{'신건' if r['_is_new'] else '파생'}</td><td class='num'>{money(r['_amt'])}</td>"
+                        f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
+                        for _, r in cf.sort_values("_date").iterrows())
+                    st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>유형</th>'
+                                f'<th>구분</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
             else:
                 st.caption("이 기간 계약이 없습니다.")
 
