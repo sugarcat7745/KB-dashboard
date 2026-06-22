@@ -794,109 +794,100 @@ def render_summary():
         st.plotly_chart(fig_theme(fcat, max(200, len(cat) * 34)), use_container_width=True, config={"displayModeBar": False})
 
 def render_daily():
-    tab_header("fa-calendar-day", "일간 요약", "하루 단위 광고 · 문의 · 계약 현황")
+    tab_header("fa-calendar-day", "일자별 요약", "선택 기간의 일자별 광고 · 문의 · 계약")
     con = load_contracts()
     dmin = con["_date"].min().date()
     dmax = date.today()
-    if "dday" not in st.session_state:
-        st.session_state.dday = dmax - timedelta(days=1)
-    if st.session_state.dday < dmin: st.session_state.dday = dmin
-    if st.session_state.dday > dmax: st.session_state.dday = dmax
+    s, e = period_selector("daily", dmin, dmax, default="지난 7일")
+    span = (e - s).days + 1
+    ps, pe = s - timedelta(days=span), s - timedelta(days=1)
 
-    def shift(n):
-        nd = st.session_state.dday + timedelta(days=n)
-        if dmin <= nd <= dmax: st.session_state.dday = nd
+    def ad_period(a, b):
+        try:
+            return bq(f"""SELECT date,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv FROM (
+                SELECT date,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{a}' AND '{b}'
+                UNION ALL
+                SELECT date,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{a}' AND '{b}'
+            ) GROUP BY date ORDER BY date""")
+        except Exception:
+            return pd.DataFrame()
+    adp = ad_period(s, e); padp = ad_period(ps, pe)
+    total_ad = adp.cost.sum() if not adp.empty else 0
+    p_ad = padp.cost.sum() if not padp.empty else 0
 
-    c1, c2, c3 = st.columns([1, 2, 1])
-    c1.button("◀ 이전날", on_click=shift, args=(-1,), use_container_width=True, key="d_prev")
-    c3.button("다음날 ▶", on_click=shift, args=(1,), use_container_width=True, key="d_next")
-    c2.date_input("날짜", min_value=dmin, max_value=dmax,
-                  label_visibility="collapsed", key="dday")
-    day = st.session_state.dday
-    wd = ["월", "화", "수", "목", "금", "토", "일"][day.weekday()]
-    st.markdown(f'<div style="text-align:center;font-family:\'Noto Serif KR\',serif;font-size:26px;'
-                f'font-weight:600;color:{GOLD_B};margin:8px 0 18px;">{day.year}. {day.month:02d}. {day.day:02d} ({wd})</div>',
-                unsafe_allow_html=True)
-
-    # 광고 (그날, 매체별) — ad_keyword(네이버/구글) + ad_etc(카카오/모비온) 통합!!!
-    try:
-        ad = bq(f"""SELECT media,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv FROM (
-            SELECT media,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date='{day}'
-            UNION ALL
-            SELECT media,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date='{day}'
-        ) GROUP BY media ORDER BY cost DESC""")
-    except Exception:
-        ad = pd.DataFrame()
-    total_ad = ad.cost.sum() if not ad.empty else 0
-    total_conv = ad.conv.sum() if not ad.empty else 0
-
-    inq = load_inq_for_date(day)
-    n_inq = len(inq)
-    cday = con[con["_date"].dt.date == day]
-    n_con, con_amt = len(cday), cday["_amt"].sum()
+    # 문의 (기간)
+    inq_all = load_inquiries()
+    if not inq_all.empty:
+        tmp = inq_all.copy(); tmp["_d"] = tmp["date"].dt.date
+        inqf = tmp[(tmp["_d"] >= s) & (tmp["_d"] <= e)]
+        inqp = tmp[(tmp["_d"] >= ps) & (tmp["_d"] <= pe)]
+    else:
+        inqf = inqp = pd.DataFrame(columns=["_d", "consulted", "contracted", "name"])
+    n_inq = len(inqf)
+    n_sang = int(inqf["consulted"].sum()) if not inqf.empty else 0
+    p_inq = len(inqp)
+    p_sang = int(inqp["consulted"].sum()) if not inqp.empty else 0
     cpi = total_ad / n_inq if n_inq else 0
-
-    # 전일 비교
-    pday = day - timedelta(days=1)
-    try:
-        pad = bq(f"""SELECT SUM(cost) cost,SUM(conversions) conv FROM (
-            SELECT cost,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date='{pday}'
-            UNION ALL SELECT cost,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date='{pday}')""")
-        p_ad = float(pad["cost"].iloc[0] or 0); p_conv = float(pad["conv"].iloc[0] or 0)
-    except Exception:
-        p_ad = p_conv = 0
-    pinq = load_inq_for_date(pday); p_inq = len(pinq)
-    pcday = con[con["_date"].dt.date == pday]; p_con = len(pcday); p_camt = pcday["_amt"].sum()
     p_cpi = p_ad / p_inq if p_inq else 0
 
-    # KPI (전일 대비 증감 · 수치)
-    cmp_caption("전일 대비")
+    # 계약 (기간)
+    cf = con[(con["_date"].dt.date >= s) & (con["_date"].dt.date <= e)]
+    cp = con[(con["_date"].dt.date >= ps) & (con["_date"].dt.date <= pe)]
+    n_con, con_amt = len(cf), cf["_amt"].sum()
+    p_con, p_camt = len(cp), cp["_amt"].sum()
+
+    # KPI (직전 동일기간 대비 · 비교!!!)
+    cmp_caption(f"직전 {span}일 대비")
     c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(total_ad), "원", *delta_str(total_ad, p_ad, "money"))
-    kpi(c[1], "fa-bullseye", "광고 전환", f"{total_conv:.0f}", "건", *delta_str(total_conv, p_conv, "cnt"))
-    kpi(c[2], "fa-phone", "문의", f"{n_inq}", "건", *delta_str(n_inq, p_inq, "cnt"))
-    kpi(c[3], "fa-coins", "문의당 비용", money(cpi), "원", *delta_str(cpi, p_cpi, "money"))
+    kpi(c[1], "fa-phone", "문의", f"{n_inq}", "건", *delta_str(n_inq, p_inq, "cnt"))
+    kpi(c[2], "fa-coins", "문의당 비용", money(cpi), "원", *delta_str(cpi, p_cpi, "won"))
+    kpi(c[3], "fa-comments", "상담", f"{n_sang}", "건", *delta_str(n_sang, p_sang, "cnt"))
     kpi(c[4], "fa-file-signature", "계약", f"{n_con}", "건", *delta_str(n_con, p_con, "cnt"))
     kpi(c[5], "fa-sack-dollar", "계약금액", money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
 
-    # 매체별 광고비
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 광고</div>', unsafe_allow_html=True)
-    if not ad.empty:
-        rows = "".join(f"<tr><td>{r.media}</td><td class='num'>{money(r.cost)}</td><td>{int(r.imp):,}</td>"
-            f"<td>{int(r.clk):,}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in ad.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>매체</th><th>광고비</th><th>노출</th>'
-            f'<th>클릭</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-    else:
-        st.caption("이 날짜의 광고 데이터가 없습니다.")
+    # 일자별 상세 표 (정렬 가능)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 일자별 상세</div>', unsafe_allow_html=True)
+    ad_by = {pd.Timestamp(r["date"]).date(): r for _, r in adp.iterrows()} if not adp.empty else {}
+    inq_by = (inqf.groupby("_d").agg(q=("name", "size"), sg=("consulted", "sum"), sm=("contracted", "sum"))
+              if not inqf.empty else pd.DataFrame())
+    con_by = (cf.groupby(cf["_date"].dt.date).agg(cn=("_amt", "size"), ca=("_amt", "sum"))
+              if not cf.empty else pd.DataFrame())
+    columns = ["날짜", "광고비", "문의", "상담", "수임", "계약", "계약금액"]
+    rows = []
+    for d in pd.date_range(s, e).date:
+        adc = float(ad_by[d]["cost"]) if d in ad_by else 0
+        q  = int(inq_by.loc[d, "q"])  if (not inq_by.empty and d in inq_by.index) else 0
+        sg = int(inq_by.loc[d, "sg"]) if (not inq_by.empty and d in inq_by.index) else 0
+        sm = int(inq_by.loc[d, "sm"]) if (not inq_by.empty and d in inq_by.index) else 0
+        cn = int(con_by.loc[d, "cn"]) if (not con_by.empty and d in con_by.index) else 0
+        ca = float(con_by.loc[d, "ca"]) if (not con_by.empty and d in con_by.index) else 0
+        rows.append([(kdate_wd(d), d.isoformat()), (money(adc), adc), (str(q), q),
+                     (str(sg), sg), (str(sm), sm), (str(cn), cn), (money(ca), ca)])
+    rows = rows[::-1]  # 최신 날짜 먼저
+    sortable_table(columns, rows, height=min(480, 70 + len(rows) * 38))
 
-    # 문의 내용 (접기)
-    if n_inq:
-        with st.expander(f"💬 문의 내용 — {n_inq}건 (클릭하여 펼치기)"):
-            name_c = next((c for c in inq.columns if "이름" in c), None)
-            way_c  = next((c for c in inq.columns if "접수" in c or "방식" in c), None)
-            cont_c = next((c for c in inq.columns if "문의내용" in c or "내용" in c), None)
-            rows = ""
-            for _, r in inq.iterrows():
-                nm = r.get(name_c, "") if name_c else ""
-                wy = r.get(way_c, "") if way_c else ""
-                ct = r.get(cont_c, "") if cont_c else ""
-                rows += f"<tr><td>{nm}</td><td>{wy}</td><td style='text-align:left;'>{ct}</td></tr>"
-            st.markdown(f'<table class="kb-tbl"><thead><tr><th>이름</th><th>접수방식</th>'
-                f'<th style="text-align:left;">문의내용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-comments"></i> 문의 내용</div>', unsafe_allow_html=True)
-        st.caption("이 날짜의 문의가 없습니다.")
-
-    # 계약 내역 (접기)
-    if n_con:
-        with st.expander(f"📑 계약 내역 — {n_con}건 (클릭하여 펼치기)"):
-            rows = "".join(f"<tr><td>{r._type}</td><td style='text-align:left;'>{r.get('사건','')}</td>"
-                f"<td class='num'>{r._amt:,.0f}원</td><td>{r._inflow}</td></tr>" for _, r in cday.iterrows())
-            st.markdown(f'<table class="kb-tbl"><thead><tr><th>계약유형</th><th style="text-align:left;">사건</th>'
-                f'<th>금액</th><th>구분</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-file-contract"></i> 계약 내역</div>', unsafe_allow_html=True)
-        st.caption("이 날짜의 계약이 없습니다.")
+    # 단일 날짜 선택 시 그날 문의·계약 상세 내역
+    if s == e:
+        inq_day = load_inq_for_date(s)
+        if len(inq_day):
+            with st.expander(f"💬 {s} 문의 내용 — {len(inq_day)}건 (클릭하여 펼치기)"):
+                name_c = next((cc for cc in inq_day.columns if "이름" in cc), None)
+                way_c  = next((cc for cc in inq_day.columns if "접수" in cc or "방식" in cc), None)
+                cont_c = next((cc for cc in inq_day.columns if "문의내용" in cc or "내용" in cc), None)
+                rr = ""
+                for _, r in inq_day.iterrows():
+                    nm = r.get(name_c, "") if name_c else ""; wy = r.get(way_c, "") if way_c else ""
+                    ct = r.get(cont_c, "") if cont_c else ""
+                    rr += f"<tr><td>{nm}</td><td>{wy}</td><td style='text-align:left;'>{ct}</td></tr>"
+                st.markdown(f'<table class="kb-tbl"><thead><tr><th>이름</th><th>접수방식</th>'
+                    f'<th style="text-align:left;">문의내용</th></tr></thead><tbody>{rr}</tbody></table>', unsafe_allow_html=True)
+        if n_con:
+            with st.expander(f"📑 {s} 계약 내역 — {n_con}건 (클릭하여 펼치기)"):
+                rr = "".join(f"<tr><td>{r._type}</td><td style='text-align:left;'>{r.get('사건','')}</td>"
+                    f"<td class='num'>{r._amt:,.0f}원</td><td>{r._inflow}</td></tr>" for _, r in cf.iterrows())
+                st.markdown(f'<table class="kb-tbl"><thead><tr><th>계약유형</th><th style="text-align:left;">사건</th>'
+                    f'<th>금액</th><th>구분</th></tr></thead><tbody>{rr}</tbody></table>', unsafe_allow_html=True)
 
 def brand_header(media):
     if media == "네이버":
@@ -1232,7 +1223,7 @@ def main():
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div></div></div>""", unsafe_allow_html=True)
 
-    tabs = st.tabs(["📊 SUMMARY", "🗓️ 일간요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"])
+    tabs = st.tabs(["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"])
 
     # ────────── 일간요약 탭 ──────────
     with tabs[1]:
