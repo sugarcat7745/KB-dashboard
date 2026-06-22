@@ -359,6 +359,11 @@ def klabel(dt):  # 6월 9일
     dt = pd.Timestamp(dt)
     return f"{dt.month}월 {dt.day}일"
 
+def kdate_wd(dt):  # 06/21 (일)
+    dt = pd.Timestamp(dt)
+    wd = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
+    return f"{dt.month:02d}/{dt.day:02d} ({wd})"
+
 def preset_range(name, dmin, dmax):
     today = dmax  # 데이터 최신일을 기준일로
     y = today - timedelta(days=1)
@@ -632,6 +637,16 @@ def render_summary():
                 text=[f"{v:.0f}만" if v else "" for v in vals], textposition="outside"))
             fwd.update_yaxes(ticksuffix="만")
             st.plotly_chart(fig_theme(fwd, 250), use_container_width=True, config={"displayModeBar": False})
+        elif "일간" in period:
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 매체별 광고비 (그날)</div>', unsafe_allow_html=True)
+            if not mix.empty and mix["cost"].sum() > 0:
+                mm = mix.groupby("media")["cost"].sum().sort_values(ascending=True)
+                fm = go.Figure(go.Bar(y=list(mm.index), x=mm.values/1e4, orientation="h",
+                    marker=dict(color=GOLD), text=[f"{v/1e4:,.0f}만" for v in mm.values], textposition="outside"))
+                fm.update_xaxes(ticksuffix="만")
+                st.plotly_chart(fig_theme(fm, 250), use_container_width=True, config={"displayModeBar": False})
+            else:
+                st.caption("이 날 광고비 데이터가 없습니다.")
         else:
             st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
             yrs = sorted(con["_y"].unique())[-3:]
@@ -729,31 +744,33 @@ def render_daily():
     else:
         st.caption("이 날짜의 광고 데이터가 없습니다.")
 
-    # 문의 내용
-    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-comments"></i> 문의 내용 ({n_inq}건)</div>', unsafe_allow_html=True)
+    # 문의 내용 (접기)
     if n_inq:
-        name_c = next((c for c in inq.columns if "이름" in c), None)
-        way_c  = next((c for c in inq.columns if "접수" in c or "방식" in c), None)
-        cont_c = next((c for c in inq.columns if "문의내용" in c or "내용" in c), None)
-        rows = ""
-        for _, r in inq.iterrows():
-            nm = r.get(name_c, "") if name_c else ""
-            wy = r.get(way_c, "") if way_c else ""
-            ct = r.get(cont_c, "") if cont_c else ""
-            rows += f"<tr><td>{nm}</td><td>{wy}</td><td style='text-align:left;'>{ct}</td></tr>"
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>이름</th><th>접수방식</th>'
-            f'<th style="text-align:left;">문의내용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        with st.expander(f"💬 문의 내용 — {n_inq}건 (클릭하여 펼치기)"):
+            name_c = next((c for c in inq.columns if "이름" in c), None)
+            way_c  = next((c for c in inq.columns if "접수" in c or "방식" in c), None)
+            cont_c = next((c for c in inq.columns if "문의내용" in c or "내용" in c), None)
+            rows = ""
+            for _, r in inq.iterrows():
+                nm = r.get(name_c, "") if name_c else ""
+                wy = r.get(way_c, "") if way_c else ""
+                ct = r.get(cont_c, "") if cont_c else ""
+                rows += f"<tr><td>{nm}</td><td>{wy}</td><td style='text-align:left;'>{ct}</td></tr>"
+            st.markdown(f'<table class="kb-tbl"><thead><tr><th>이름</th><th>접수방식</th>'
+                f'<th style="text-align:left;">문의내용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
     else:
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-comments"></i> 문의 내용</div>', unsafe_allow_html=True)
         st.caption("이 날짜의 문의가 없습니다.")
 
-    # 계약 내용
-    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-file-contract"></i> 계약 내역 ({n_con}건)</div>', unsafe_allow_html=True)
+    # 계약 내역 (접기)
     if n_con:
-        rows = "".join(f"<tr><td>{r._type}</td><td style='text-align:left;'>{r.get('사건','')}</td>"
-            f"<td class='num'>{r._amt:,.0f}원</td><td>{r._inflow}</td></tr>" for _, r in cday.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>계약유형</th><th style="text-align:left;">사건</th>'
-            f'<th>금액</th><th>구분</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        with st.expander(f"📑 계약 내역 — {n_con}건 (클릭하여 펼치기)"):
+            rows = "".join(f"<tr><td>{r._type}</td><td style='text-align:left;'>{r.get('사건','')}</td>"
+                f"<td class='num'>{r._amt:,.0f}원</td><td>{r._inflow}</td></tr>" for _, r in cday.iterrows())
+            st.markdown(f'<table class="kb-tbl"><thead><tr><th>계약유형</th><th style="text-align:left;">사건</th>'
+                f'<th>금액</th><th>구분</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
     else:
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-file-contract"></i> 계약 내역</div>', unsafe_allow_html=True)
         st.caption("이 날짜의 계약이 없습니다.")
 
 def brand_header(media):
@@ -841,9 +858,9 @@ def render_ad_tab(media, full):
     dd["CTR"] = (dd.clk/dd.imp*100).fillna(0).round(2)
     dd["CPC"] = (dd.cost/dd.clk).replace([float("inf")], 0).fillna(0).round(0)
     rows = "".join(
-        f"<tr><td>{r.date.strftime('%m/%d (%a)')}</td><td class='num'>{r.cost:,.0f}</td>"
-        f"<td>{int(r.imp):,}</td><td>{int(r.clk):,}</td><td>{r.CTR}%</td>"
-        f"<td>{int(r.CPC):,}</td><td class='num'>{r.conv:.0f}</td></tr>"
+        f"<tr><td>{kdate_wd(r.date)}</td><td class='num'>{r.cost:,.0f}</td>"
+        f"<td class='num'>{int(r.imp):,}</td><td class='num'>{int(r.clk):,}</td><td class='num'>{r.CTR}%</td>"
+        f"<td class='num'>{int(r.CPC):,}</td><td class='num'>{r.conv:.0f}</td></tr>"
         for _, r in dd.sort_values("date", ascending=False).iterrows())
     st.markdown(f'<table class="kb-tbl"><thead><tr><th>날짜</th><th>광고비</th><th>노출</th>'
         f'<th>클릭</th><th>CTR</th><th>CPC</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>',
@@ -927,11 +944,15 @@ def render_etc():
         st.info("이 기간 기타매체(카카오/모비온) 데이터가 없습니다."); return
 
     tc, ti, tk, tv = df["cost"].sum(), df["impressions"].sum(), df["clicks"].sum(), df["conversions"].sum()
-    c = st.columns(4)
+    ctr = tk / ti * 100 if ti else 0
+    cpc = tc / tk if tk else 0
+    c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원")
     kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "")
-    kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "", desc=f"CTR {tk/ti*100:.2f}%" if ti else "")
-    kpi(c[3], "fa-bolt", "전환", f"{tv:.0f}", "")
+    kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "")
+    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%")
+    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원")
+    kpi(c[5], "fa-bolt", "전환", f"{tv:.0f}", "건")
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비</div>', unsafe_allow_html=True)
     cmap = {"카카오모먼트": GOLD, "모비온": TEAL}
