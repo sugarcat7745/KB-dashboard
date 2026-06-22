@@ -270,14 +270,12 @@ def load_inquiries():
                 if j in body.columns:
                     m = m | (body[j].astype(str).str.strip() == txt)
             return m
-        contracted_date = (pd.to_datetime(body[ci], errors="coerce").notna()
-                           if (ci is not None and ci in body.columns) else pd.Series([False] * len(body)))
         d = pd.DataFrame({
             "date": body[di].apply(pdate) if (di is not None and di in body.columns) else pd.NaT,
             "name": col(ni),
             "category": col(ti) if (ti is not None and ti in body.columns) else "(미분류)",
             "consulted": has_lo("상담"),
-            "contracted": has_lo("수임") | contracted_date,
+            "contracted": has_lo("수임"),
         })
         d["date"] = d["date"].ffill()
         d = d.dropna(subset=["date"])
@@ -470,6 +468,23 @@ def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
       <div class="l">{label}</div><div class="v">{value}<small>{unit}</small></div>
       {extra}</div>""", unsafe_allow_html=True)
 
+def cmp_caption(text):
+    st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
+                f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {text} 증감</div>',
+                unsafe_allow_html=True)
+
+def tab_header(icon_fa, title, sub, color="#D2AA50", rgb="210,170,80"):
+    st.markdown(
+        f'<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
+        f'background:linear-gradient(90deg,rgba({rgb},.16),rgba({rgb},.02));'
+        f'border-left:5px solid {color};border-radius:12px;">'
+        f'<div style="width:46px;height:46px;border-radius:11px;background:{color};display:flex;'
+        f'align-items:center;justify-content:center;font-size:22px;color:#1a1a17;'
+        f'box-shadow:0 4px 12px rgba({rgb},.4);"><i class="fa-solid {icon_fa}"></i></div>'
+        f'<div><div style="font-size:20px;font-weight:800;color:{color};letter-spacing:-.5px;">{title}</div>'
+        f'<div style="font-size:12px;color:#999;margin-top:2px;">{sub}</div></div></div>',
+        unsafe_allow_html=True)
+
 def render_summary():
     con = load_contracts()
     today = date.today()
@@ -599,6 +614,8 @@ def render_summary():
       <span style="font-size:14px;">{body}</span></div>""",
       unsafe_allow_html=True)
 
+    st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
+                f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {cmp_label} 증감</div>', unsafe_allow_html=True)
     c = st.columns(4)
     kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d)
     kpi(c[1], "fa-sack-dollar", "신건 매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d)
@@ -741,7 +758,7 @@ def render_summary():
         st.plotly_chart(fig_theme(fcat, max(200, len(cat) * 34)), use_container_width=True, config={"displayModeBar": False})
 
 def render_daily():
-    st.markdown('<div class="eyebrow">일간 요약</div>', unsafe_allow_html=True)
+    tab_header("fa-calendar-day", "일간 요약", "하루 단위 광고 · 문의 · 계약 현황")
     con = load_contracts()
     dmin = con["_date"].min().date()
     dmax = date.today()
@@ -797,6 +814,7 @@ def render_daily():
     p_cpi = p_ad / p_inq if p_inq else 0
 
     # KPI (전일 대비 증감 · 수치)
+    cmp_caption("전일 대비")
     c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(total_ad), "원", *delta_str(total_ad, p_ad, "money"))
     kpi(c[1], "fa-bullseye", "광고 전환", f"{total_conv:.0f}", "건", *delta_str(total_conv, p_conv, "cnt"))
@@ -906,6 +924,7 @@ def render_ad_tab(media, full):
     ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0
     ptc, pti, ptk, ptv = pdat.cost.sum(), pdat.imp.sum(), pdat.clk.sum(), pdat.conv.sum()
     pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
+    cmp_caption(f"직전 {span}일 대비")
     c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
     kpi(c[1], "fa-eye", "노출수", money(ti), "", *delta_str(ti, pti, "num"))
@@ -996,7 +1015,7 @@ def render_ad_tab(media, full):
 # MAIN
 # ══════════════════════════════════════════════
 def render_etc():
-    st.markdown('<div class="eyebrow">기타 매체 · 카카오모먼트 · 모비온</div>', unsafe_allow_html=True)
+    tab_header("fa-shapes", "기타 매체", "카카오모먼트 · 모비온", color="#C77B6B", rgb="199,123,107")
     today = date.today()
     cpre, _ = st.columns([1, 2])
     p = cpre.selectbox("기간", ["이번달", "지난달", "최근 30일", "올해", "전체"],
@@ -1036,6 +1055,7 @@ def render_etc():
     ptk = pdf["clicks"].sum() if not pdf.empty else 0
     ptv = pdf["conversions"].sum() if not pdf.empty else 0
     pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
+    cmp_caption(f"직전 {span}일 대비")
     c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
     kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "", *delta_str(ti, pti, "num"))
@@ -1096,6 +1116,7 @@ def render_inquiries():
     pstart, pend = start - timedelta(days=span), start - timedelta(days=1)
     inqp = inq[(inq["date"].dt.date >= pstart) & (inq["date"].dt.date <= pend)]
     p_total = len(inqp); p_sang = int(inqp["consulted"].sum()); p_suim = int(inqp["contracted"].sum())
+    cmp_caption(f"직전 {span}일 대비")
     c = st.columns(3)
     kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", *delta_str(total, p_total, "cnt"))
     kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", *delta_str(sangdam, p_sang, "cnt"))
@@ -1135,16 +1156,22 @@ def render_inquiries():
 
     # ════ 대단락: 카테고리 분석 ════
     st.markdown('<div class="big-section"><i class="fa-solid fa-tags"></i> 카테고리 분석</div>', unsafe_allow_html=True)
-    # 광고 카테고리별 (월별 탭, 2025.09~)
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 (2025.09~)</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 · 수임 <span style="color:#8a8a82;font-size:12px;font-weight:400;">({start} ~ {end})</span></div>', unsafe_allow_html=True)
     bad = ["(미분류)", "nan", "", "종결", "수임완료", "문자남김"]
-    catser = inqf[~inqf["category"].isin(bad)]["category"].value_counts().head(12)
-    if not catser.empty:
-        fc = go.Figure(go.Bar(y=list(catser.index[::-1]), x=list(catser.values[::-1]), orientation="h",
-            marker=dict(color=GOLD), text=list(catser.values[::-1]), textposition="outside"))
-        st.plotly_chart(fig_theme(fc, max(240, len(catser) * 30)), use_container_width=True, config={"displayModeBar": False})
+    catf = inqf[~inqf["category"].isin(bad)]
+    if not catf.empty:
+        cat_inq = catf.groupby("category").size()
+        cat_suim = catf[catf["contracted"]].groupby("category").size()
+        top = list(cat_inq.sort_values(ascending=False).head(12).index)[::-1]
+        fc = go.Figure()
+        fc.add_trace(go.Bar(y=top, x=[int(cat_inq.get(c, 0)) for c in top], name="문의",
+            orientation="h", marker=dict(color=GOLD), text=[int(cat_inq.get(c, 0)) for c in top], textposition="outside"))
+        fc.add_trace(go.Bar(y=top, x=[int(cat_suim.get(c, 0)) for c in top], name="수임",
+            orientation="h", marker=dict(color=TEAL), text=[int(cat_suim.get(c, 0)) for c in top], textposition="outside"))
+        fc.update_layout(barmode="group", legend=dict(orientation="h", y=1.08))
+        st.plotly_chart(fig_theme(fc, max(280, len(top) * 42)), use_container_width=True, config={"displayModeBar": False})
     else:
-        st.caption("카테고리 데이터가 없습니다.")
+        st.caption("이 기간 카테고리 데이터가 없습니다.")
 
     # ════ 대단락: 이름 대조 ════
     st.markdown('<div class="big-section"><i class="fa-solid fa-magnifying-glass"></i> 이름 대조</div>', unsafe_allow_html=True)
@@ -1204,7 +1231,7 @@ def main():
             df = None
 
         if df is not None and len(df):
-            st.markdown('<div class="eyebrow">계약 매출 분석</div>', unsafe_allow_html=True)
+            tab_header("fa-file-contract", "계약 매출 분석", "신건 · 파생 · 입금 · 미수금")
 
             # ════ 대단락: 기간별 조회 ════
             st.markdown('<div class="big-section"><i class="fa-solid fa-calendar-day"></i> 기간별 조회</div>', unsafe_allow_html=True)
@@ -1337,7 +1364,7 @@ def main():
 
     # ────────── SUMMARY 탭 (일간/주간/월간/년간 토글) ──────────
     with tabs[0]:
-        st.markdown('<div class="eyebrow">전 매체 통합 요약</div>', unsafe_allow_html=True)
+        tab_header("fa-chart-pie", "전 매체 통합 요약", "광고비 · 매출 · ROAS · 문의 종합")
         try:
             render_summary()
         except Exception as e:
