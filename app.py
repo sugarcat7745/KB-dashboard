@@ -396,16 +396,16 @@ def render_summary():
         return f"{'▲' if d>=0 else '▼'} {abs(d):.1f}%", ("up" if d >= 0 else "down")
 
     ad, ad_p = spend(start, end), spend(ps, pe)
-    revenue, rev_p = rev(start, end), rev(ps, pe)
-    new_rev = rev(start, end, True)
-    roas = new_rev / ad * 100 if ad else 0
-    n_con = int(((con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)).sum())
+    revenue, rev_p = rev(start, end, True), rev(ps, pe, True)   # 신건만!!! (목표·비교 기준)
+    deriv = rev(start, end, False) - revenue                    # 파생(참고용)
+    roas = revenue / ad * 100 if ad else 0
+    n_con = int(((con["_date"].dt.date >= start) & (con["_date"].dt.date <= end) & con["_is_new"]).sum())
     ad_c, ad_d = chg(ad, ad_p)
     rev_c, rev_d = chg(revenue, rev_p)
 
     # ── AI 인사이트 한 줄 (Claude API, 실패 시 규칙기반 폴백) ──
     cmask0 = (con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)
-    catall = con[cmask0].groupby("_type")["_amt"].sum().sort_values(ascending=False)
+    catall = con[cmask0 & con["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=False)
     top_cat = f"{catall.index[0]}({catall.iloc[0]/1e8:.1f}억)" if not catall.empty else "-"
     # 문의당 비용(CPI) 미리 계산 (당월/당해 · 연간요약 기준)
     _ann = load_annual(); cpi_v = 0.0; inq_v = 0
@@ -416,10 +416,10 @@ def render_summary():
             _s = _s[_s["_mn"] == str(end.month)]
         if not _s.empty and _s["문의"].sum() > 0:
             inq_v = _s["문의"].sum(); cpi_v = _s["총광고비"].sum() / inq_v
-    summary = (f"기간단위:{period.split()[-1]}({cmp_label}). "
+    summary = (f"기간단위:{period.split()[-1]}({cmp_label}). 모든 매출 측정은 신건 기준이다. "
                f"광고비 {money(ad)}원(비교 {ad_c or '데이터없음'}), "
-               f"계약매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), "
-               f"ROAS {roas:.0f}%, 계약 {n_con}건, "
+               f"신건매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), 파생매출(참고) {money(deriv)}원, "
+               f"ROAS {roas:.0f}%, 신건계약 {n_con}건, "
                f"문의당비용(CPI) {money(cpi_v)}원, 사건분류 매출1위 {top_cat}.")
     focus_map = {
         "일간": "이 리포트는 '어제 하루'다. 특정 매체 광고비 급변이나 전환 급감 같은 그날의 이상 신호를 우선 짚어라.",
@@ -451,8 +451,8 @@ def render_summary():
 
     c = st.columns(4)
     kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d, desc=cmp_label)
-    kpi(c[1], "fa-sack-dollar", "계약매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d, desc=cmp_label)
-    kpi(c[2], "fa-file-signature", "계약건수", f"{n_con}", "건")
+    kpi(c[1], "fa-sack-dollar", "신건 매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d, desc=f"{cmp_label} · 파생 {money(deriv)}")
+    kpi(c[2], "fa-file-signature", "신건 계약", f"{n_con}", "건")
     kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", desc="신건매출÷광고비")
 
     # ── 퍼널 (문의→상담→수임) + CPI/CPA ──
@@ -523,8 +523,8 @@ def render_summary():
     cc = st.columns([3, 2])
     with cc[0]:
         if "년간" in period:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 연도별 매출</div>', unsafe_allow_html=True)
-            yr = con.groupby("_y")["_amt"].sum()
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 연도별 신건 매출</div>', unsafe_allow_html=True)
+            yr = con[con["_is_new"]].groupby("_y")["_amt"].sum()
             f1 = go.Figure(go.Bar(x=[f"{int(y)}년" for y in yr.index], y=yr.values/1e8, marker=dict(color=GOLD), text=[f"{v/1e8:.1f}억" for v in yr.values], textposition="outside"))
             f1.update_yaxes(ticksuffix="억")
             st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
@@ -546,14 +546,14 @@ def render_summary():
             fwd.update_yaxes(ticksuffix="만")
             st.plotly_chart(fig_theme(fwd, 250), use_container_width=True, config={"displayModeBar": False})
         else:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
             yrs = sorted(con["_y"].unique())[-3:]
             colors = {yrs[-1]: GOLD}
             if len(yrs) >= 2: colors[yrs[-2]] = TEAL
             if len(yrs) >= 3: colors[yrs[-3]] = GRAY
             f1 = go.Figure()
             for y in yrs:
-                yd = con[con["_y"] == y].groupby("_m")["_amt"].sum()
+                yd = con[(con["_y"] == y) & con["_is_new"]].groupby("_m")["_amt"].sum()
                 f1.add_trace(go.Scatter(x=[f"{m}월" for m in range(1, 13)], y=[yd.get(m, None) and yd.get(m)/1e8 for m in range(1, 13)],
                     name=str(int(y)), mode="lines+markers", line=dict(color=colors.get(y, GRAY), dash="dash" if y == yrs[0] and len(yrs) >= 3 else "solid"), connectgaps=False))
             f1.update_yaxes(ticksuffix="억")
@@ -567,11 +567,11 @@ def render_summary():
         else:
             st.caption("이 기간 광고비 데이터가 없습니다.")
 
-    # ── 사건분류별 매출 ──
+    # ── 사건분류별 매출 (신건) ──
     cmask = (con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)
-    cat = con[cmask].groupby("_type")["_amt"].sum().sort_values(ascending=False).head(8)
+    cat = con[cmask & con["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=False).head(8)
     if not cat.empty and cat.sum() > 0:
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 사건분류별 매출</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 사건분류별 신건 매출</div>', unsafe_allow_html=True)
         tot = cat.sum()
         fcat = go.Figure(go.Bar(
             y=[str(t) for t in cat.index[::-1]], x=cat.values[::-1] / 1e8, orientation="h",
@@ -871,26 +871,28 @@ def main():
             cur = df[df["_y"] == this_y]
             prev = df[df["_y"] == this_y - 1]
 
-            cur_sum, cur_cnt = cur["_amt"].sum(), len(cur)
-            # 전년 동기(같은 월까지) 비교
+            cur_new = cur[cur["_is_new"]]
+            new_sum = cur_new["_amt"].sum()                 # 신건 누적 (메인 기준!!!)
+            deriv_sum = cur["_amt"].sum() - new_sum          # 파생(참고용)
+            cur_cnt, new_cnt = len(cur), len(cur_new)
+            # 전년 동기(같은 월까지) — 신건 기준 비교
             max_m = cur["_m"].max() if len(cur) else 0
-            prev_same = prev[prev["_m"] <= max_m]
-            yoy = ((cur_sum - prev_same["_amt"].sum()) / prev_same["_amt"].sum() * 100
-                   if prev_same["_amt"].sum() else 0)
-            new_sum = cur[cur["_is_new"]]["_amt"].sum()
-            new_ratio = new_sum / cur_sum * 100 if cur_sum else 0
-            avg_amt = cur_sum / cur_cnt if cur_cnt else 0
-            month_sum = df[df["_ym"] == this_ym]["_amt"].sum()
+            prev_new_same = prev[(prev["_m"] <= max_m) & prev["_is_new"]]
+            yoy = ((new_sum - prev_new_same["_amt"].sum()) / prev_new_same["_amt"].sum() * 100
+                   if prev_new_same["_amt"].sum() else 0)
+            new_ratio = new_sum / (new_sum + deriv_sum) * 100 if (new_sum + deriv_sum) else 0
+            avg_amt = new_sum / new_cnt if new_cnt else 0    # 신건 평균
+            month_new = df[(df["_ym"] == this_ym) & df["_is_new"]]["_amt"].sum()  # 신건 이번달
 
             c = st.columns(6)
-            kpi(c[0], "fa-sack-dollar", f"{this_y} 누적 매출", won(cur_sum),
-                chg=f"{'▲' if yoy>=0 else '▼'} {abs(yoy):.1f}%", chg_dir="up" if yoy>=0 else "down", desc="전년 동기 대비")
-            kpi(c[1], "fa-file-signature", "계약 건수", f"{cur_cnt:,}", "건", desc=f"{this_y}년")
-            kpi(c[2], "fa-star", "신건 매출", won(new_sum), chg=f"{new_ratio:.0f}%", desc="전체 중")
-            kpi(c[3], "fa-rotate", "파생 매출", won(cur_sum-new_sum), chg=f"{100-new_ratio:.0f}%", desc="재의뢰")
-            kpi(c[4], "fa-won-sign", "평균 단가", f"{avg_amt/1e4:.0f}", "만", desc="건당")
-            kpi(c[5], "fa-calendar-check", "이번 달", won(month_sum),
-                chg=f"{month_sum/MONTHLY_GOAL*100:.0f}%", desc="목표 2.5억 대비")
+            kpi(c[0], "fa-sack-dollar", f"{this_y} 신건 누적", won(new_sum),
+                chg=f"{'▲' if yoy>=0 else '▼'} {abs(yoy):.1f}%", chg_dir="up" if yoy>=0 else "down", desc="전년 동기 대비(신건)")
+            kpi(c[1], "fa-file-signature", "신건 계약", f"{new_cnt:,}", "건", desc=f"전체 {cur_cnt:,}건")
+            kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum), desc="참고용 · 재의뢰")
+            kpi(c[3], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만", desc="건당")
+            kpi(c[4], "fa-calendar-check", "이번 달 신건", won(month_new),
+                chg=f"{month_new/MONTHLY_GOAL*100:.0f}%", desc="목표 2.5억 대비")
+            kpi(c[5], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%", desc="전체 매출 중")
 
             # ── 입금 현황 + 미수금 (전체 기간) ──
             st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
@@ -909,24 +911,24 @@ def main():
                     st.success("미수금이 없습니다! 전액 수금 완료!")
                 else:
                     rows = "".join(
-                        f"<tr><td>{r._name}</td><td>{r._date.strftime('%Y-%m-%d')}</td>"
-                        f"<td class='num'>{money(r._amt)}</td><td class='num'>{money(r._paid)}</td>"
-                        f"<td class='num' style='color:{CORAL};font-weight:600;'>{money(r._unpaid)}</td></tr>"
-                        for r in unpaid.itertuples())
+                        f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%Y-%m-%d')}</td>"
+                        f"<td class='num'>{money(r['_amt'])}</td><td class='num'>{money(r['_paid'])}</td>"
+                        f"<td class='num' style='color:{CORAL};font-weight:600;'>{money(r['_unpaid'])}</td></tr>"
+                        for _, r in unpaid.iterrows())
                     st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th>'
                         f'<th>기본보수</th><th>입금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>',
                         unsafe_allow_html=True)
 
             st.write("")
             # 월별 추세 (YoY)
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
             years = sorted(df["_y"].unique())
             colors = {years[-1]: GOLD}
             if len(years) >= 2: colors[years[-2]] = TEAL
             if len(years) >= 3: colors[years[-3]] = GRAY
             fig = go.Figure()
             for y in years[-3:]:
-                yd = df[df["_y"] == y].groupby("_m")["_amt"].sum()
+                yd = df[(df["_y"] == y) & df["_is_new"]].groupby("_m")["_amt"].sum()
                 vals = [yd.get(m, None) for m in range(1, 13)]
                 vals = [v/1e8 if v else None for v in vals]
                 dash = "dash" if y == years[-3] and len(years) >= 3 else "solid"
@@ -946,16 +948,16 @@ def main():
                 st.plotly_chart(fig_theme(fig2, 230), use_container_width=True, config={"displayModeBar": False})
             # 계약유형별 (전체기간)
             with cc[1]:
-                st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 매출 (전체기간)</div>', unsafe_allow_html=True)
-                tg = df.groupby("_type")["_amt"].sum().sort_values(ascending=True).tail(6)
+                st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 신건 매출 (전체기간)</div>', unsafe_allow_html=True)
+                tg = df[df["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=True).tail(6)
                 fig3 = go.Figure(go.Bar(x=tg.values/1e8, y=tg.index, orientation="h",
                     marker=dict(color=GOLD)))
                 fig3.update_xaxes(ticksuffix="억")
                 st.plotly_chart(fig_theme(fig3, 230), use_container_width=True, config={"displayModeBar": False})
 
             # 계약유형 × 연도 표
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 계약유형별 매출 (연도별)</div>', unsafe_allow_html=True)
-            pv = df.pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 계약유형별 신건 매출 (연도별)</div>', unsafe_allow_html=True)
+            pv = df[df["_is_new"]].pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
             pv["합계"] = pv.sum(axis=1)
             pv = pv.sort_values("합계", ascending=False)
             ys = [c for c in pv.columns if c != "합계"]
