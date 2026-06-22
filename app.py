@@ -439,23 +439,34 @@ def preset_range(name, dmin, dmax):
     else:                            s, e = dmin, dmax
     return max(s, dmin), min(e, dmax)
 
-def period_selector(key, dmin, dmax, default="전체"):
-    """네이버/구글 탭과 동일한 기간 선택 드롭다운. (start, end) 반환."""
-    presets = ["전체", "어제", "최근7일(오늘제외)", "이번주", "지난주", "이번달",
-               "이번분기", "지난분기", "최근30일", "최근90일", "최근365일", "직접선택"]
-    idx = presets.index(default) if default in presets else 0
-    cpre, _ = st.columns([1, 2])
-    sel = cpre.selectbox("기간", presets, index=idx, key=f"{key}_preset")
-    if sel == "직접선택":
-        c1, c2 = st.columns(2)
-        start = c1.date_input("시작일", dmin, min_value=dmin, max_value=dmax, key=f"{key}_s")
-        end   = c2.date_input("종료일", dmax, min_value=dmin, max_value=dmax, key=f"{key}_e")
-    elif sel == "전체":
-        start, end = dmin, dmax
-        st.caption(f"📅 {start} ~ {end} (전체)")
-    else:
-        start, end = preset_range(sel, dmin, dmax)
-        st.caption(f"📅 {start} ~ {end}")
+def period_selector(key, dmin, dmax, default="이번달"):
+    """달력으로 직접 선택하는 기간 선택기 + 빠른 버튼. (start, end) 반환."""
+    today = dmax
+    def preset(name):
+        if name == "이번달":   return today.replace(day=1), today
+        if name == "지난달":
+            e = today.replace(day=1) - timedelta(days=1); return e.replace(day=1), e
+        if name == "최근30일": return today - timedelta(days=29), today
+        if name == "올해":     return today.replace(month=1, day=1), today
+        return dmin, dmax  # 전체
+    skey, ekey = f"{key}_s", f"{key}_e"
+    if skey not in st.session_state:
+        ds, de = preset(default)
+        st.session_state[skey] = max(ds, dmin)
+        st.session_state[ekey] = min(de, dmax)
+    # 빠른 버튼
+    bcols = st.columns(5)
+    for i, name in enumerate(["이번달", "지난달", "최근30일", "올해", "전체"]):
+        if bcols[i].button(name, key=f"{key}_qb{i}", use_container_width=True):
+            ds, de = preset(name)
+            st.session_state[skey] = max(ds, dmin)
+            st.session_state[ekey] = min(de, dmax)
+    # 달력 (직접 선택)
+    c1, c2 = st.columns(2)
+    start = c1.date_input("시작일 (달력 클릭)", min_value=dmin, max_value=dmax, key=skey)
+    end   = c2.date_input("종료일 (달력 클릭)", min_value=dmin, max_value=dmax, key=ekey)
+    if start > end:
+        start, end = end, start
     return start, end
 
 def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
@@ -492,53 +503,55 @@ def render_summary():
                       index=2, horizontal=True, key="sum_period")
 
     unit = period.split()[-1]
-    okey = f"sum_off_{unit}"
-    if okey not in st.session_state:
-        st.session_state[okey] = 0
-    def shift_off(n):
-        st.session_state[okey] = min(0, st.session_state[okey] + n)
-    off = st.session_state[okey]
-
-    if "일간" in period:
-        base = today - timedelta(days=1) + timedelta(days=off)
-        start = end = base
-        ps = pe = base - timedelta(days=1); cmp_label = "전일 대비"
-        plabel = f"{base.year}. {base.month:02d}. {base.day:02d}"
-    elif "주간" in period:
-        monday = today - timedelta(days=today.weekday()) + timedelta(weeks=off)
-        start = monday
-        end = (monday + timedelta(days=6)) if off < 0 else min(monday + timedelta(days=6), today)
-        ps = monday - timedelta(days=7); pe = monday - timedelta(days=1); cmp_label = "전주 대비"
-        plabel = f"{start.month}/{start.day} ~ {end.month}/{end.day}"
-    elif "월간" in period:
-        yy, mm = today.year, today.month + off
-        while mm < 1: mm += 12; yy -= 1
-        while mm > 12: mm -= 12; yy += 1
-        start = date(yy, mm, 1)
-        if off == 0:
-            end = today
+    akey = f"sum_anchor_{unit}"
+    if akey not in st.session_state:
+        st.session_state[akey] = today
+    def shift_anchor(n):
+        a = st.session_state[akey]
+        if "일간" in period:
+            na = a + timedelta(days=n)
+        elif "주간" in period:
+            na = a + timedelta(weeks=n)
+        elif "월간" in period:
+            m, y = a.month + n, a.year
+            while m < 1: m += 12; y -= 1
+            while m > 12: m -= 12; y += 1
+            na = date(y, m, min(a.day, 28))
         else:
-            nxt = date(yy + 1, 1, 1) if mm == 12 else date(yy, mm + 1, 1)
-            end = nxt - timedelta(days=1)
-        pm_y, pm_m = (yy, mm - 1) if mm > 1 else (yy - 1, 12)
-        ps = date(pm_y, pm_m, 1); pe = start - timedelta(days=1); cmp_label = "전월 대비"
-        plabel = f"{yy}년 {mm}월"
-    else:
-        yy = today.year + off
-        start = date(yy, 1, 1)
-        end = today if off == 0 else date(yy, 12, 31)
-        ps = date(yy - 1, 1, 1)
-        pe = date(yy - 1, today.month, today.day) if off == 0 else date(yy - 1, 12, 31)
-        cmp_label = "전년 대비"
-        plabel = f"{yy}년"
+            na = date(a.year + n, a.month, min(a.day, 28))
+        st.session_state[akey] = min(na, today)
 
     nav = st.columns([1, 2, 1])
-    nav[0].button("◀ 이전", on_click=shift_off, args=(-1,), key=f"sp_{unit}", use_container_width=True)
-    nav[2].button("다음 ▶", on_click=shift_off, args=(1,), key=f"sn_{unit}",
-                  use_container_width=True, disabled=(off >= 0))
-    nav[1].markdown(f"<div style='text-align:center;font-family:\"Noto Serif KR\",serif;"
-                    f"font-size:20px;font-weight:600;color:{GOLD_B};padding-top:3px;'>{plabel}</div>",
-                    unsafe_allow_html=True)
+    nav[0].button("◀ 이전", on_click=shift_anchor, args=(-1,), key=f"sp_{unit}", use_container_width=True)
+    nav[2].button("다음 ▶", on_click=shift_anchor, args=(1,), key=f"sn_{unit}",
+                  use_container_width=True, disabled=(st.session_state[akey] >= today))
+    sel = nav[1].date_input("기준일", value=st.session_state[akey], max_value=today,
+                            key=f"sda_{unit}", label_visibility="collapsed")
+    if sel != st.session_state[akey]:
+        st.session_state[akey] = sel
+        st.rerun()
+    anchor = st.session_state[akey]
+
+    if "일간" in period:
+        start = end = anchor
+        ps = pe = anchor - timedelta(days=1); cmp_label = "전일 대비"
+    elif "주간" in period:
+        monday = anchor - timedelta(days=anchor.weekday())
+        start = monday
+        end = min(monday + timedelta(days=6), today)
+        ps = monday - timedelta(days=7); pe = monday - timedelta(days=1); cmp_label = "전주 대비"
+    elif "월간" in period:
+        start = date(anchor.year, anchor.month, 1)
+        nxt = date(anchor.year + 1, 1, 1) if anchor.month == 12 else date(anchor.year, anchor.month + 1, 1)
+        end = min(nxt - timedelta(days=1), today)
+        pm_y, pm_m = (anchor.year, anchor.month - 1) if anchor.month > 1 else (anchor.year - 1, 12)
+        ps = date(pm_y, pm_m, 1); pe = start - timedelta(days=1); cmp_label = "전월 대비"
+    else:
+        start = date(anchor.year, 1, 1)
+        end = min(date(anchor.year, 12, 31), today)
+        ps = date(anchor.year - 1, 1, 1)
+        pe = date(anchor.year - 1, today.month, today.day) if anchor.year == today.year else date(anchor.year - 1, 12, 31)
+        cmp_label = "전년 대비"
     st.caption(f"📅 {start} ~ {end}")
 
     # 전매체 광고비 (ad_keyword + ad_etc)
@@ -640,7 +653,7 @@ def render_summary():
             cpa = adc / cont if cont else 0
             # ✨ 문의당 비용(CPI) 강조 배너 — 광고 효율의 핵심!!! ✨
             st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
-              display:flex;justify-content:space-between;align-items:center;padding:18px 24px;margin-bottom:14px;">
+              display:flex;justify-content:space-between;align-items:center;padding:18px 24px;margin-top:24px;margin-bottom:14px;">
               <div>
                 <div style="font-size:12px;color:{MUTED};letter-spacing:1px;">
                   <i class="fa-solid fa-coins" style="color:{GOLD};margin-right:7px;"></i>문의당 비용 (CPI) · {flabel}</div>
@@ -899,19 +912,7 @@ def render_ad_tab(media, full):
         st.info(f"{media} 데이터가 없습니다."); return
     raw["date"] = pd.to_datetime(raw["date"])
     dmin, dmax = raw["date"].min().date(), raw["date"].max().date()
-
-    # ── 기간 선택 (부드러운 드롭다운) ──
-    presets = ["어제", "최근7일(오늘제외)", "이번주", "지난주", "이번달",
-               "이번분기", "지난분기", "최근30일", "최근90일", "최근365일", "직접선택"]
-    cpre, _ = st.columns([1, 2])
-    sel = cpre.selectbox("기간", presets, index=4, key=f"{media}_preset")
-    if sel == "직접선택":
-        c1, c2 = st.columns(2)
-        start = c1.date_input("시작일", dmin, min_value=dmin, max_value=dmax, key=f"{media}_s")
-        end   = c2.date_input("종료일", dmax, min_value=dmin, max_value=dmax, key=f"{media}_e")
-    else:
-        start, end = preset_range(sel, dmin, dmax)
-        st.caption(f"📅 {start} ~ {end}")
+    start, end = period_selector(media, dmin, dmax, default="이번달")
     d = raw[(raw["date"].dt.date >= start) & (raw["date"].dt.date <= end)]
     sd, ed = str(start), str(end)
     # 직전 동일 길이 기간 (비교용)
@@ -1017,20 +1018,12 @@ def render_ad_tab(media, full):
 def render_etc():
     tab_header("fa-shapes", "기타 매체", "카카오모먼트 · 모비온", color="#C77B6B", rgb="199,123,107")
     today = date.today()
-    cpre, _ = st.columns([1, 2])
-    p = cpre.selectbox("기간", ["이번달", "지난달", "최근 30일", "올해", "전체"],
-                       index=0, key="etc_period")
-    if p == "이번달":
-        s, e = today.replace(day=1), today
-    elif p == "지난달":
-        e = today.replace(day=1) - timedelta(days=1); s = e.replace(day=1)
-    elif p == "최근 30일":
-        s, e = today - timedelta(days=29), today
-    elif p == "올해":
-        s, e = today.replace(month=1, day=1), today
-    else:
-        s, e = date(2024, 1, 1), today
-    st.caption(f"📅 {s} ~ {e}")
+    try:
+        rng = bq(f"SELECT MIN(date) mn, MAX(date) mx FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc`")
+        dmin = pd.to_datetime(rng["mn"].iloc[0]).date(); dmax = pd.to_datetime(rng["mx"].iloc[0]).date()
+    except Exception:
+        dmin, dmax = date(2024, 1, 1), today
+    s, e = period_selector("etc", dmin, dmax, default="이번달")
 
     try:
         df = bq(f"SELECT date,media,cost,impressions,clicks,conversions "
