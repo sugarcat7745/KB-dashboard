@@ -308,11 +308,57 @@ def render_summary():
     ad_c, ad_d = chg(ad, ad_p)
     rev_c, rev_d = chg(revenue, rev_p)
 
+    # ── AI 인사이트 한 줄 ──
+    bits = []
+    if ad_p:
+        d = (ad - ad_p) / ad_p * 100
+        bits.append(f"광고비 {abs(d):.0f}% {'증가' if d >= 0 else '감소'}")
+    if rev_p:
+        d = (revenue - rev_p) / rev_p * 100
+        bits.append(f"매출 {abs(d):.0f}% {'증가' if d >= 0 else '감소'}")
+    grade = "효율 우수" if roas >= 300 else ("효율 양호" if roas >= 150 else "효율 점검 필요")
+    msg = " · ".join(bits) if bits else "데이터 집계 중"
+    icon = "fa-circle-check" if roas >= 150 else "fa-triangle-exclamation"
+    icol = GOLD_B if roas >= 150 else CORAL
+    st.markdown(f"""<div class="kb-card" style="border-left:3px solid {icol};padding:14px 18px;margin-bottom:14px;">
+      <i class="fa-solid {icon}" style="color:{icol};margin-right:8px;"></i>
+      <span style="font-size:14px;">{cmp_label} <b style="color:{GOLD_B};">{msg}</b> — ROAS {roas:.0f}% <span style="color:{icol};">({grade})</span></span></div>""",
+      unsafe_allow_html=True)
+
     c = st.columns(4)
     kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d, desc=cmp_label)
     kpi(c[1], "fa-sack-dollar", "계약매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d, desc=cmp_label)
     kpi(c[2], "fa-file-signature", "계약건수", f"{n_con}", "건")
     kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", desc="신건매출÷광고비")
+
+    # ── 퍼널 (문의→상담→수임) + CPI/CPA ──
+    ann = load_annual()
+    if not ann.empty:
+        y = str(end.year)
+        sub = ann[ann["연도"] == y].copy()
+        if "년간" in period:
+            flabel = "올해 누적"
+        else:
+            sub["_mn"] = sub["월"].astype(str).str.replace("월", "").str.strip()
+            sub = sub[sub["_mn"] == str(end.month)]
+            flabel = f"{end.month}월"
+        if not sub.empty and sub["문의"].sum() > 0:
+            inq, cons, cont = sub["문의"].sum(), sub["상담"].sum(), sub["수임"].sum()
+            adc = sub["총광고비"].sum()
+            cpi = adc / inq if inq else 0
+            cpa = adc / cont if cont else 0
+            st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {flabel} (문의 시트 기준)</div>', unsafe_allow_html=True)
+            fc = st.columns([3, 2])
+            with fc[0]:
+                ff = go.Figure(go.Funnel(y=["문의", "상담", "수임"], x=[inq, cons, cont],
+                    textinfo="value+percent initial", marker=dict(color=[TEAL, GOLD, CORAL])))
+                st.plotly_chart(fig_theme(ff, 220), use_container_width=True, config={"displayModeBar": False})
+            with fc[1]:
+                kk = st.columns(2)
+                kpi(kk[0], "fa-coins", "CPI", money(cpi), "원", desc="문의당 비용")
+                kpi(kk[1], "fa-handshake", "CPA", money(cpa), "원", desc="수임당 비용")
+                st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-top:8px;">문의→수임 전환율 '
+                            f'<b style="color:{GOLD_B};">{cont/inq*100:.1f}%</b></div>' if inq else "", unsafe_allow_html=True)
 
     # 매체별 광고비 비중
     try:
@@ -364,6 +410,19 @@ def render_summary():
             st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
         else:
             st.caption("이 기간 광고비 데이터가 없습니다.")
+
+    # ── 사건분류별 매출 ──
+    cmask = (con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)
+    cat = con[cmask].groupby("_type")["_amt"].sum().sort_values(ascending=False).head(8)
+    if not cat.empty and cat.sum() > 0:
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 사건분류별 매출</div>', unsafe_allow_html=True)
+        tot = cat.sum()
+        fcat = go.Figure(go.Bar(
+            y=[str(t) for t in cat.index[::-1]], x=cat.values[::-1] / 1e8, orientation="h",
+            marker=dict(color=GOLD), text=[f"{v/1e8:.2f}억 ({v/tot*100:.0f}%)" for v in cat.values[::-1]],
+            textposition="outside"))
+        fcat.update_xaxes(ticksuffix="억")
+        st.plotly_chart(fig_theme(fcat, max(200, len(cat) * 34)), use_container_width=True, config={"displayModeBar": False})
 
 def render_daily():
     st.markdown('<div class="eyebrow">일간 요약</div>', unsafe_allow_html=True)
