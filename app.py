@@ -223,6 +223,51 @@ def load_inq_for_date(day):
     return df[df["_dt"].dt.date == day]
 
 @st.cache_data(ttl=300)
+def load_inquiries():
+    """문의 시트 전 탭 통합 (통합본 + 월별, 헤더 위치/컬럼 자동 탐지)."""
+    def fidx(hdr, *keys):
+        return next((j for j, v in enumerate(hdr) if any(k in str(v) for k in keys)), None)
+    def pdate(s):
+        s = "".join(ch for ch in str(s) if ch.isdigit())
+        return pd.to_datetime(s, format="%y%m%d", errors="coerce") if len(s) == 6 else pd.NaT
+    try:
+        sh = get_gc().open_by_key(INQ_SHEET_ID)
+    except Exception:
+        return pd.DataFrame()
+    frames = []
+    for ws in sh.worksheets():
+        if ws.title == "주간문의량":
+            continue
+        vals = ws.get_all_values()
+        if not vals:
+            continue
+        raw = pd.DataFrame(vals)
+        hr = next((i for i in range(min(10, len(raw)))
+                   if any("문의일자" in str(v) for v in raw.iloc[i])), None)
+        if hr is None:
+            continue
+        hdr = [str(v).strip() for v in raw.iloc[hr].tolist()]
+        di, ni, ci, ti = fidx(hdr, "문의일자"), fidx(hdr, "이름"), fidx(hdr, "계약체결"), fidx(hdr, "카테고리")
+        body = raw.iloc[hr+1:].reset_index(drop=True)
+        def col(i):
+            return body[i].astype(str).str.strip() if (i is not None and i in body.columns) else pd.Series([""] * len(body))
+        d = pd.DataFrame({
+            "date": body[di].apply(pdate) if (di is not None and di in body.columns) else pd.NaT,
+            "name": col(ni),
+            "category": col(ti) if (ti is not None and ti in body.columns) else "(미분류)",
+            "contracted": pd.to_datetime(body[ci], errors="coerce").notna() if (ci is not None and ci in body.columns) else False,
+        })
+        d["date"] = d["date"].ffill()
+        d = d.dropna(subset=["date"])
+        frames.append(d)
+    if not frames:
+        return pd.DataFrame()
+    inq = pd.concat(frames, ignore_index=True)
+    inq["_ym"] = inq["date"].dt.to_period("M").astype(str)
+    inq["name"] = inq["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
+    return inq
+
+@st.cache_data(ttl=300)
 def load_contracts():
     ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
     df = pd.DataFrame(ws.get_all_records())
@@ -841,6 +886,75 @@ def render_etc():
                 unsafe_allow_html=True)
 
 
+def render_inquiries():
+    st.markdown('<div class="eyebrow">문의 분석</div>', unsafe_allow_html=True)
+    inq = load_inquiries()
+    if inq.empty:
+        st.info("문의 데이터를 읽지 못했습니다. 시트 공유·탭 구조를 확인해주세요."); return
+    con = load_contracts()
+
+    total = len(inq); suim = int(inq["contracted"].sum())
+    rate = suim / total * 100 if total else 0
+    c = st.columns(3)
+    kpi(c[0], "fa-phone", "총 문의", f"{total:,}", "건", desc=f"{inq['date'].min().date()} ~")
+    kpi(c[1], "fa-handshake", "수임", f"{suim:,}", "건", desc="계약체결 기준")
+    kpi(c[2], "fa-percent", "수임 전환율", f"{rate:.1f}", "%", desc="수임 ÷ 문의")
+
+    # 월별 문의·수임 추이
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 문의 · 수임 추이</div>', unsafe_allow_html=True)
+    bym = inq.groupby("_ym").agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=bym["_ym"], y=bym["문의"], name="문의", mode="lines+markers", line=dict(color=GOLD, width=2)))
+    fig.add_trace(go.Scatter(x=bym["_ym"], y=bym["수임"], name="수임", mode="lines+markers", line=dict(color=TEAL, width=2), yaxis="y2"))
+    fig.update_layout(yaxis=dict(title="문의"), yaxis2=dict(overlaying="y", side="right", showgrid=False, title="수임", color="#5BB4C4"),
+                      legend=dict(orientation="h", y=1.12))
+    thin_xticks(fig, bym["_ym"])
+    st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
+
+    # 광고 카테고리별 (월별 탭, 2025.09~)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 (2025.09~)</div>', unsafe_allow_html=True)
+    bad = ["(미분류)", "nan", "", "종결", "수임완료", "문자남김"]
+    catser = inq[~inq["category"].isin(bad)]["category"].value_counts().head(12)
+    if not catser.empty:
+        fc = go.Figure(go.Bar(y=list(catser.index[::-1]), x=list(catser.values[::-1]), orientation="h",
+            marker=dict(color=GOLD), text=list(catser.values[::-1]), textposition="outside"))
+        st.plotly_chart(fig_theme(fc, max(240, len(catser) * 30)), use_container_width=True, config={"displayModeBar": False})
+    else:
+        st.caption("카테고리 데이터가 없습니다.")
+
+    # 이름 대조 — 문의자 ↔ 계약/미수금
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-magnifying-glass"></i> 이름 대조 — 문의자 ↔ 계약 현황</div>', unsafe_allow_html=True)
+    q = st.text_input("이름 검색", key="inq_search", placeholder="이름을 입력하면 문의·계약·미수금을 한 번에 봅니다 (예: 홍길동)")
+    if q:
+        qi = inq[inq["name"].str.contains(q, na=False) & (inq["name"] != "")]
+        qc = con[con["_name"].str.contains(q, na=False)] if "_name" in con.columns else con.iloc[0:0]
+        cols = st.columns(2)
+        with cols[0]:
+            st.markdown(f"**📞 문의 {len(qi)}건**")
+            if not qi.empty:
+                rows = "".join(
+                    f"<tr><td>{r['date'].strftime('%y-%m-%d')}</td><td>{r['name']}</td>"
+                    f"<td>{r['category']}</td><td>{'✅' if r['contracted'] else ''}</td></tr>"
+                    for _, r in qi.sort_values("date").head(30).iterrows())
+                st.markdown(f'<table class="kb-tbl"><thead><tr><th>문의일</th><th>이름</th><th>카테고리</th><th>수임</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+            else:
+                st.caption("문의 기록 없음")
+        with cols[1]:
+            tot_un = qc["_unpaid"].sum() if not qc.empty else 0
+            st.markdown(f"**📑 계약 {len(qc)}건 · 미수금 {money(tot_un)}원**")
+            if not qc.empty:
+                rows = "".join(
+                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td>"
+                    f"<td class='num'>{money(r['_amt'])}</td>"
+                    f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
+                    for _, r in qc.sort_values("_date").iterrows())
+                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+            else:
+                st.caption("계약 기록 없음")
+    else:
+        st.caption("💡 이름을 검색하면 그 사람의 문의 이력 + 계약 + 미수금을 한 화면에서 대조합니다.")
+
+
 def main():
     logo = get_logo()
     logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#D2AA50;">법무법인 KB</span>'
@@ -849,7 +963,7 @@ def main():
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div></div></div>""", unsafe_allow_html=True)
 
-    tabs = st.tabs(["📊 SUMMARY", "🗓️ 일간요약", "📑 계약", "🟢 네이버", "🔴 구글", "⚪ 기타"])
+    tabs = st.tabs(["📊 SUMMARY", "🗓️ 일간요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"])
 
     # ────────── 일간요약 탭 ──────────
     with tabs[1]:
@@ -943,7 +1057,7 @@ def main():
             # 신건/파생 도넛
             with cc[0]:
                 st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 신건 vs 파생</div>', unsafe_allow_html=True)
-                fig2 = go.Figure(go.Pie(labels=["신건", "파생"], values=[new_sum, cur_sum-new_sum],
+                fig2 = go.Figure(go.Pie(labels=["신건", "파생"], values=[new_sum, deriv_sum],
                     hole=0.62, marker=dict(colors=[GOLD, GRAY]), textinfo="label+percent"))
                 st.plotly_chart(fig_theme(fig2, 230), use_container_width=True, config={"displayModeBar": False})
             # 계약유형별 (전체기간)
@@ -977,13 +1091,20 @@ def main():
         except Exception as e:
             st.warning(f"데이터 로딩 중: {e}")
 
-    # ────────── 네이버 / 구글 탭 (실데이터!!!) ──────────
+    # ────────── 문의 탭 ──────────
     with tabs[3]:
-        render_ad_tab("네이버", full=True)
+        try:
+            render_inquiries()
+        except Exception as e:
+            st.warning(f"문의 데이터 로딩 중: {e}")
+
+    # ────────── 네이버 / 구글 탭 (실데이터!!!) ──────────
     with tabs[4]:
+        render_ad_tab("네이버", full=True)
+    with tabs[5]:
         render_ad_tab("구글", full=False)
     # ────────── 기타 탭 (카카오/모비온) ──────────
-    with tabs[5]:
+    with tabs[6]:
         try:
             render_etc()
         except Exception as e:
