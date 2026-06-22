@@ -128,7 +128,7 @@ def bq(sql):
     return get_bq().query(sql).to_dataframe()
 
 @st.cache_data(ttl=1800)
-def ai_insight(summary):
+def ai_insight(summary, focus=""):
     """대시보드 데이터를 Claude에게 보내 진짜 인사이트 한 줄을 받음. 실패하면 None."""
     if not HAS_ANTHROPIC:
         return None
@@ -145,6 +145,7 @@ def ai_insight(summary):
                 "너는 법무법인 광고·매출 대시보드를 보는 데이터 분석가다. 아래 숫자를 근거로 "
                 "대표에게 보고할 핵심 인사이트를 한국어 1~2문장으로 작성하라. "
                 "광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라. "
+                + (focus + " " if focus else "") +
                 "반드시 구체적 숫자를 인용하고, '무엇을 해야 하는지' 실행 제안을 한 가지 포함하라. "
                 "'효율 점검 필요', '양호' 같은 뻔하고 모호한 표현은 금지. 날카롭고 간결하게.\n\n"
                 + summary}],
@@ -225,15 +226,28 @@ def load_inq_for_date(day):
 def load_contracts():
     ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
     df = pd.DataFrame(ws.get_all_records())
-    # 컬럼 정규화
     df.columns = [str(c).strip() for c in df.columns]
-    amt_col = next((c for c in df.columns if "보수" in c or "금액" in c), "기본보수액")
-    typ_col = next((c for c in df.columns if "유형" in c), "계약유형")
-    inflow_col = next((c for c in df.columns if "세부분류" in c or "온라인" in c), "온라인 세부분류")
-    date_col = next((c for c in df.columns if "계약일" in c or c == "날짜"), "계약일")
-    df["_amt"] = pd.to_numeric(
-        df[amt_col].astype(str).str.replace(",", "").str.replace("원", "").str.strip(),
-        errors="coerce").fillna(0)
+    def find(*keys, default=None):
+        for c in df.columns:
+            if any(k in c for k in keys):
+                return c
+        return default
+    amt_col = find("기본보수", "보수액", "보수", default="기본보수액")
+    paid_col = find("입금")
+    unpaid_col = find("미수")
+    typ_col = find("계약유형", "유형", default="계약유형")
+    inflow_col = find("세부분류", "온라인", default="온라인 세부분류")
+    date_col = find("계약일", default="계약일")
+    name_col = find("위임", "의뢰인", "이름")
+
+    def num(col):
+        return pd.to_numeric(
+            df[col].astype(str).str.replace(",", "").str.replace("원", "").str.strip(),
+            errors="coerce").fillna(0)
+
+    df["_amt"] = num(amt_col)
+    df["_paid"] = num(paid_col) if paid_col else 0.0
+    df["_unpaid"] = num(unpaid_col) if unpaid_col else (df["_amt"] - df["_paid"])
     df["_date"] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.dropna(subset=["_date"])
     df["_y"] = df["_date"].dt.year
@@ -242,6 +256,7 @@ def load_contracts():
     df["_type"] = df[typ_col]
     df["_inflow"] = df[inflow_col].astype(str)
     df["_is_new"] = df["_inflow"].str.contains("신건")
+    df["_name"] = df[name_col].astype(str).str.strip() if name_col else ""
     return df
 
 def fig_theme(fig, h=240):
@@ -300,10 +315,12 @@ def preset_range(name, dmin, dmax):
     return max(s, dmin), min(e, dmax)
 
 def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
-    chg_html = f'<div class="chg {chg_dir}">{chg}</div>' if chg else ""
+    chg_html = (f'<div class="chg {chg_dir}">{chg}</div>' if chg
+                else '<div class="chg" style="visibility:hidden">-</div>')
+    desc_html = f'<div class="d">{desc}</div>' if desc else '<div class="d" style="visibility:hidden">-</div>'
     col.markdown(f"""<div class="kpi"><i class="kpi-ic fa-solid {icon}"></i>
       <div class="l">{label}</div><div class="v">{value}<small>{unit}</small></div>
-      {chg_html}<div class="d">{desc}</div></div>""", unsafe_allow_html=True)
+      {chg_html}{desc_html}</div>""", unsafe_allow_html=True)
 
 def render_summary():
     con = load_contracts()
@@ -311,18 +328,54 @@ def render_summary():
     period = st.radio("기간", ["🗓️ 일간", "📆 주간", "📅 월간", "📈 년간"],
                       index=2, horizontal=True, key="sum_period")
 
+    unit = period.split()[-1]
+    okey = f"sum_off_{unit}"
+    if okey not in st.session_state:
+        st.session_state[okey] = 0
+    def shift_off(n):
+        st.session_state[okey] = min(0, st.session_state[okey] + n)
+    off = st.session_state[okey]
+
     if "일간" in period:
-        start = end = today - timedelta(days=1)
-        ps = pe = start - timedelta(days=1); cmp_label = "전일 대비"
+        base = today - timedelta(days=1) + timedelta(days=off)
+        start = end = base
+        ps = pe = base - timedelta(days=1); cmp_label = "전일 대비"
+        plabel = f"{base.year}. {base.month:02d}. {base.day:02d}"
     elif "주간" in period:
-        start = today - timedelta(days=today.weekday()); end = today
-        ps = start - timedelta(days=7); pe = start - timedelta(days=1); cmp_label = "전주 대비"
+        monday = today - timedelta(days=today.weekday()) + timedelta(weeks=off)
+        start = monday
+        end = (monday + timedelta(days=6)) if off < 0 else min(monday + timedelta(days=6), today)
+        ps = monday - timedelta(days=7); pe = monday - timedelta(days=1); cmp_label = "전주 대비"
+        plabel = f"{start.month}/{start.day} ~ {end.month}/{end.day}"
     elif "월간" in period:
-        start = today.replace(day=1); end = today
-        ps = (start - timedelta(days=1)).replace(day=1); pe = start - timedelta(days=1); cmp_label = "전월 대비"
+        yy, mm = today.year, today.month + off
+        while mm < 1: mm += 12; yy -= 1
+        while mm > 12: mm -= 12; yy += 1
+        start = date(yy, mm, 1)
+        if off == 0:
+            end = today
+        else:
+            nxt = date(yy + 1, 1, 1) if mm == 12 else date(yy, mm + 1, 1)
+            end = nxt - timedelta(days=1)
+        pm_y, pm_m = (yy, mm - 1) if mm > 1 else (yy - 1, 12)
+        ps = date(pm_y, pm_m, 1); pe = start - timedelta(days=1); cmp_label = "전월 대비"
+        plabel = f"{yy}년 {mm}월"
     else:
-        start = today.replace(month=1, day=1); end = today
-        ps = date(start.year-1, 1, 1); pe = date(today.year-1, today.month, today.day); cmp_label = "전년 대비"
+        yy = today.year + off
+        start = date(yy, 1, 1)
+        end = today if off == 0 else date(yy, 12, 31)
+        ps = date(yy - 1, 1, 1)
+        pe = date(yy - 1, today.month, today.day) if off == 0 else date(yy - 1, 12, 31)
+        cmp_label = "전년 대비"
+        plabel = f"{yy}년"
+
+    nav = st.columns([1, 2, 1])
+    nav[0].button("◀ 이전", on_click=shift_off, args=(-1,), key=f"sp_{unit}", use_container_width=True)
+    nav[2].button("다음 ▶", on_click=shift_off, args=(1,), key=f"sn_{unit}",
+                  use_container_width=True, disabled=(off >= 0))
+    nav[1].markdown(f"<div style='text-align:center;font-family:\"Noto Serif KR\",serif;"
+                    f"font-size:20px;font-weight:600;color:{GOLD_B};padding-top:3px;'>{plabel}</div>",
+                    unsafe_allow_html=True)
     st.caption(f"📅 {start} ~ {end}")
 
     # 전매체 광고비 (ad_keyword + ad_etc)
@@ -368,7 +421,13 @@ def render_summary():
                f"계약매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), "
                f"ROAS {roas:.0f}%, 계약 {n_con}건, "
                f"문의당비용(CPI) {money(cpi_v)}원, 사건분류 매출1위 {top_cat}.")
-    llm = ai_insight(summary)
+    focus_map = {
+        "일간": "이 리포트는 '어제 하루'다. 특정 매체 광고비 급변이나 전환 급감 같은 그날의 이상 신호를 우선 짚어라.",
+        "주간": "이 리포트는 '주간'이다. 요일별 흐름과 지난주 대비 변화에 집중하라.",
+        "월간": "이 리포트는 '월간'이다. 월 목표 2.5억 달성 페이스와 남은 기간 전망을 중심으로 보라.",
+        "년간": "이 리포트는 '연간'이다. 전년 대비 추세와 사건분류 의존도(다각화) 관점으로 크게 보라.",
+    }
+    llm = ai_insight(summary, focus_map.get(unit, ""))
     if llm:
         body, icol = llm, GOLD_B
     else:
@@ -469,6 +528,23 @@ def render_summary():
             f1 = go.Figure(go.Bar(x=[f"{int(y)}년" for y in yr.index], y=yr.values/1e8, marker=dict(color=GOLD), text=[f"{v/1e8:.1f}억" for v in yr.values], textposition="outside"))
             f1.update_yaxes(ticksuffix="억")
             st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
+        elif "주간" in period:
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-week"></i> 요일별 광고비 (이 주)</div>', unsafe_allow_html=True)
+            wlabels = ["월", "화", "수", "목", "금", "토", "일"]
+            try:
+                a1 = bq(f"SELECT date,SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY date")
+                a2 = bq(f"SELECT date,SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY date")
+                adall = pd.concat([a1, a2], ignore_index=True)
+                adall["date"] = pd.to_datetime(adall["date"])
+                adall["_wd"] = adall["date"].dt.weekday
+                bywd = adall.groupby("_wd")["c"].sum()
+                vals = [bywd.get(i, 0) / 1e4 for i in range(7)]
+            except Exception:
+                vals = [0] * 7
+            fwd = go.Figure(go.Bar(x=wlabels, y=vals, marker=dict(color=GOLD),
+                text=[f"{v:.0f}만" if v else "" for v in vals], textposition="outside"))
+            fwd.update_yaxes(ticksuffix="만")
+            st.plotly_chart(fig_theme(fwd, 250), use_container_width=True, config={"displayModeBar": False})
         else:
             st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
             yrs = sorted(con["_y"].unique())[-3:]
@@ -816,9 +892,34 @@ def main():
             kpi(c[5], "fa-calendar-check", "이번 달", won(month_sum),
                 chg=f"{month_sum/MONTHLY_GOAL*100:.0f}%", desc="목표 2.5억 대비")
 
+            # ── 입금 현황 + 미수금 (전체 기간) ──
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
+            t_amt, t_paid, t_unpaid = df["_amt"].sum(), df["_paid"].sum(), df["_unpaid"].sum()
+            rate = t_paid / t_amt * 100 if t_amt else 0
+            ci = st.columns(3)
+            kpi(ci[0], "fa-circle-check", "입금 완료", money(t_paid), "원", desc=f"수금률 {rate:.1f}%")
+            kpi(ci[1], "fa-circle-exclamation", "미수금", money(t_unpaid), "원",
+                chg=f"{t_unpaid/t_amt*100:.1f}%" if t_amt else None, chg_dir="down", desc="아직 못 받은 돈")
+            kpi(ci[2], "fa-percent", "수금률", f"{rate:.1f}", "%", desc="입금 ÷ 기본보수")
+
+            # 미수금 리스트 (클릭하면 펼침)
+            unpaid = df[df["_unpaid"] > 0].sort_values("_unpaid", ascending=False)
+            with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원  (클릭하여 펼치기)"):
+                if unpaid.empty:
+                    st.success("미수금이 없습니다! 전액 수금 완료!")
+                else:
+                    rows = "".join(
+                        f"<tr><td>{r._name}</td><td>{r._date.strftime('%Y-%m-%d')}</td>"
+                        f"<td class='num'>{money(r._amt)}</td><td class='num'>{money(r._paid)}</td>"
+                        f"<td class='num' style='color:{CORAL};font-weight:600;'>{money(r._unpaid)}</td></tr>"
+                        for r in unpaid.itertuples())
+                    st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th>'
+                        f'<th>기본보수</th><th>입금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>',
+                        unsafe_allow_html=True)
+
             st.write("")
             # 월별 추세 (YoY)
-            st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-chart-line"></i>월별 매출 추세 (전년 비교)</h3>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
             years = sorted(df["_y"].unique())
             colors = {years[-1]: GOLD}
             if len(years) >= 2: colors[years[-2]] = TEAL
@@ -835,28 +936,25 @@ def main():
                     connectgaps=False))
             fig.update_yaxes(ticksuffix="억")
             st.plotly_chart(fig_theme(fig), use_container_width=True, config={"displayModeBar": False})
-            st.markdown('</div>', unsafe_allow_html=True)
 
             cc = st.columns(2)
             # 신건/파생 도넛
             with cc[0]:
-                st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-chart-pie"></i>신건 vs 파생</h3>', unsafe_allow_html=True)
+                st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 신건 vs 파생</div>', unsafe_allow_html=True)
                 fig2 = go.Figure(go.Pie(labels=["신건", "파생"], values=[new_sum, cur_sum-new_sum],
                     hole=0.62, marker=dict(colors=[GOLD, GRAY]), textinfo="label+percent"))
                 st.plotly_chart(fig_theme(fig2, 230), use_container_width=True, config={"displayModeBar": False})
-                st.markdown('</div>', unsafe_allow_html=True)
             # 계약유형별 (전체기간)
             with cc[1]:
-                st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-scale-balanced"></i>계약유형별 매출 (전체기간)</h3>', unsafe_allow_html=True)
+                st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 매출 (전체기간)</div>', unsafe_allow_html=True)
                 tg = df.groupby("_type")["_amt"].sum().sort_values(ascending=True).tail(6)
                 fig3 = go.Figure(go.Bar(x=tg.values/1e8, y=tg.index, orientation="h",
                     marker=dict(color=GOLD)))
                 fig3.update_xaxes(ticksuffix="억")
                 st.plotly_chart(fig_theme(fig3, 230), use_container_width=True, config={"displayModeBar": False})
-                st.markdown('</div>', unsafe_allow_html=True)
 
             # 계약유형 × 연도 표
-            st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-table-list"></i>계약유형별 매출 (연도별)</h3>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 계약유형별 매출 (연도별)</div>', unsafe_allow_html=True)
             pv = df.pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
             pv["합계"] = pv.sum(axis=1)
             pv = pv.sort_values("합계", ascending=False)
@@ -868,7 +966,6 @@ def main():
             head = "".join(f"<th>{y}</th>" for y in ys)
             st.markdown(f"""<table class="kb-tbl"><thead><tr><th>계약유형</th>{head}<th>합계</th></tr></thead>
               <tbody>{rows}</tbody></table>""", unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
 
     # ────────── SUMMARY 탭 (일간/주간/월간/년간 토글) ──────────
     with tabs[0]:
