@@ -4,7 +4,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
 import base64, urllib.request
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖️", layout="wide")
 
@@ -12,6 +12,7 @@ st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖�
 # 상수
 # ══════════════════════════════════════════════
 CONTRACT_SHEET_ID = "1TpgTCEeFkFYBGhzqhA70xtMh6wd18laL0tTLYuc9M6Y"
+AD_SHEET_ID = "1GTrBYugFEUgx4guZNhtIDApR_-GZLhu_TmRldeLT0pY"  # 연간요약(문의)
 MONTHLY_GOAL = 250_000_000  # 월 목표 2.5억
 BQ_PROJECT, BQ_DATASET = "kb-dashboard-499704", "kb_ads"
 
@@ -50,7 +51,7 @@ html, body, [class*="css"] {{ font-family:'Noto Sans KR',sans-serif; color:{TXT}
 .eyebrow::after {{ content:""; flex:1; height:1px; background:{LINE}; }}
 /* KPI */
 .kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:12px; padding:20px 18px;
-  position:relative; height:100%; }}
+  position:relative; min-height:128px; }}
 .kpi .l {{ font-size:12px; color:{MUTED}; margin-bottom:12px; }}
 .kpi .v {{ font-size:26px; font-weight:600; color:{GOLD_B}; line-height:1; font-family:'Noto Serif KR',serif; }}
 .kpi .v small {{ font-size:13px; color:{MUTED}; font-weight:400; margin-left:2px; }}
@@ -128,6 +129,33 @@ def get_logo():
     except:
         return None
 
+def clean_num(s):
+    try: return float(str(s).replace(",", "").replace("원", "").replace("%", "").strip() or 0)
+    except: return 0.0
+
+@st.cache_data(ttl=300)
+def load_annual():
+    try:
+        ws = get_gc().open_by_key(AD_SHEET_ID).worksheet("연간요약")
+        data = ws.get_all_values()
+        cols = ["연도","월","네이버","구글","카카오모먼트","카카오키워드","모비온","총광고비","문의","문의당비용","상담","수임","계약서금액","보드"]
+        rows, cy = [], None
+        for row in data:
+            if len(row) > 1 and str(row[1]).strip() in ["2024","2025","2026"]:
+                cy = str(row[1]).strip(); continue
+            if cy and len(row) > 2:
+                mv = str(row[2]).strip()
+                if "월" in mv and "▲" not in mv and "▼" not in mv and "%" not in mv:
+                    vals = row[3:15] if len(row) >= 15 else row[3:] + ["0"]*(12-len(row[3:]))
+                    rows.append([cy, mv] + vals)
+        if not rows: return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=cols[:len(rows[0])])
+        for c in cols[2:]:
+            if c in df.columns: df[c] = df[c].apply(clean_num)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
 @st.cache_data(ttl=300)
 def load_contracts():
     ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
@@ -171,6 +199,31 @@ def money(v):  # 적응형: 억/만/원
     if abs(v) >= 1e4: return f"{v/1e4:,.0f}만"
     return f"{v:,.0f}"
 
+def klabel(dt):  # 6월 9일
+    dt = pd.Timestamp(dt)
+    return f"{dt.month}월 {dt.day}일"
+
+def preset_range(name, dmin, dmax):
+    today = dmax  # 데이터 최신일을 기준일로
+    y = today - timedelta(days=1)
+    if name == "어제":              s, e = y, y
+    elif name == "최근7일(오늘제외)": s, e = today - timedelta(days=7), y
+    elif name == "이번주":           s, e = today - timedelta(days=today.weekday()), today
+    elif name == "지난주":
+        ws = today - timedelta(days=today.weekday() + 7); s, e = ws, ws + timedelta(days=6)
+    elif name == "이번달":           s, e = today.replace(day=1), today
+    elif name == "이번분기":
+        q = (today.month - 1) // 3; s, e = date(today.year, q*3+1, 1), today
+    elif name == "지난분기":
+        q = (today.month - 1) // 3
+        if q == 0: s, e = date(today.year-1, 10, 1), date(today.year-1, 12, 31)
+        else:      s, e = date(today.year, (q-1)*3+1, 1), date(today.year, q*3, 1) - timedelta(days=1)
+    elif name == "최근30일":         s, e = today - timedelta(days=29), today
+    elif name == "최근90일":         s, e = today - timedelta(days=89), today
+    elif name == "최근365일":        s, e = today - timedelta(days=364), today
+    else:                            s, e = dmin, dmax
+    return max(s, dmin), min(e, dmax)
+
 def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
     chg_html = f'<div class="chg {chg_dir}">{chg}</div>' if chg else ""
     col.markdown(f"""<div class="kpi"><i class="kpi-ic fa-solid {icon}"></i>
@@ -189,10 +242,17 @@ def render_ad_tab(media, full):
     raw["date"] = pd.to_datetime(raw["date"])
     dmin, dmax = raw["date"].min().date(), raw["date"].max().date()
 
-    # ── 일자별 기간 선택 ──
-    c1, c2 = st.columns(2)
-    start = c1.date_input("시작일", dmin, min_value=dmin, max_value=dmax, key=f"{media}_s")
-    end   = c2.date_input("종료일", dmax, min_value=dmin, max_value=dmax, key=f"{media}_e")
+    # ── 기간 프리셋 탭 ──
+    presets = ["어제", "최근7일(오늘제외)", "이번주", "지난주", "이번달",
+               "이번분기", "지난분기", "최근30일", "최근90일", "최근365일", "직접선택"]
+    sel = st.radio("기간", presets, index=4, horizontal=True, key=f"{media}_preset")
+    if sel == "직접선택":
+        c1, c2 = st.columns(2)
+        start = c1.date_input("시작일", dmin, min_value=dmin, max_value=dmax, key=f"{media}_s")
+        end   = c2.date_input("종료일", dmax, min_value=dmin, max_value=dmax, key=f"{media}_e")
+    else:
+        start, end = preset_range(sel, dmin, dmax)
+        st.caption(f"📅 {start} ~ {end}")
     d = raw[(raw["date"].dt.date >= start) & (raw["date"].dt.date <= end)]
     sd, ed = str(start), str(end)
 
@@ -209,13 +269,16 @@ def render_ad_tab(media, full):
 
     # ── 일별 광고비 + 전환 추세 ──
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비 · 전환 추세</div>', unsafe_allow_html=True)
+    d2 = d.copy()
+    d2["lbl"] = d2.date.apply(klabel)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=d.date, y=d.cost, name="광고비", mode="lines+markers",
+    fig.add_trace(go.Scatter(x=d2.lbl, y=d2.cost/1e4, name="광고비", mode="lines+markers",
         line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(210,170,80,0.1)"))
-    fig.add_trace(go.Scatter(x=d.date, y=d.conv, name="전환", mode="lines+markers",
+    fig.add_trace(go.Scatter(x=d2.lbl, y=d2.conv, name="전환", mode="lines+markers",
         line=dict(color=TEAL, width=2), yaxis="y2"))
-    fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False,
-        title="전환", color="#5BB4C4"), legend=dict(orientation="h", y=1.12))
+    fig.update_layout(yaxis=dict(ticksuffix="만원"),
+        yaxis2=dict(overlaying="y", side="right", showgrid=False, title="전환(건)", color="#5BB4C4"),
+        legend=dict(orientation="h", y=1.12))
     st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
 
     # ── 일자별 상세 표 (전환 포함!!!) ──
@@ -262,20 +325,22 @@ def render_ad_tab(media, full):
             marker=dict(colors=[TEAL, CORAL, GRAY])))
         st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
 
-    # ── 디바이스 / 노출매체 (전환 포함!!!) ──
+    # ── 디바이스 / 노출매체 (전환 + 전환당비용!!!) ──
     cc2 = st.columns(2)
     with cc2[0]:
         dev = bq(f"SELECT device,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
                  f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY device ORDER BY cost DESC")
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스별 (광고비·전환)</div>', unsafe_allow_html=True)
-        rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in dev.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스별 (광고비·전환·CPA)</div>', unsafe_allow_html=True)
+        rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td><td>{r.conv:.0f}</td>"
+            f"<td class='num'>{(r.cost/r.conv if r.conv else 0):,.0f}원</td></tr>" for _, r in dev.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th><th>전환</th><th>전환당비용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
     with cc2[1]:
         pl = bq(f"SELECT placement,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY placement ORDER BY cost DESC LIMIT 8")
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-tower-broadcast"></i> 노출매체별 (광고비·전환)</div>', unsafe_allow_html=True)
-        rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in pl.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-tower-broadcast"></i> 노출매체별 (광고비·전환·CPA)</div>', unsafe_allow_html=True)
+        rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td><td>{r.conv:.0f}</td>"
+            f"<td class='num'>{(r.cost/r.conv if r.conv else 0):,.0f}원</td></tr>" for _, r in pl.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th><th>전환</th><th>전환당비용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════
@@ -402,7 +467,34 @@ def main():
               </div><div class="goalbar"><div style="width:{pct}%;"></div></div>
               <p style="font-size:11px;color:{MUTED};margin-top:10px;">※ 계약서 시트 실시간 연동</p></div>""",
               unsafe_allow_html=True)
-            st.info("📊 SUMMARY 전체 지표(광고비·문의·ROAS)는 광고 데이터 연동 후 채워집니다. 계약 매출은 위에 실시간 반영 중입니다!")
+
+            # ── 광고비 + ROAS (BigQuery + 계약) ──
+            this_y = datetime.now().year
+            try:
+                ad = bq(f"SELECT media,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` GROUP BY media")
+                total_ad = ad.cost.sum()
+            except Exception:
+                total_ad = 0
+            new_sum = df[(df["_y"] == this_y) & (df["_is_new"])]["_amt"].sum()
+            roas = new_sum / total_ad * 100 if total_ad else 0
+
+            # ── 문의 요약 (연간요약 시트) ──
+            ann = load_annual()
+            st.markdown('<div class="eyebrow">광고 · 문의 요약</div>', unsafe_allow_html=True)
+            if not ann.empty:
+                cur = ann[ann["연도"] == str(this_y)]
+                t_inq, t_cons, t_cont = cur["문의"].sum(), cur["상담"].sum(), cur["수임"].sum()
+                cpi = total_ad / t_inq if t_inq else 0
+                conv_rate = t_cont / t_inq * 100 if t_inq else 0
+                c = st.columns(6)
+                kpi(c[0], "fa-won-sign", "총 광고비", money(total_ad), "원", desc=f"{this_y} (BigQuery)")
+                kpi(c[1], "fa-phone", "총 문의", f"{t_inq:.0f}", "건")
+                kpi(c[2], "fa-coins", "문의당 비용", money(cpi), "원", desc="광고비÷문의")
+                kpi(c[3], "fa-comments", "상담", f"{t_cons:.0f}", "건")
+                kpi(c[4], "fa-handshake", "수임", f"{t_cont:.0f}", "건", desc=f"전환율 {conv_rate:.1f}%")
+                kpi(c[5], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", desc="신건매출÷광고비")
+            else:
+                st.info("연간요약(문의) 시트를 읽지 못했습니다. 시트 공유·탭 이름(연간요약)을 확인해주세요.")
         except Exception as e:
             st.warning(f"데이터 로딩 중: {e}")
 
