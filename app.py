@@ -72,6 +72,8 @@ html, body, [class*="css"] {{ font-family:'Noto Sans KR',sans-serif; color:{TXT}
 .kb-tbl td {{ font-size:14px; padding:11px 10px; border-bottom:1px solid {LINE}; }}
 .kb-tbl td.num {{ color:{GOLD_B}; font-weight:500; }}
 .placeholder {{ text-align:center; padding:70px 20px; color:{MUTED}; }}
+.sec-title {{ font-size:15px; font-weight:600; margin:22px 0 12px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
+.sec-title i {{ color:{GOLD}; font-size:14px; }}
 .placeholder i {{ font-size:40px; color:{GOLD_D}; margin-bottom:16px; }}
 /* 탭 */
 .stTabs [data-baseweb="tab-list"] {{ gap:4px; border-bottom:1px solid {LINE}; }}
@@ -163,6 +165,12 @@ def fig_theme(fig, h=240):
 def won(v):  # 억 단위
     return f"{v/1e8:.2f}억"
 
+def money(v):  # 적응형: 억/만/원
+    v = float(v)
+    if abs(v) >= 1e8: return f"{v/1e8:.2f}억"
+    if abs(v) >= 1e4: return f"{v/1e4:,.0f}만"
+    return f"{v:,.0f}"
+
 def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
     chg_html = f'<div class="chg {chg_dir}">{chg}</div>' if chg else ""
     col.markdown(f"""<div class="kpi"><i class="kpi-ic fa-solid {icon}"></i>
@@ -172,66 +180,103 @@ def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
 def render_ad_tab(media, full):
     st.markdown(f'<div class="eyebrow">{media} 광고 분석</div>', unsafe_allow_html=True)
     try:
-        d = bq(f"SELECT date,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv "
-               f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' GROUP BY date ORDER BY date")
+        raw = bq(f"SELECT date,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv "
+                 f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' GROUP BY date ORDER BY date")
     except Exception as e:
         st.error(f"BigQuery 읽기 실패: {e}"); return
-    if d.empty:
+    if raw.empty:
         st.info(f"{media} 데이터가 없습니다."); return
-    tc, ti, tk = d.cost.sum(), d.imp.sum(), d.clk.sum()
-    ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0
-    c = st.columns(5)
-    kpi(c[0], "fa-won-sign", "광고비", won(tc), desc=f"{d.date.min()}~{d.date.max()}")
-    kpi(c[1], "fa-eye", "노출수", f"{ti/1e4:.0f}", "만")
+    raw["date"] = pd.to_datetime(raw["date"])
+    dmin, dmax = raw["date"].min().date(), raw["date"].max().date()
+
+    # ── 일자별 기간 선택 ──
+    c1, c2 = st.columns(2)
+    start = c1.date_input("시작일", dmin, min_value=dmin, max_value=dmax, key=f"{media}_s")
+    end   = c2.date_input("종료일", dmax, min_value=dmin, max_value=dmax, key=f"{media}_e")
+    d = raw[(raw["date"].dt.date >= start) & (raw["date"].dt.date <= end)]
+    sd, ed = str(start), str(end)
+
+    # ── KPI 6개 (전환 포함!!!) ──
+    tc, ti, tk, tv = d.cost.sum(), d.imp.sum(), d.clk.sum(), d.conv.sum()
+    ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0; cpa = tc/tv if tv else 0
+    c = st.columns(6)
+    kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", desc=f"{start}~{end}")
+    kpi(c[1], "fa-eye", "노출수", money(ti), "")
     kpi(c[2], "fa-hand-pointer", "클릭수", f"{int(tk):,}", "")
     kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%")
     kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원")
-    st.write("")
-    # 일별 광고비
-    st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-chart-line"></i>일별 광고비</h3>', unsafe_allow_html=True)
-    fig = go.Figure(go.Scatter(x=d.date, y=d.cost, mode="lines+markers",
+    kpi(c[5], "fa-bullseye", "전환수", f"{tv:.0f}", "건", desc=f"CPA {cpa:,.0f}원")
+
+    # ── 일별 광고비 + 전환 추세 ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비 · 전환 추세</div>', unsafe_allow_html=True)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=d.date, y=d.cost, name="광고비", mode="lines+markers",
         line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(210,170,80,0.1)"))
-    st.plotly_chart(fig_theme(fig, 240), use_container_width=True, config={"displayModeBar": False})
-    st.markdown('</div>', unsafe_allow_html=True)
-    # 키워드 TOP
-    kw = bq(f"SELECT keyword,SUM(cost) cost,SUM(clicks) clk,SUM(impressions) imp "
+    fig.add_trace(go.Scatter(x=d.date, y=d.conv, name="전환", mode="lines+markers",
+        line=dict(color=TEAL, width=2), yaxis="y2"))
+    fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False,
+        title="전환", color="#5BB4C4"), legend=dict(orientation="h", y=1.12))
+    st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
+
+    # ── 일자별 상세 표 (전환 포함!!!) ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세</div>', unsafe_allow_html=True)
+    dd = d.copy()
+    dd["CTR"] = (dd.clk/dd.imp*100).fillna(0).round(2)
+    dd["CPC"] = (dd.cost/dd.clk).replace([float("inf")], 0).fillna(0).round(0)
+    rows = "".join(
+        f"<tr><td>{r.date.strftime('%m/%d (%a)')}</td><td class='num'>{r.cost:,.0f}</td>"
+        f"<td>{int(r.imp):,}</td><td>{int(r.clk):,}</td><td>{r.CTR}%</td>"
+        f"<td>{int(r.CPC):,}</td><td class='num'>{r.conv:.0f}</td></tr>"
+        for _, r in dd.sort_values("date", ascending=False).iterrows())
+    st.markdown(f'<table class="kb-tbl"><thead><tr><th>날짜</th><th>광고비</th><th>노출</th>'
+        f'<th>클릭</th><th>CTR</th><th>CPC</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>',
+        unsafe_allow_html=True)
+
+    # ── 키워드 TOP 10 (전환 포함!!!) ──
+    kw = bq(f"SELECT keyword,SUM(cost) cost,SUM(clicks) clk,SUM(impressions) imp,SUM(conversions) conv "
             f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' AND keyword NOT IN ('-','') "
-            f"GROUP BY keyword ORDER BY cost DESC LIMIT 10")
-    st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-magnifying-glass"></i>키워드 TOP 10 (광고비순)</h3>', unsafe_allow_html=True)
-    rows = "".join(f"<tr><td>{r.keyword}</td><td class='num'>{r.cost:,.0f}원</td><td>{int(r.clk):,}</td><td>{int(r.imp):,}</td></tr>" for _, r in kw.iterrows())
-    st.markdown(f'<table class="kb-tbl"><thead><tr><th>키워드</th><th>광고비</th><th>클릭</th><th>노출</th></tr></thead><tbody>{rows}</tbody></table></div>', unsafe_allow_html=True)
+            f"AND date BETWEEN '{sd}' AND '{ed}' GROUP BY keyword ORDER BY cost DESC LIMIT 10")
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-magnifying-glass"></i> 키워드 TOP 10 (광고비순)</div>', unsafe_allow_html=True)
+    rows = "".join(f"<tr><td>{r.keyword}</td><td class='num'>{r.cost:,.0f}원</td><td>{int(r.clk):,}</td>"
+        f"<td>{int(r.imp):,}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in kw.iterrows())
+    st.markdown(f'<table class="kb-tbl"><thead><tr><th>키워드</th><th>광고비</th><th>클릭</th>'
+        f'<th>노출</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+
     if not full:
         return
-    # 연령 / 성별
+    # ── 연령 / 성별 (전환 포함) ──
     cc = st.columns(2)
     with cc[0]:
-        age = bq(f"SELECT age,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_age` WHERE media='{media}' GROUP BY age ORDER BY cost DESC")
-        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-users"></i>연령별 광고비</h3>', unsafe_allow_html=True)
-        f1 = go.Figure(go.Bar(x=age.cost/1e4, y=age.age, orientation="h", marker=dict(color=GOLD)))
+        age = bq(f"SELECT age,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_age` "
+                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY age ORDER BY cost DESC")
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-users"></i> 연령별 광고비</div>', unsafe_allow_html=True)
+        f1 = go.Figure(go.Bar(x=age.cost/1e4, y=age.age, orientation="h", marker=dict(color=GOLD),
+            text=[f"전환 {int(x)}" for x in age.conv], textposition="auto"))
         f1.update_xaxes(ticksuffix="만")
-        st.plotly_chart(fig_theme(f1, 240), use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
     with cc[1]:
-        gen = bq(f"SELECT gender,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_gender` WHERE media='{media}' GROUP BY gender")
-        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-venus-mars"></i>성별 광고비</h3>', unsafe_allow_html=True)
-        f2 = go.Figure(go.Pie(labels=gen.gender, values=gen.cost, hole=0.6, marker=dict(colors=[TEAL, CORAL, GRAY])))
-        st.plotly_chart(fig_theme(f2, 240), use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
-    # 디바이스 / 노출매체
+        gen = bq(f"SELECT gender,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_gender` "
+                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY gender")
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-venus-mars"></i> 성별 광고비</div>', unsafe_allow_html=True)
+        f2 = go.Figure(go.Pie(labels=gen.gender, values=gen.cost, hole=0.6,
+            marker=dict(colors=[TEAL, CORAL, GRAY])))
+        st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
+
+    # ── 디바이스 / 노출매체 (전환 포함!!!) ──
     cc2 = st.columns(2)
     with cc2[0]:
-        dev = bq(f"SELECT device,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` WHERE media='{media}' GROUP BY device ORDER BY cost DESC")
-        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-mobile-screen"></i>디바이스별</h3>', unsafe_allow_html=True)
-        f3 = go.Figure(go.Pie(labels=dev.device, values=dev.cost, hole=0.6, marker=dict(colors=[GOLD, GOLD_D])))
-        st.plotly_chart(fig_theme(f3, 240), use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
+        dev = bq(f"SELECT device,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
+                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY device ORDER BY cost DESC")
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스별 (광고비·전환)</div>', unsafe_allow_html=True)
+        rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in dev.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
     with cc2[1]:
-        pl = bq(f"SELECT placement,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` WHERE media='{media}' GROUP BY placement ORDER BY cost DESC LIMIT 8")
-        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-tower-broadcast"></i>노출매체별</h3>', unsafe_allow_html=True)
-        f4 = go.Figure(go.Bar(x=pl.cost/1e4, y=pl.placement, orientation="h", marker=dict(color=GOLD_D)))
-        f4.update_xaxes(ticksuffix="만")
-        st.plotly_chart(fig_theme(f4, 240), use_container_width=True, config={"displayModeBar": False})
-        st.markdown('</div>', unsafe_allow_html=True)
+        pl = bq(f"SELECT placement,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
+                f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY placement ORDER BY cost DESC LIMIT 8")
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-tower-broadcast"></i> 노출매체별 (광고비·전환)</div>', unsafe_allow_html=True)
+        rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in pl.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+
 
 # ══════════════════════════════════════════════
 # MAIN
