@@ -80,13 +80,24 @@ html, body, [class*="css"] {{ font-family:'Noto Sans KR',sans-serif; color:{TXT}
 .kb-tbl td {{ font-size:14px; padding:11px 10px; border-bottom:1px solid {LINE}; }}
 .kb-tbl td.num {{ color:{GOLD_B}; font-weight:500; }}
 .placeholder {{ text-align:center; padding:70px 20px; color:{MUTED}; }}
-.sec-title {{ font-size:15px; font-weight:600; margin:22px 0 12px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
+/* 대단락 */
+.big-section {{ font-family:'Noto Serif KR',serif; font-size:19px; font-weight:700; color:{GOLD};
+    margin:34px 0 6px; padding-bottom:10px; border-bottom:2px solid rgba(210,170,80,.28);
+    display:flex; align-items:center; gap:11px; }}
+.big-section i {{ color:{GOLD}; font-size:17px; }}
+/* 중단락 */
+.sec-title {{ font-size:15px; font-weight:600; margin:20px 0 11px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
 .sec-title i {{ color:{GOLD}; font-size:14px; }}
 .placeholder i {{ font-size:40px; color:{GOLD_D}; margin-bottom:16px; }}
-/* 탭 */
-.stTabs [data-baseweb="tab-list"] {{ gap:4px; border-bottom:1px solid {LINE}; }}
-.stTabs [data-baseweb="tab"] {{ color:{MUTED}; font-size:14px; padding:10px 20px; }}
-.stTabs [aria-selected="true"] {{ color:{GOLD}; border-bottom:2px solid {GOLD}; }}
+/* 탭 — 알약 스타일 */
+.stTabs [data-baseweb="tab-list"] {{ gap:8px; border-bottom:none; flex-wrap:wrap; padding:2px 0 6px; }}
+.stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}
+.stTabs [data-baseweb="tab"] {{ color:{MUTED}; font-size:14px; font-weight:600; padding:9px 20px;
+    background:rgba(255,255,255,.03); border:1px solid {LINE}; border-radius:11px; transition:all .2s; }}
+.stTabs [data-baseweb="tab"]:hover {{ background:rgba(210,170,80,.1); color:{GOLD_B}; border-color:{GOLD_D}; }}
+.stTabs [aria-selected="true"] {{ color:#1a1a17 !important;
+    background:linear-gradient(135deg,{GOLD},{GOLD_D}); border-color:{GOLD};
+    box-shadow:0 4px 14px rgba(210,170,80,.32); }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -650,10 +661,13 @@ def render_daily():
                 f'font-weight:600;color:{GOLD_B};margin:8px 0 18px;">{day.year}. {day.month:02d}. {day.day:02d} ({wd})</div>',
                 unsafe_allow_html=True)
 
-    # 광고 (그날, 매체별)
+    # 광고 (그날, 매체별) — ad_keyword(네이버/구글) + ad_etc(카카오/모비온) 통합!!!
     try:
-        ad = bq(f"SELECT media,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv "
-                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date='{day}' GROUP BY media")
+        ad = bq(f"""SELECT media,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv FROM (
+            SELECT media,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date='{day}'
+            UNION ALL
+            SELECT media,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date='{day}'
+        ) GROUP BY media ORDER BY cost DESC""")
     except Exception:
         ad = pd.DataFrame()
     total_ad = ad.cost.sum() if not ad.empty else 0
@@ -937,8 +951,10 @@ def render_inquiries():
     kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", desc="연간요약 기준")
     kpi(c[2], "fa-handshake", "수임", f"{suim:,}", "건", desc=f"문의→수임 {rate:.1f}%")
 
+    # ════ 대단락: 추이 분석 ════
+    st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 추이 분석</div>', unsafe_allow_html=True)
     # 월별 문의·상담·수임 추이 (x축 한글)
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 문의 · 상담 · 수임 추이</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar"></i> 월별 문의 · 상담 · 수임</div>', unsafe_allow_html=True)
     bym = inq.groupby("_ym").agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
     if not ann.empty and "상담" in ann.columns:
         a2 = ann.copy()
@@ -962,6 +978,22 @@ def render_inquiries():
     thin_xticks(fig, bym["_kor"])
     st.plotly_chart(fig_theme(fig, 300), use_container_width=True, config={"displayModeBar": False})
 
+    # 일자별 문의·수임 추이 (최근 60일)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 일자별 (최근 60일)</div>', unsafe_allow_html=True)
+    cutoff = inq["date"].max() - pd.Timedelta(days=60)
+    rec = inq[inq["date"] >= cutoff]
+    byd = rec.groupby(rec["date"].dt.date).agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
+    byd["_lbl"] = pd.to_datetime(byd["date"]).apply(lambda d: f"{d.month}/{d.day}")
+    fd = go.Figure()
+    fd.add_trace(go.Bar(x=byd["_lbl"], y=byd["문의"], name="문의", marker_color=GOLD))
+    fd.add_trace(go.Scatter(x=byd["_lbl"], y=byd["수임"], name="수임", mode="lines+markers", line=dict(color=TEAL, width=2), yaxis="y2"))
+    fd.update_layout(yaxis=dict(title="문의"), yaxis2=dict(overlaying="y", side="right", showgrid=False, title="수임", color=TEAL),
+                     legend=dict(orientation="h", y=1.14))
+    thin_xticks(fd, byd["_lbl"])
+    st.plotly_chart(fig_theme(fd, 280), use_container_width=True, config={"displayModeBar": False})
+
+    # ════ 대단락: 카테고리 분석 ════
+    st.markdown('<div class="big-section"><i class="fa-solid fa-tags"></i> 카테고리 분석</div>', unsafe_allow_html=True)
     # 광고 카테고리별 (월별 탭, 2025.09~)
     st.markdown('<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 (2025.09~)</div>', unsafe_allow_html=True)
     bad = ["(미분류)", "nan", "", "종결", "수임완료", "문자남김"]
@@ -973,8 +1005,10 @@ def render_inquiries():
     else:
         st.caption("카테고리 데이터가 없습니다.")
 
+    # ════ 대단락: 이름 대조 ════
+    st.markdown('<div class="big-section"><i class="fa-solid fa-magnifying-glass"></i> 이름 대조</div>', unsafe_allow_html=True)
     # 이름 대조 — 문의자 ↔ 계약/미수금
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-magnifying-glass"></i> 이름 대조 — 문의자 ↔ 계약 현황</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-user-check"></i> 문의자 ↔ 계약 현황</div>', unsafe_allow_html=True)
     q = st.text_input("이름 검색", key="inq_search", placeholder="이름을 입력하면 문의·계약·미수금을 한 번에 봅니다 (예: 홍길동)")
     if q:
         qi = inq[inq["name"].str.contains(q, na=False) & (inq["name"] != "")]
