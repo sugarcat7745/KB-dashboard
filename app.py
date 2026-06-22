@@ -439,10 +439,13 @@ def preset_range(name, dmin, dmax):
     else:                            s, e = dmin, dmax
     return max(s, dmin), min(e, dmax)
 
-def period_selector(key, dmin, dmax, default="이번달"):
-    """달력으로 직접 선택하는 기간 선택기 + 빠른 버튼. (start, end) 반환."""
+def period_selector(key, dmin, dmax, default="이번달", title="기간별 조회"):
+    """모든 탭 공통 기간 선택기. 헤더 + 빠른버튼7 + 달력 + 구분선. (start, end) 반환."""
     today = dmax
     def preset(name):
+        if name == "어제":
+            d = today - timedelta(days=1); return d, d
+        if name == "지난7일":   return today - timedelta(days=7), today - timedelta(days=1)
         if name == "이번달":   return today.replace(day=1), today
         if name == "지난달":
             e = today.replace(day=1) - timedelta(days=1); return e.replace(day=1), e
@@ -454,19 +457,23 @@ def period_selector(key, dmin, dmax, default="이번달"):
         ds, de = preset(default)
         st.session_state[skey] = max(ds, dmin)
         st.session_state[ekey] = min(de, dmax)
-    # 빠른 버튼
-    bcols = st.columns(5)
-    for i, name in enumerate(["이번달", "지난달", "최근30일", "올해", "전체"]):
+    if title:
+        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> {title}</div>',
+                    unsafe_allow_html=True)
+    names = ["어제", "지난7일", "이번달", "지난달", "최근30일", "올해", "전체"]
+    bcols = st.columns(len(names))
+    for i, name in enumerate(names):
         if bcols[i].button(name, key=f"{key}_qb{i}", use_container_width=True):
             ds, de = preset(name)
             st.session_state[skey] = max(ds, dmin)
             st.session_state[ekey] = min(de, dmax)
-    # 달력 (직접 선택)
     c1, c2 = st.columns(2)
     start = c1.date_input("시작일 (달력 클릭)", min_value=dmin, max_value=dmax, key=skey)
     end   = c2.date_input("종료일 (달력 클릭)", min_value=dmin, max_value=dmax, key=ekey)
     if start > end:
         start, end = end, start
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.25);margin:18px 0 22px;">',
+                unsafe_allow_html=True)
     return start, end
 
 def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
@@ -637,49 +644,64 @@ def render_summary():
     kpi(c[2], "fa-file-signature", "신건 계약", f"{n_con}", "건", *delta_str(n_con, n_con_p, "cnt"))
     kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", *delta_str(roas, roas_p, "pct"))
 
-    # ── 퍼널 (문의→상담→수임) + CPI/CPA ──
+    # ── 퍼널 (문의→상담→수임) + CPI/CPA · 전부 비교!!! ──
     ann = load_annual()
     if not ann.empty:
-        y = str(end.year)
-        sub = ann[ann["연도"] == y].copy()
+        flabel = "올해 누적" if "년간" in period else f"{end.month}월"
+        def ann_sum(yr, mn=None):
+            s = ann[ann["연도"] == str(yr)].copy()
+            if mn is not None:
+                s["_mn"] = s["월"].astype(str).str.replace("월", "").str.strip()
+                s = s[s["_mn"] == str(mn)]
+            return (s["문의"].sum(), s["상담"].sum(), s["수임"].sum(), s["총광고비"].sum())
         if "년간" in period:
-            flabel = "올해 누적"
+            inq, cons, cont, adc = ann_sum(end.year)
+            p_inq, p_cons, p_cont, p_adc = ann_sum(end.year - 1)
         else:
-            sub["_mn"] = sub["월"].astype(str).str.replace("월", "").str.strip()
-            sub = sub[sub["_mn"] == str(end.month)]
-            flabel = f"{end.month}월"
-        if not sub.empty and sub["문의"].sum() > 0:
-            inq, cons, cont = sub["문의"].sum(), sub["상담"].sum(), sub["수임"].sum()
-            adc = sub["총광고비"].sum()
+            inq, cons, cont, adc = ann_sum(end.year, end.month)
+            pm_y, pm_m = (end.year, end.month - 1) if end.month > 1 else (end.year - 1, 12)
+            p_inq, p_cons, p_cont, p_adc = ann_sum(pm_y, pm_m)
+        if inq > 0:
             cpi = adc / inq if inq else 0
             cpa = adc / cont if cont else 0
-            # ✨ 문의당 비용(CPI) 강조 배너 — 광고 효율의 핵심!!! ✨
+            p_cpi = p_adc / p_inq if p_inq else 0
+            p_cpa = p_adc / p_cont if p_cont else 0
+            cpi_c, _ = delta_str(cpi, p_cpi, "won")
+            # CPI는 낮을수록 좋음 → 내려가면 초록, 오르면 코랄
+            cpi_color = "#7FB87F" if (p_cpi and cpi <= p_cpi) else (CORAL if p_cpi else MUTED)
+            cpi_badge = (f'<span style="font-size:14px;margin-left:12px;color:{cpi_color};font-weight:600;">{cpi_c}</span>'
+                         if cpi_c else "")
+            # CPI 강조 배너 (글자 28px로 축소 + 전기간 비교 배지!!!)
             st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
-              display:flex;justify-content:space-between;align-items:center;padding:18px 24px;margin-top:24px;margin-bottom:14px;">
+              display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin-top:24px;margin-bottom:16px;">
               <div>
                 <div style="font-size:12px;color:{MUTED};letter-spacing:1px;">
                   <i class="fa-solid fa-coins" style="color:{GOLD};margin-right:7px;"></i>문의당 비용 (CPI) · {flabel}</div>
-                <div style="font-family:'Noto Serif KR',serif;font-size:40px;font-weight:600;color:{GOLD_B};margin-top:4px;line-height:1;">
-                  {money(cpi)}<span style="font-size:17px;color:{MUTED};margin-left:2px;">원</span></div>
-                <div style="font-size:11px;color:{MUTED};margin-top:6px;">광고비를 문의 1건당 비용으로 환산 · 낮을수록 효율적</div>
+                <div style="margin-top:5px;line-height:1;">
+                  <span style="font-family:'Noto Serif KR',serif;font-size:28px;font-weight:600;color:{GOLD_B};">{money(cpi)}<span style="font-size:14px;color:{MUTED};margin-left:1px;">원</span></span>{cpi_badge}</div>
+                <div style="font-size:11px;color:{MUTED};margin-top:6px;">광고비를 문의 1건당 비용으로 환산 · 낮을수록 효율적 · {cmp_label}</div>
               </div>
               <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
                 문의 <b style="color:#E8E6DE;">{inq:.0f}</b>건<br>
                 광고비 <b style="color:#E8E6DE;">{money(adc)}</b>원<br>
                 수임당(CPA) <b style="color:{CORAL};">{money(cpa)}</b>원</div>
             </div>""", unsafe_allow_html=True)
+            # 문의·상담·수임·CPI·CPA 전부 전기간 대비 비교!!! (핵심은 비교!!!)
+            cmp_caption(cmp_label)
+            kc = st.columns(5)
+            kpi(kc[0], "fa-phone", "문의", f"{inq:.0f}", "건", *delta_str(inq, p_inq, "cnt"))
+            kpi(kc[1], "fa-comments", "상담", f"{cons:.0f}", "건", *delta_str(cons, p_cons, "cnt"))
+            kpi(kc[2], "fa-handshake", "수임", f"{cont:.0f}", "건", *delta_str(cont, p_cont, "cnt"))
+            kpi(kc[3], "fa-coins", "CPI", money(cpi), "", *delta_str(cpi, p_cpi, "won"))
+            kpi(kc[4], "fa-sack-dollar", "CPA", money(cpa), "", *delta_str(cpa, p_cpa, "won"))
+            # 전환 퍼널
             st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {flabel} (문의 시트 기준)</div>', unsafe_allow_html=True)
-            fc = st.columns([3, 2])
-            with fc[0]:
-                ff = go.Figure(go.Funnel(y=["문의", "상담", "수임"], x=[inq, cons, cont],
-                    textinfo="value+percent initial", marker=dict(color=[TEAL, GOLD, CORAL])))
-                st.plotly_chart(fig_theme(ff, 220), use_container_width=True, config={"displayModeBar": False})
-            with fc[1]:
-                kk = st.columns(2)
-                kpi(kk[0], "fa-coins", "CPI", money(cpi), "원", desc="문의당 비용")
-                kpi(kk[1], "fa-handshake", "CPA", money(cpa), "원", desc="수임당 비용")
-                st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-top:8px;">문의→수임 전환율 '
-                            f'<b style="color:{GOLD_B};">{cont/inq*100:.1f}%</b></div>' if inq else "", unsafe_allow_html=True)
+            ff = go.Figure(go.Funnel(y=["문의", "상담", "수임"], x=[inq, cons, cont],
+                textinfo="value+percent initial", marker=dict(color=[TEAL, GOLD, CORAL])))
+            st.plotly_chart(fig_theme(ff, 240), use_container_width=True, config={"displayModeBar": False})
+            if inq:
+                st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-top:-6px;">문의→수임 전환율 '
+                            f'<b style="color:{GOLD_B};">{cont/inq*100:.1f}%</b></div>', unsafe_allow_html=True)
 
     # 매체별 광고비 비중
     try:
@@ -1228,8 +1250,6 @@ def main():
         if df is not None and len(df):
             tab_header("fa-file-contract", "계약 매출 분석", "신건 · 파생 · 입금 · 미수금")
 
-            # ════ 대단락: 기간별 조회 ════
-            st.markdown('<div class="big-section"><i class="fa-solid fa-calendar-day"></i> 기간별 조회</div>', unsafe_allow_html=True)
             cmin, cmax = df["_date"].min().date(), df["_date"].max().date()
             cs, ce = period_selector("con", cmin, cmax, default="이번달")
             cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
