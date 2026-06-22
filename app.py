@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -355,6 +356,21 @@ def money(v):  # 적응형: 억/만/원
     if abs(v) >= 1e4: return f"{v/1e4:,.0f}만"
     return f"{v:,.0f}"
 
+def delta_str(cur, prev, kind="num"):
+    """기간 대비 증감을 화살표+수치(퍼센트 아님)로. (chg_text, direction) 반환."""
+    diff = cur - prev
+    if abs(diff) < 1e-9:
+        return None, "up"
+    arrow = "▲" if diff > 0 else "▼"
+    direction = "up" if diff > 0 else "down"
+    a = abs(diff)
+    if kind == "money":  txt = money(a) + "원"
+    elif kind == "pct":  txt = f"{a:.2f}%p"
+    elif kind == "cnt":  txt = f"{a:,.0f}건"
+    elif kind == "won":  txt = f"{a:,.0f}원"
+    else:                txt = f"{a:,.0f}"
+    return f"{arrow} {txt}", direction
+
 def klabel(dt):  # 6월 9일
     dt = pd.Timestamp(dt)
     return f"{dt.month}월 {dt.day}일"
@@ -363,6 +379,46 @@ def kdate_wd(dt):  # 06/21 (일)
     dt = pd.Timestamp(dt)
     wd = ["월", "화", "수", "목", "금", "토", "일"][dt.weekday()]
     return f"{dt.month:02d}/{dt.day:02d} ({wd})"
+
+def sortable_table(columns, rows, height=420):
+    """헤더 클릭으로 오름/내림 정렬되는 골드 테마 표.
+    columns: [헤더...] / rows: [[(표시값, 정렬값)...]...]"""
+    th = "".join(f'<th onclick="srt({i})">{c}<span class="ar" id="ar{i}"></span></th>'
+                 for i, c in enumerate(columns))
+    trs = ""
+    for row in rows:
+        tds = "".join(f'<td data-s="{s}">{d}</td>' for d, s in row)
+        trs += f"<tr>{tds}</tr>"
+    html = f"""<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<style>
+  body{{margin:0;font-family:'Noto Sans KR',-apple-system,sans-serif;background:transparent;}}
+  table{{width:100%;border-collapse:collapse;font-size:13px;color:#E8E4DA;}}
+  th,td{{padding:9px 12px;border-bottom:1px solid #2A2A26;text-align:right;white-space:nowrap;}}
+  th:first-child,td:first-child{{text-align:left;}}
+  th{{color:#D2AA50;cursor:pointer;user-select:none;background:#1a1a17;position:sticky;top:0;font-weight:600;}}
+  th:hover{{background:#262621;}}
+  tr:hover td{{background:rgba(210,170,80,.06);}}
+  .ar{{font-size:9px;margin-left:5px;color:#9a9a90;}}
+</style>
+<table id="kt"><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>
+<script>
+let dir={{}};
+function srt(c){{
+  const tb=document.querySelector('#kt tbody');
+  const rows=[...tb.rows];
+  dir[c]=!dir[c];
+  rows.sort((a,b)=>{{
+    let x=a.cells[c].dataset.s,y=b.cells[c].dataset.s;
+    let nx=parseFloat(x),ny=parseFloat(y);
+    if(!isNaN(nx)&&!isNaN(ny)){{x=nx;y=ny;}}
+    return x<y?(dir[c]?-1:1):x>y?(dir[c]?1:-1):0;
+  }});
+  rows.forEach(r=>tb.appendChild(r));
+  document.querySelectorAll('.ar').forEach(a=>a.textContent='');
+  document.getElementById('ar'+c).textContent=dir[c]?'▲':'▼';
+}}
+</script>"""
+    components.html(html, height=height, scrolling=True)
 
 def preset_range(name, dmin, dmax):
     today = dmax  # 데이터 최신일을 기준일로
@@ -491,9 +547,11 @@ def render_summary():
     revenue, rev_p = rev(start, end, True), rev(ps, pe, True)   # 신건만!!! (목표·비교 기준)
     deriv = rev(start, end, False) - revenue                    # 파생(참고용)
     roas = revenue / ad * 100 if ad else 0
+    roas_p = rev_p / ad_p * 100 if ad_p else 0
     n_con = int(((con["_date"].dt.date >= start) & (con["_date"].dt.date <= end) & con["_is_new"]).sum())
-    ad_c, ad_d = chg(ad, ad_p)
-    rev_c, rev_d = chg(revenue, rev_p)
+    n_con_p = int(((con["_date"].dt.date >= ps) & (con["_date"].dt.date <= pe) & con["_is_new"]).sum())
+    ad_c, ad_d = delta_str(ad, ad_p, "money")
+    rev_c, rev_d = delta_str(revenue, rev_p, "money")
 
     # ── AI 인사이트 한 줄 (Claude API, 실패 시 규칙기반 폴백) ──
     cmask0 = (con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)
@@ -542,10 +600,10 @@ def render_summary():
       unsafe_allow_html=True)
 
     c = st.columns(4)
-    kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d, desc=cmp_label)
-    kpi(c[1], "fa-sack-dollar", "신건 매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d, desc=f"{cmp_label} · 파생 {money(deriv)}")
-    kpi(c[2], "fa-file-signature", "신건 계약", f"{n_con}", "건")
-    kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", desc="신건매출÷광고비")
+    kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d)
+    kpi(c[1], "fa-sack-dollar", "신건 매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d)
+    kpi(c[2], "fa-file-signature", "신건 계약", f"{n_con}", "건", *delta_str(n_con, n_con_p, "cnt"))
+    kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", *delta_str(roas, roas_p, "pct"))
 
     # ── 퍼널 (문의→상담→수임) + CPI/CPA ──
     ann = load_annual()
@@ -725,14 +783,27 @@ def render_daily():
     n_con, con_amt = len(cday), cday["_amt"].sum()
     cpi = total_ad / n_inq if n_inq else 0
 
-    # KPI
+    # 전일 비교
+    pday = day - timedelta(days=1)
+    try:
+        pad = bq(f"""SELECT SUM(cost) cost,SUM(conversions) conv FROM (
+            SELECT cost,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date='{pday}'
+            UNION ALL SELECT cost,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date='{pday}')""")
+        p_ad = float(pad["cost"].iloc[0] or 0); p_conv = float(pad["conv"].iloc[0] or 0)
+    except Exception:
+        p_ad = p_conv = 0
+    pinq = load_inq_for_date(pday); p_inq = len(pinq)
+    pcday = con[con["_date"].dt.date == pday]; p_con = len(pcday); p_camt = pcday["_amt"].sum()
+    p_cpi = p_ad / p_inq if p_inq else 0
+
+    # KPI (전일 대비 증감 · 수치)
     c = st.columns(6)
-    kpi(c[0], "fa-won-sign", "광고비", money(total_ad), "원")
-    kpi(c[1], "fa-bullseye", "광고 전환", f"{total_conv:.0f}", "건")
-    kpi(c[2], "fa-phone", "문의", f"{n_inq}", "건")
-    kpi(c[3], "fa-coins", "문의당 비용", money(cpi), "원", desc="CPI · 핵심지표")
-    kpi(c[4], "fa-file-signature", "계약", f"{n_con}", "건")
-    kpi(c[5], "fa-sack-dollar", "계약금액", money(con_amt), "원")
+    kpi(c[0], "fa-won-sign", "광고비", money(total_ad), "원", *delta_str(total_ad, p_ad, "money"))
+    kpi(c[1], "fa-bullseye", "광고 전환", f"{total_conv:.0f}", "건", *delta_str(total_conv, p_conv, "cnt"))
+    kpi(c[2], "fa-phone", "문의", f"{n_inq}", "건", *delta_str(n_inq, p_inq, "cnt"))
+    kpi(c[3], "fa-coins", "문의당 비용", money(cpi), "원", *delta_str(cpi, p_cpi, "money"))
+    kpi(c[4], "fa-file-signature", "계약", f"{n_con}", "건", *delta_str(n_con, p_con, "cnt"))
+    kpi(c[5], "fa-sack-dollar", "계약금액", money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
 
     # 매체별 광고비
     st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 광고</div>', unsafe_allow_html=True)
@@ -825,17 +896,23 @@ def render_ad_tab(media, full):
         st.caption(f"📅 {start} ~ {end}")
     d = raw[(raw["date"].dt.date >= start) & (raw["date"].dt.date <= end)]
     sd, ed = str(start), str(end)
+    # 직전 동일 길이 기간 (비교용)
+    span = (end - start).days + 1
+    pstart, pend = start - timedelta(days=span), start - timedelta(days=1)
+    pdat = raw[(raw["date"].dt.date >= pstart) & (raw["date"].dt.date <= pend)]
 
-    # ── KPI 6개 (전환 포함!!!) ──
+    # ── KPI 6개 (전기간 대비 증감 · 수치) ──
     tc, ti, tk, tv = d.cost.sum(), d.imp.sum(), d.clk.sum(), d.conv.sum()
-    ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0; cpa = tc/tv if tv else 0
+    ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0
+    ptc, pti, ptk, ptv = pdat.cost.sum(), pdat.imp.sum(), pdat.clk.sum(), pdat.conv.sum()
+    pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
     c = st.columns(6)
-    kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", desc=f"{start}~{end}")
-    kpi(c[1], "fa-eye", "노출수", money(ti), "")
-    kpi(c[2], "fa-hand-pointer", "클릭수", f"{int(tk):,}", "")
-    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%")
-    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원")
-    kpi(c[5], "fa-bullseye", "전환수", f"{tv:.0f}", "건", desc=f"CPA {cpa:,.0f}원")
+    kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
+    kpi(c[1], "fa-eye", "노출수", money(ti), "", *delta_str(ti, pti, "num"))
+    kpi(c[2], "fa-hand-pointer", "클릭수", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
+    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
+    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
+    kpi(c[5], "fa-bullseye", "전환수", f"{tv:.0f}", "건", *delta_str(tv, ptv, "cnt"))
 
     # ── 일별 광고비 + 전환 추세 ──
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비 · 전환 추세</div>', unsafe_allow_html=True)
@@ -852,19 +929,20 @@ def render_ad_tab(media, full):
     thin_xticks(fig, d2.lbl)
     st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
 
-    # ── 일자별 상세 표 (전환 포함!!!) ──
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세</div>', unsafe_allow_html=True)
+    # ── 일자별 상세 표 (헤더 클릭 정렬!!!) ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세 <span style="color:#8a8a82;font-size:12px;font-weight:400;">(헤더 클릭 → 정렬)</span></div>', unsafe_allow_html=True)
     dd = d.copy()
     dd["CTR"] = (dd.clk/dd.imp*100).fillna(0).round(2)
     dd["CPC"] = (dd.cost/dd.clk).replace([float("inf")], 0).fillna(0).round(0)
-    rows = "".join(
-        f"<tr><td>{kdate_wd(r.date)}</td><td class='num'>{r.cost:,.0f}</td>"
-        f"<td class='num'>{int(r.imp):,}</td><td class='num'>{int(r.clk):,}</td><td class='num'>{r.CTR}%</td>"
-        f"<td class='num'>{int(r.CPC):,}</td><td class='num'>{r.conv:.0f}</td></tr>"
-        for _, r in dd.sort_values("date", ascending=False).iterrows())
-    st.markdown(f'<table class="kb-tbl"><thead><tr><th>날짜</th><th>광고비</th><th>노출</th>'
-        f'<th>클릭</th><th>CTR</th><th>CPC</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>',
-        unsafe_allow_html=True)
+    rows = []
+    for _, r in dd.sort_values("date", ascending=False).iterrows():
+        rows.append([
+            (kdate_wd(r.date), pd.Timestamp(r.date).strftime("%Y%m%d")),
+            (f"{r.cost:,.0f}", r.cost), (f"{int(r.imp):,}", r.imp),
+            (f"{int(r.clk):,}", r.clk), (f"{r.CTR}%", r.CTR),
+            (f"{int(r.CPC):,}", r.CPC), (f"{r.conv:.0f}", r.conv)])
+    sortable_table(["날짜", "광고비", "노출", "클릭", "CTR", "CPC", "전환"], rows,
+                   height=min(440, 60 + len(rows)*37))
 
     # ── 키워드 TOP 10 (전환 포함!!!) ──
     kw = bq(f"SELECT keyword,SUM(cost) cost,SUM(clicks) clk,SUM(impressions) imp,SUM(conversions) conv "
@@ -946,13 +1024,25 @@ def render_etc():
     tc, ti, tk, tv = df["cost"].sum(), df["impressions"].sum(), df["clicks"].sum(), df["conversions"].sum()
     ctr = tk / ti * 100 if ti else 0
     cpc = tc / tk if tk else 0
+    # 직전 동일 길이 기간
+    span = (e - s).days + 1
+    ps, pe = s - timedelta(days=span), s - timedelta(days=1)
+    try:
+        pdf = bq(f"SELECT cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{ps}' AND '{pe}'")
+    except Exception:
+        pdf = pd.DataFrame()
+    ptc = pdf["cost"].sum() if not pdf.empty else 0
+    pti = pdf["impressions"].sum() if not pdf.empty else 0
+    ptk = pdf["clicks"].sum() if not pdf.empty else 0
+    ptv = pdf["conversions"].sum() if not pdf.empty else 0
+    pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
     c = st.columns(6)
-    kpi(c[0], "fa-won-sign", "광고비", money(tc), "원")
-    kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "")
-    kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "")
-    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%")
-    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원")
-    kpi(c[5], "fa-bolt", "전환", f"{tv:.0f}", "건")
+    kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
+    kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "", *delta_str(ti, pti, "num"))
+    kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
+    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
+    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
+    kpi(c[5], "fa-bolt", "전환", f"{tv:.0f}", "건", *delta_str(tv, ptv, "cnt"))
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비</div>', unsafe_allow_html=True)
     cmap = {"카카오모먼트": GOLD, "모비온": TEAL}
@@ -1001,11 +1091,15 @@ def render_inquiries():
     inqf = inq[(inq["date"].dt.date >= start) & (inq["date"].dt.date <= end)]
 
     total = len(inqf); sangdam = int(inqf["consulted"].sum()); suim = int(inqf["contracted"].sum())
-    rate = suim / total * 100 if total else 0
+    # 직전 동일 길이 기간
+    span = (end - start).days + 1
+    pstart, pend = start - timedelta(days=span), start - timedelta(days=1)
+    inqp = inq[(inq["date"].dt.date >= pstart) & (inq["date"].dt.date <= pend)]
+    p_total = len(inqp); p_sang = int(inqp["consulted"].sum()); p_suim = int(inqp["contracted"].sum())
     c = st.columns(3)
-    kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", desc=f"{start} ~ {end}")
-    kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", desc="문의시트 상담 칸")
-    kpi(c[2], "fa-handshake", "수임", f"{suim:,}", "건", desc=f"문의→수임 {rate:.1f}%")
+    kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", *delta_str(total, p_total, "cnt"))
+    kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", *delta_str(sangdam, p_sang, "cnt"))
+    kpi(c[2], "fa-handshake", "수임", f"{suim:,}", "건", *delta_str(suim, p_suim, "cnt"))
 
     # ════ 대단락: 추이 분석 ════
     st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 추이 분석</div>', unsafe_allow_html=True)
