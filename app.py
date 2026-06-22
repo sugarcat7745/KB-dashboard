@@ -13,6 +13,7 @@ st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖�
 # ══════════════════════════════════════════════
 CONTRACT_SHEET_ID = "1TpgTCEeFkFYBGhzqhA70xtMh6wd18laL0tTLYuc9M6Y"
 MONTHLY_GOAL = 250_000_000  # 월 목표 2.5억
+BQ_PROJECT, BQ_DATASET = "kb-dashboard-499704", "kb_ads"
 
 GOLD   = "#D2AA50"; GOLD_B = "#F0C86E"; GOLD_D = "#BE963C"
 TEAL   = "#5BB4C4"; CORAL  = "#C77B6B"; GRAY   = "#6E6E66"
@@ -98,6 +99,24 @@ def get_gc():
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
+@st.cache_resource
+def get_bq():
+    from google.cloud import bigquery
+    sa = st.secrets["gcp_service_account"]
+    info = {
+        "type": "service_account", "project_id": sa["project_id"],
+        "private_key_id": sa["private_key_id"], "private_key": sa["private_key"].replace("\\n", "\n"),
+        "client_email": sa["client_email"], "client_id": sa["client_id"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/bigquery"])
+    return bigquery.Client(project=sa["project_id"], credentials=creds)
+
+@st.cache_data(ttl=300)
+def bq(sql):
+    return get_bq().query(sql).to_dataframe()
+
 @st.cache_data(ttl=3600)
 def get_logo():
     try:
@@ -149,6 +168,70 @@ def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
     col.markdown(f"""<div class="kpi"><i class="kpi-ic fa-solid {icon}"></i>
       <div class="l">{label}</div><div class="v">{value}<small>{unit}</small></div>
       {chg_html}<div class="d">{desc}</div></div>""", unsafe_allow_html=True)
+
+def render_ad_tab(media, full):
+    st.markdown(f'<div class="eyebrow">{media} 광고 분석</div>', unsafe_allow_html=True)
+    try:
+        d = bq(f"SELECT date,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv "
+               f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' GROUP BY date ORDER BY date")
+    except Exception as e:
+        st.error(f"BigQuery 읽기 실패: {e}"); return
+    if d.empty:
+        st.info(f"{media} 데이터가 없습니다."); return
+    tc, ti, tk = d.cost.sum(), d.imp.sum(), d.clk.sum()
+    ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0
+    c = st.columns(5)
+    kpi(c[0], "fa-won-sign", "광고비", won(tc), desc=f"{d.date.min()}~{d.date.max()}")
+    kpi(c[1], "fa-eye", "노출수", f"{ti/1e4:.0f}", "만")
+    kpi(c[2], "fa-hand-pointer", "클릭수", f"{int(tk):,}", "")
+    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%")
+    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원")
+    st.write("")
+    # 일별 광고비
+    st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-chart-line"></i>일별 광고비</h3>', unsafe_allow_html=True)
+    fig = go.Figure(go.Scatter(x=d.date, y=d.cost, mode="lines+markers",
+        line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(210,170,80,0.1)"))
+    st.plotly_chart(fig_theme(fig, 240), use_container_width=True, config={"displayModeBar": False})
+    st.markdown('</div>', unsafe_allow_html=True)
+    # 키워드 TOP
+    kw = bq(f"SELECT keyword,SUM(cost) cost,SUM(clicks) clk,SUM(impressions) imp "
+            f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' AND keyword NOT IN ('-','') "
+            f"GROUP BY keyword ORDER BY cost DESC LIMIT 10")
+    st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-magnifying-glass"></i>키워드 TOP 10 (광고비순)</h3>', unsafe_allow_html=True)
+    rows = "".join(f"<tr><td>{r.keyword}</td><td class='num'>{r.cost:,.0f}원</td><td>{int(r.clk):,}</td><td>{int(r.imp):,}</td></tr>" for _, r in kw.iterrows())
+    st.markdown(f'<table class="kb-tbl"><thead><tr><th>키워드</th><th>광고비</th><th>클릭</th><th>노출</th></tr></thead><tbody>{rows}</tbody></table></div>', unsafe_allow_html=True)
+    if not full:
+        return
+    # 연령 / 성별
+    cc = st.columns(2)
+    with cc[0]:
+        age = bq(f"SELECT age,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_age` WHERE media='{media}' GROUP BY age ORDER BY cost DESC")
+        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-users"></i>연령별 광고비</h3>', unsafe_allow_html=True)
+        f1 = go.Figure(go.Bar(x=age.cost/1e4, y=age.age, orientation="h", marker=dict(color=GOLD)))
+        f1.update_xaxes(ticksuffix="만")
+        st.plotly_chart(fig_theme(f1, 240), use_container_width=True, config={"displayModeBar": False})
+        st.markdown('</div>', unsafe_allow_html=True)
+    with cc[1]:
+        gen = bq(f"SELECT gender,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_gender` WHERE media='{media}' GROUP BY gender")
+        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-venus-mars"></i>성별 광고비</h3>', unsafe_allow_html=True)
+        f2 = go.Figure(go.Pie(labels=gen.gender, values=gen.cost, hole=0.6, marker=dict(colors=[TEAL, CORAL, GRAY])))
+        st.plotly_chart(fig_theme(f2, 240), use_container_width=True, config={"displayModeBar": False})
+        st.markdown('</div>', unsafe_allow_html=True)
+    # 디바이스 / 노출매체
+    cc2 = st.columns(2)
+    with cc2[0]:
+        dev = bq(f"SELECT device,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` WHERE media='{media}' GROUP BY device ORDER BY cost DESC")
+        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-mobile-screen"></i>디바이스별</h3>', unsafe_allow_html=True)
+        f3 = go.Figure(go.Pie(labels=dev.device, values=dev.cost, hole=0.6, marker=dict(colors=[GOLD, GOLD_D])))
+        st.plotly_chart(fig_theme(f3, 240), use_container_width=True, config={"displayModeBar": False})
+        st.markdown('</div>', unsafe_allow_html=True)
+    with cc2[1]:
+        pl = bq(f"SELECT placement,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` WHERE media='{media}' GROUP BY placement ORDER BY cost DESC LIMIT 8")
+        st.markdown('<div class="kb-card"><h3><i class="fa-solid fa-tower-broadcast"></i>노출매체별</h3>', unsafe_allow_html=True)
+        f4 = go.Figure(go.Bar(x=pl.cost/1e4, y=pl.placement, orientation="h", marker=dict(color=GOLD_D)))
+        f4.update_xaxes(ticksuffix="만")
+        st.plotly_chart(fig_theme(f4, 240), use_container_width=True, config={"displayModeBar": False})
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════
 # MAIN
@@ -278,12 +361,16 @@ def main():
         except Exception as e:
             st.warning(f"데이터 로딩 중: {e}")
 
-    # ────────── 광고 탭 (준비중) ──────────
-    for i, name in [(2, "네이버"), (3, "구글"), (4, "기타")]:
-        with tabs[i]:
-            st.markdown(f"""<div class="placeholder"><i class="fa-solid fa-gear fa-spin"></i>
-              <div style="font-size:16px;margin-top:8px;">{name} 광고 데이터 연동 준비 중</div>
-              <div style="font-size:13px;margin-top:6px;">광고비 데이터 정리 후 노출·클릭·전환·검색어 분석이 표시됩니다.</div></div>""",
-              unsafe_allow_html=True)
+    # ────────── 네이버 / 구글 탭 (실데이터!!!) ──────────
+    with tabs[2]:
+        render_ad_tab("네이버", full=True)
+    with tabs[3]:
+        render_ad_tab("구글", full=False)
+    # ────────── 기타 탭 ──────────
+    with tabs[4]:
+        st.markdown("""<div class="placeholder"><i class="fa-solid fa-gear fa-spin"></i>
+          <div style="font-size:16px;margin-top:8px;">기타 매체 연동 준비 중</div>
+          <div style="font-size:13px;margin-top:6px;">추가 광고 매체 데이터가 들어오면 표시됩니다.</div></div>""",
+          unsafe_allow_html=True)
 
 main()
