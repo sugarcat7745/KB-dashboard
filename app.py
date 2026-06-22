@@ -57,15 +57,15 @@ html, body, [class*="css"] {{ font-family:'Noto Sans KR',sans-serif; color:{TXT}
   margin:18px 0; display:flex; align-items:center; gap:12px; }}
 .eyebrow::after {{ content:""; flex:1; height:1px; background:{LINE}; }}
 /* KPI */
-.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:12px; padding:20px 18px;
-  position:relative; min-height:128px; }}
-.kpi .l {{ font-size:12px; color:{MUTED}; margin-bottom:12px; }}
-.kpi .v {{ font-size:26px; font-weight:600; color:{GOLD_B}; line-height:1; font-family:'Noto Serif KR',serif; }}
+.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:12px; padding:14px 16px;
+  position:relative; min-height:88px; }}
+.kpi .l {{ font-size:12px; color:{MUTED}; margin-bottom:8px; }}
+.kpi .v {{ font-size:25px; font-weight:600; color:{GOLD_B}; line-height:1; font-family:'Noto Serif KR',serif; }}
 .kpi .v small {{ font-size:13px; color:{MUTED}; font-weight:400; margin-left:2px; }}
-.kpi .chg {{ font-size:12px; margin-top:8px; }}
+.kpi .chg {{ font-size:12px; margin-top:7px; }}
 .kpi .chg.up {{ color:#7BB89A; }} .kpi .chg.down {{ color:{CORAL}; }}
-.kpi .d {{ font-size:11px; margin-top:4px; color:{MUTED}; }}
-.kpi-ic {{ position:absolute; top:18px; right:16px; font-size:19px; color:rgba(210,170,80,0.3); }}
+.kpi .d {{ font-size:11px; margin-top:3px; color:{MUTED}; }}
+.kpi-ic {{ position:absolute; top:14px; right:14px; font-size:18px; color:rgba(210,170,80,0.3); }}
 /* 카드 */
 .kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:12px; padding:22px 24px; margin-bottom:18px; }}
 .kb-card h3 {{ font-size:16px; font-weight:600; margin-bottom:16px; display:flex; align-items:center; gap:10px; }}
@@ -370,13 +370,34 @@ def preset_range(name, dmin, dmax):
     else:                            s, e = dmin, dmax
     return max(s, dmin), min(e, dmax)
 
+def period_selector(key, dmin, dmax, default="전체"):
+    """네이버/구글 탭과 동일한 기간 선택 드롭다운. (start, end) 반환."""
+    presets = ["전체", "어제", "최근7일(오늘제외)", "이번주", "지난주", "이번달",
+               "이번분기", "지난분기", "최근30일", "최근90일", "최근365일", "직접선택"]
+    idx = presets.index(default) if default in presets else 0
+    cpre, _ = st.columns([1, 2])
+    sel = cpre.selectbox("기간", presets, index=idx, key=f"{key}_preset")
+    if sel == "직접선택":
+        c1, c2 = st.columns(2)
+        start = c1.date_input("시작일", dmin, min_value=dmin, max_value=dmax, key=f"{key}_s")
+        end   = c2.date_input("종료일", dmax, min_value=dmin, max_value=dmax, key=f"{key}_e")
+    elif sel == "전체":
+        start, end = dmin, dmax
+        st.caption(f"📅 {start} ~ {end} (전체)")
+    else:
+        start, end = preset_range(sel, dmin, dmax)
+        st.caption(f"📅 {start} ~ {end}")
+    return start, end
+
 def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
-    chg_html = (f'<div class="chg {chg_dir}">{chg}</div>' if chg
-                else '<div class="chg" style="visibility:hidden">-</div>')
-    desc_html = f'<div class="d">{desc}</div>' if desc else '<div class="d" style="visibility:hidden">-</div>'
+    extra = ""
+    if chg:
+        extra += f'<div class="chg {chg_dir}">{chg}</div>'
+    if desc:
+        extra += f'<div class="d">{desc}</div>'
     col.markdown(f"""<div class="kpi"><i class="kpi-ic fa-solid {icon}"></i>
       <div class="l">{label}</div><div class="v">{value}<small>{unit}</small></div>
-      {chg_html}{desc_html}</div>""", unsafe_allow_html=True)
+      {extra}</div>""", unsafe_allow_html=True)
 
 def render_summary():
     con = load_contracts()
@@ -941,13 +962,25 @@ def render_inquiries():
     if inq.empty:
         st.info("문의 데이터를 읽지 못했습니다. 시트 공유·탭 구조를 확인해주세요."); return
     con = load_contracts()
-
     ann = load_annual()
-    sangdam = int(ann["상담"].sum()) if (not ann.empty and "상담" in ann.columns) else 0
-    total = len(inq); suim = int(inq["contracted"].sum())
+
+    # ── 기간 선택 (네이버/구글 탭과 동일) ──
+    imin, imax = inq["date"].min().date(), inq["date"].max().date()
+    start, end = period_selector("inq", imin, imax, default="전체")
+    inqf = inq[(inq["date"].dt.date >= start) & (inq["date"].dt.date <= end)]
+
+    # 상담: 연간요약에서 기간 내 월 합
+    sangdam = 0
+    if not ann.empty and "상담" in ann.columns:
+        a2 = ann.copy()
+        a2["_ym"] = a2["연도"].astype(str).str.strip() + "-" + a2["월"].astype(str).str.replace("월", "").str.strip().str.zfill(2)
+        months = set(pd.period_range(start, end, freq="M").astype(str))
+        sangdam = int(a2[a2["_ym"].isin(months)]["상담"].sum())
+
+    total = len(inqf); suim = int(inqf["contracted"].sum())
     rate = suim / total * 100 if total else 0
     c = st.columns(3)
-    kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", desc=f"{inq['date'].min().date()} ~")
+    kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", desc=f"{start} ~ {end}")
     kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", desc="연간요약 기준")
     kpi(c[2], "fa-handshake", "수임", f"{suim:,}", "건", desc=f"문의→수임 {rate:.1f}%")
 
@@ -955,10 +988,8 @@ def render_inquiries():
     st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 추이 분석</div>', unsafe_allow_html=True)
     # 월별 문의·상담·수임 추이 (x축 한글)
     st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar"></i> 월별 문의 · 상담 · 수임</div>', unsafe_allow_html=True)
-    bym = inq.groupby("_ym").agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
+    bym = inqf.groupby("_ym").agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
     if not ann.empty and "상담" in ann.columns:
-        a2 = ann.copy()
-        a2["_ym"] = a2["연도"].astype(str).str.strip() + "-" + a2["월"].astype(str).str.replace("월", "").str.strip().str.zfill(2)
         sang_m = a2.groupby("_ym")["상담"].sum()
         bym["상담"] = bym["_ym"].map(sang_m).fillna(0)
     else:
@@ -978,11 +1009,9 @@ def render_inquiries():
     thin_xticks(fig, bym["_kor"])
     st.plotly_chart(fig_theme(fig, 300), use_container_width=True, config={"displayModeBar": False})
 
-    # 일자별 문의·수임 추이 (최근 60일)
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 일자별 (최근 60일)</div>', unsafe_allow_html=True)
-    cutoff = inq["date"].max() - pd.Timedelta(days=60)
-    rec = inq[inq["date"] >= cutoff]
-    byd = rec.groupby(rec["date"].dt.date).agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
+    # 일자별 문의·수임 추이 (선택 기간)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 일자별</div>', unsafe_allow_html=True)
+    byd = inqf.groupby(inqf["date"].dt.date).agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
     byd["_lbl"] = pd.to_datetime(byd["date"]).apply(lambda d: f"{d.month}/{d.day}")
     fd = go.Figure()
     fd.add_trace(go.Bar(x=byd["_lbl"], y=byd["문의"], name="문의", marker_color=GOLD))
@@ -997,7 +1026,7 @@ def render_inquiries():
     # 광고 카테고리별 (월별 탭, 2025.09~)
     st.markdown('<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 (2025.09~)</div>', unsafe_allow_html=True)
     bad = ["(미분류)", "nan", "", "종결", "수임완료", "문자남김"]
-    catser = inq[~inq["category"].isin(bad)]["category"].value_counts().head(12)
+    catser = inqf[~inqf["category"].isin(bad)]["category"].value_counts().head(12)
     if not catser.empty:
         fc = go.Figure(go.Bar(y=list(catser.index[::-1]), x=list(catser.values[::-1]), orientation="h",
             marker=dict(color=GOLD), text=list(catser.values[::-1]), textposition="outside"))
@@ -1065,6 +1094,32 @@ def main():
         if df is not None and len(df):
             st.markdown('<div class="eyebrow">계약 매출 분석</div>', unsafe_allow_html=True)
 
+            # ════ 대단락: 기간별 조회 ════
+            st.markdown('<div class="big-section"><i class="fa-solid fa-calendar-day"></i> 기간별 조회</div>', unsafe_allow_html=True)
+            cmin, cmax = df["_date"].min().date(), df["_date"].max().date()
+            cs, ce = period_selector("con", cmin, cmax, default="이번달")
+            cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
+            cf_new = cf[cf["_is_new"]]
+            cfn_sum = cf_new["_amt"].sum(); cfd_sum = cf["_amt"].sum() - cfn_sum
+            pc = st.columns(4)
+            kpi(pc[0], "fa-sack-dollar", "기간 신건매출", won(cfn_sum), desc=f"{cs} ~ {ce}")
+            kpi(pc[1], "fa-file-signature", "기간 신건계약", f"{len(cf_new):,}", "건", desc=f"전체 {len(cf):,}건")
+            kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum), desc="참고용")
+            kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(cfn_sum/len(cf_new)/1e4 if len(cf_new) else 0):.0f}", "만", desc="신건 건당")
+            if len(cf):
+                st.markdown('<div class="sec-title"><i class="fa-solid fa-list-ul"></i> 계약 내역</div>', unsafe_allow_html=True)
+                rows = "".join(
+                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td><td>{r['_type']}</td>"
+                    f"<td>{'신건' if r['_is_new'] else '파생'}</td><td class='num'>{money(r['_amt'])}</td>"
+                    f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
+                    for _, r in cf.sort_values("_date").iterrows())
+                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>유형</th>'
+                            f'<th>구분</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+            else:
+                st.caption("이 기간 계약이 없습니다.")
+
+            # ════ 대단락: 연간 누적 분석 ════
+            st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 연간 누적 분석</div>', unsafe_allow_html=True)
             this_y = datetime.now().year
             this_ym = datetime.now().strftime("%Y-%m")
             cur = df[df["_y"] == this_y]
