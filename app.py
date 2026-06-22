@@ -711,8 +711,34 @@ def render_daily():
     else:
         st.caption("이 날짜의 계약이 없습니다.")
 
+def brand_header(media):
+    if media == "네이버":
+        return ('<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
+                'background:linear-gradient(90deg,rgba(3,199,90,.16),rgba(3,199,90,.02));'
+                'border-left:5px solid #03C75A;border-radius:12px;">'
+                '<div style="width:46px;height:46px;border-radius:11px;background:#03C75A;display:flex;'
+                'align-items:center;justify-content:center;font-size:26px;font-weight:900;color:#fff;'
+                'font-family:Arial,sans-serif;box-shadow:0 4px 12px rgba(3,199,90,.4);">N</div>'
+                '<div><div style="font-size:20px;font-weight:800;color:#03C75A;letter-spacing:-.5px;">네이버 광고</div>'
+                '<div style="font-size:12px;color:#999;margin-top:2px;">파워링크 · 플레이스 · 검색광고</div></div></div>')
+    if media == "구글":
+        g = [("G", "#4285F4"), ("o", "#EA4335"), ("o", "#FBBC05"), ("g", "#4285F4"), ("l", "#34A853"), ("e", "#EA4335")]
+        logo = "".join(f'<span style="color:{c};">{ch}</span>' for ch, c in g)
+        return ('<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
+                'background:linear-gradient(90deg,rgba(66,133,244,.14),rgba(66,133,244,.02));'
+                'border-left:5px solid #4285F4;border-radius:12px;">'
+                '<div style="width:46px;height:46px;border-radius:11px;background:#fff;display:flex;'
+                'align-items:center;justify-content:center;font-size:28px;font-weight:900;'
+                'font-family:Arial,sans-serif;box-shadow:0 4px 12px rgba(66,133,244,.3);">'
+                '<span style="color:#4285F4;">G</span></div>'
+                f'<div><div style="font-size:20px;font-weight:800;letter-spacing:-.5px;font-family:Arial,sans-serif;">{logo}'
+                ' <span style="color:#999;font-size:15px;font-weight:600;">Ads</span></div>'
+                '<div style="font-size:12px;color:#999;margin-top:2px;">검색 · 디스플레이 · 캠페인</div></div></div>')
+    return ""
+
+
 def render_ad_tab(media, full):
-    st.markdown(f'<div class="eyebrow">{media} 광고 분석</div>', unsafe_allow_html=True)
+    st.markdown(brand_header(media), unsafe_allow_html=True)
     try:
         raw = bq(f"SELECT date,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv "
                  f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' GROUP BY date ORDER BY date")
@@ -887,29 +913,54 @@ def render_etc():
 
 
 def render_inquiries():
-    st.markdown('<div class="eyebrow">문의 분석</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
+        'background:linear-gradient(90deg,rgba(210,170,80,.16),rgba(210,170,80,.02));'
+        'border-left:5px solid #D2AA50;border-radius:12px;">'
+        '<div style="width:46px;height:46px;border-radius:11px;background:#D2AA50;display:flex;'
+        'align-items:center;justify-content:center;font-size:24px;color:#1a1a17;'
+        'box-shadow:0 4px 12px rgba(210,170,80,.4);"><i class="fa-solid fa-comments"></i></div>'
+        '<div><div style="font-size:20px;font-weight:800;color:#D2AA50;letter-spacing:-.5px;">문의 분석</div>'
+        '<div style="font-size:12px;color:#999;margin-top:2px;">문의 · 상담 · 수임 · 이름 대조</div></div></div>',
+        unsafe_allow_html=True)
     inq = load_inquiries()
     if inq.empty:
         st.info("문의 데이터를 읽지 못했습니다. 시트 공유·탭 구조를 확인해주세요."); return
     con = load_contracts()
 
+    ann = load_annual()
+    sangdam = int(ann["상담"].sum()) if (not ann.empty and "상담" in ann.columns) else 0
     total = len(inq); suim = int(inq["contracted"].sum())
     rate = suim / total * 100 if total else 0
     c = st.columns(3)
-    kpi(c[0], "fa-phone", "총 문의", f"{total:,}", "건", desc=f"{inq['date'].min().date()} ~")
-    kpi(c[1], "fa-handshake", "수임", f"{suim:,}", "건", desc="계약체결 기준")
-    kpi(c[2], "fa-percent", "수임 전환율", f"{rate:.1f}", "%", desc="수임 ÷ 문의")
+    kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", desc=f"{inq['date'].min().date()} ~")
+    kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", desc="연간요약 기준")
+    kpi(c[2], "fa-handshake", "수임", f"{suim:,}", "건", desc=f"문의→수임 {rate:.1f}%")
 
-    # 월별 문의·수임 추이
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 문의 · 수임 추이</div>', unsafe_allow_html=True)
+    # 월별 문의·상담·수임 추이 (x축 한글)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 문의 · 상담 · 수임 추이</div>', unsafe_allow_html=True)
     bym = inq.groupby("_ym").agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
+    if not ann.empty and "상담" in ann.columns:
+        a2 = ann.copy()
+        a2["_ym"] = a2["연도"].astype(str).str.strip() + "-" + a2["월"].astype(str).str.replace("월", "").str.strip().str.zfill(2)
+        sang_m = a2.groupby("_ym")["상담"].sum()
+        bym["상담"] = bym["_ym"].map(sang_m).fillna(0)
+    else:
+        bym["상담"] = 0
+    def kor_ym(s):
+        try:
+            y, m = s.split("-"); return f"{y[2:]}년 {int(m)}월"
+        except Exception:
+            return s
+    bym["_kor"] = bym["_ym"].apply(kor_ym)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=bym["_ym"], y=bym["문의"], name="문의", mode="lines+markers", line=dict(color=GOLD, width=2)))
-    fig.add_trace(go.Scatter(x=bym["_ym"], y=bym["수임"], name="수임", mode="lines+markers", line=dict(color=TEAL, width=2), yaxis="y2"))
-    fig.update_layout(yaxis=dict(title="문의"), yaxis2=dict(overlaying="y", side="right", showgrid=False, title="수임", color="#5BB4C4"),
-                      legend=dict(orientation="h", y=1.12))
-    thin_xticks(fig, bym["_ym"])
-    st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
+    fig.add_trace(go.Scatter(x=bym["_kor"], y=bym["문의"], name="문의", mode="lines+markers", line=dict(color=GOLD, width=2)))
+    fig.add_trace(go.Scatter(x=bym["_kor"], y=bym["상담"], name="상담", mode="lines+markers", line=dict(color=GOLD_B, width=2)))
+    fig.add_trace(go.Scatter(x=bym["_kor"], y=bym["수임"], name="수임", mode="lines+markers", line=dict(color=TEAL, width=2), yaxis="y2"))
+    fig.update_layout(yaxis=dict(title="문의·상담"), yaxis2=dict(overlaying="y", side="right", showgrid=False, title="수임", color=TEAL),
+                      legend=dict(orientation="h", y=1.14))
+    thin_xticks(fig, bym["_kor"])
+    st.plotly_chart(fig_theme(fig, 300), use_container_width=True, config={"displayModeBar": False})
 
     # 광고 카테고리별 (월별 탭, 2025.09~)
     st.markdown('<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 (2025.09~)</div>', unsafe_allow_html=True)
