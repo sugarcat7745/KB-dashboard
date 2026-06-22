@@ -263,6 +263,108 @@ def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
       <div class="l">{label}</div><div class="v">{value}<small>{unit}</small></div>
       {chg_html}<div class="d">{desc}</div></div>""", unsafe_allow_html=True)
 
+def render_summary():
+    con = load_contracts()
+    today = date.today()
+    period = st.radio("기간", ["🗓️ 일간", "📆 주간", "📅 월간", "📈 년간"],
+                      index=2, horizontal=True, key="sum_period")
+
+    if "일간" in period:
+        start = end = today - timedelta(days=1)
+        ps = pe = start - timedelta(days=1); cmp_label = "전일 대비"
+    elif "주간" in period:
+        start = today - timedelta(days=today.weekday()); end = today
+        ps = start - timedelta(days=7); pe = start - timedelta(days=1); cmp_label = "전주 대비"
+    elif "월간" in period:
+        start = today.replace(day=1); end = today
+        ps = (start - timedelta(days=1)).replace(day=1); pe = start - timedelta(days=1); cmp_label = "전월 대비"
+    else:
+        start = today.replace(month=1, day=1); end = today
+        ps = date(start.year-1, 1, 1); pe = date(today.year-1, today.month, today.day); cmp_label = "전년 대비"
+    st.caption(f"📅 {start} ~ {end}")
+
+    # 전매체 광고비 (ad_keyword + ad_etc)
+    def spend(s, e):
+        try:
+            a = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{s}' AND '{e}'")["c"].iloc[0]
+            b = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{s}' AND '{e}'")["c"].iloc[0]
+            return float(a or 0) + float(b or 0)
+        except Exception:
+            return 0.0
+    def rev(s, e, new=False):
+        m = (con["_date"].dt.date >= s) & (con["_date"].dt.date <= e)
+        if new: m &= con["_is_new"]
+        return con[m]["_amt"].sum()
+    def chg(cur, prev):
+        if not prev: return None, "up"
+        d = (cur - prev) / prev * 100
+        return f"{'▲' if d>=0 else '▼'} {abs(d):.1f}%", ("up" if d >= 0 else "down")
+
+    ad, ad_p = spend(start, end), spend(ps, pe)
+    revenue, rev_p = rev(start, end), rev(ps, pe)
+    new_rev = rev(start, end, True)
+    roas = new_rev / ad * 100 if ad else 0
+    n_con = int(((con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)).sum())
+    ad_c, ad_d = chg(ad, ad_p)
+    rev_c, rev_d = chg(revenue, rev_p)
+
+    c = st.columns(4)
+    kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d, desc=cmp_label)
+    kpi(c[1], "fa-sack-dollar", "계약매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d, desc=cmp_label)
+    kpi(c[2], "fa-file-signature", "계약건수", f"{n_con}", "건")
+    kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", desc="신건매출÷광고비")
+
+    # 매체별 광고비 비중
+    try:
+        mk = bq(f"SELECT media,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY media")
+        me = bq(f"SELECT media,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY media")
+        mix = pd.concat([mk, me], ignore_index=True)
+    except Exception:
+        mix = pd.DataFrame()
+
+    # 월간: 목표바
+    if "월간" in period:
+        pct = min(revenue / MONTHLY_GOAL * 100, 100)
+        st.markdown(f"""<div class="kb-card" style="margin-top:8px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
+            <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
+            <div style="display:flex;align-items:baseline;gap:10px;">
+            <span class="serif" style="font-size:32px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
+            <span style="font-size:14px;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+            <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
+            <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
+          </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
+
+    cc = st.columns([3, 2])
+    with cc[0]:
+        if "년간" in period:
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 연도별 매출</div>', unsafe_allow_html=True)
+            yr = con.groupby("_y")["_amt"].sum()
+            f1 = go.Figure(go.Bar(x=[f"{int(y)}년" for y in yr.index], y=yr.values/1e8, marker=dict(color=GOLD), text=[f"{v/1e8:.1f}억" for v in yr.values], textposition="outside"))
+            f1.update_yaxes(ticksuffix="억")
+            st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
+            yrs = sorted(con["_y"].unique())[-3:]
+            colors = {yrs[-1]: GOLD}
+            if len(yrs) >= 2: colors[yrs[-2]] = TEAL
+            if len(yrs) >= 3: colors[yrs[-3]] = GRAY
+            f1 = go.Figure()
+            for y in yrs:
+                yd = con[con["_y"] == y].groupby("_m")["_amt"].sum()
+                f1.add_trace(go.Scatter(x=[f"{m}월" for m in range(1, 13)], y=[yd.get(m, None) and yd.get(m)/1e8 for m in range(1, 13)],
+                    name=str(int(y)), mode="lines+markers", line=dict(color=colors.get(y, GRAY), dash="dash" if y == yrs[0] and len(yrs) >= 3 else "solid"), connectgaps=False))
+            f1.update_yaxes(ticksuffix="억")
+            st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
+    with cc[1]:
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 매체별 광고비</div>', unsafe_allow_html=True)
+        if not mix.empty and mix["cost"].sum() > 0:
+            f2 = go.Figure(go.Pie(labels=mix["media"], values=mix["cost"], hole=0.6,
+                marker=dict(colors=[GOLD, TEAL, CORAL, GRAY, GOLD_D])))
+            st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.caption("이 기간 광고비 데이터가 없습니다.")
+
 def render_daily():
     st.markdown('<div class="eyebrow">일간 요약</div>', unsafe_allow_html=True)
     con = load_contracts()
@@ -571,54 +673,11 @@ def main():
               <tbody>{rows}</tbody></table>""", unsafe_allow_html=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # ────────── SUMMARY 탭 ──────────
+    # ────────── SUMMARY 탭 (일간/주간/월간/년간 토글) ──────────
     with tabs[0]:
         st.markdown('<div class="eyebrow">전 매체 통합 요약</div>', unsafe_allow_html=True)
-        # 목표 달성바 (계약 실데이터 연결!)
         try:
-            df = load_contracts()
-            this_ym = datetime.now().strftime("%Y-%m")
-            month_sum = df[df["_ym"] == this_ym]["_amt"].sum()
-            pct = min(month_sum / MONTHLY_GOAL * 100, 100)
-            st.markdown(f"""<div class="kb-card">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
-                <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 현황 · 월 목표 2.5억원</div>
-                <div style="display:flex;align-items:baseline;gap:10px;">
-                <span class="serif" style="font-size:34px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
-                <span style="font-size:14px;color:{MUTED};">{month_sum/1e8:.2f}억 / 2.5억</span></div></div>
-                <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여 목표</div>
-                <div class="serif" style="font-size:22px;font-weight:600;">{max(MONTHLY_GOAL-month_sum,0)/1e8:.2f}억원</div></div>
-              </div><div class="goalbar"><div style="width:{pct}%;"></div></div>
-              <p style="font-size:11px;color:{MUTED};margin-top:10px;">※ 계약서 시트 실시간 연동</p></div>""",
-              unsafe_allow_html=True)
-
-            # ── 광고비 + ROAS (BigQuery + 계약) ──
-            this_y = datetime.now().year
-            try:
-                ad = bq(f"SELECT media,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` GROUP BY media")
-                total_ad = ad.cost.sum()
-            except Exception:
-                total_ad = 0
-            new_sum = df[(df["_y"] == this_y) & (df["_is_new"])]["_amt"].sum()
-            roas = new_sum / total_ad * 100 if total_ad else 0
-
-            # ── 문의 요약 (연간요약 시트) ──
-            ann = load_annual()
-            st.markdown('<div class="eyebrow">광고 · 문의 요약</div>', unsafe_allow_html=True)
-            if not ann.empty:
-                cur = ann[ann["연도"] == str(this_y)]
-                t_inq, t_cons, t_cont = cur["문의"].sum(), cur["상담"].sum(), cur["수임"].sum()
-                cpi = total_ad / t_inq if t_inq else 0
-                conv_rate = t_cont / t_inq * 100 if t_inq else 0
-                c = st.columns(6)
-                kpi(c[0], "fa-won-sign", "총 광고비", money(total_ad), "원", desc=f"{this_y} (BigQuery)")
-                kpi(c[1], "fa-phone", "총 문의", f"{t_inq:.0f}", "건")
-                kpi(c[2], "fa-coins", "문의당 비용", money(cpi), "원", desc="광고비÷문의")
-                kpi(c[3], "fa-comments", "상담", f"{t_cons:.0f}", "건")
-                kpi(c[4], "fa-handshake", "수임", f"{t_cont:.0f}", "건", desc=f"전환율 {conv_rate:.1f}%")
-                kpi(c[5], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", desc="신건매출÷광고비")
-            else:
-                st.info("연간요약(문의) 시트를 읽지 못했습니다. 시트 공유·탭 이름(연간요약)을 확인해주세요.")
+            render_summary()
         except Exception as e:
             st.warning(f"데이터 로딩 중: {e}")
 
