@@ -6,6 +6,12 @@ import plotly.graph_objects as go
 import base64, urllib.request
 from datetime import datetime, date, timedelta
 
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
 st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖️", layout="wide")
 
 # ══════════════════════════════════════════════
@@ -121,6 +127,32 @@ def get_bq():
 def bq(sql):
     return get_bq().query(sql).to_dataframe()
 
+@st.cache_data(ttl=1800)
+def ai_insight(summary):
+    """대시보드 데이터를 Claude에게 보내 진짜 인사이트 한 줄을 받음. 실패하면 None."""
+    if not HAS_ANTHROPIC:
+        return None
+    try:
+        key = st.secrets["anthropic_api_key"]
+    except Exception:
+        return None
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        m = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=220,
+            messages=[{"role": "user", "content":
+                "너는 법무법인 광고·매출 대시보드를 보는 데이터 분석가다. 아래 숫자를 근거로 "
+                "대표에게 보고할 핵심 인사이트를 한국어 1~2문장으로 작성하라. "
+                "광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라. "
+                "반드시 구체적 숫자를 인용하고, '무엇을 해야 하는지' 실행 제안을 한 가지 포함하라. "
+                "'효율 점검 필요', '양호' 같은 뻔하고 모호한 표현은 금지. 날카롭고 간결하게.\n\n"
+                + summary}],
+        )
+        return m.content[0].text.strip()
+    except Exception:
+        return None
+
 @st.cache_data(ttl=3600)
 def get_logo():
     try:
@@ -223,6 +255,16 @@ def fig_theme(fig, h=240):
     )
     return fig
 
+def thin_xticks(fig, labels, target=10):
+    """x축 라벨이 너무 많으면 일정 간격만 표시 (한글 라벨 유지)."""
+    n = len(labels)
+    if n <= target:
+        return fig
+    step = max(1, n // target)
+    vals = [labels.iloc[i] for i in range(0, n, step)]
+    fig.update_xaxes(tickmode="array", tickvals=vals)
+    return fig
+
 def won(v):  # 억 단위
     return f"{v/1e8:.2f}억"
 
@@ -308,21 +350,44 @@ def render_summary():
     ad_c, ad_d = chg(ad, ad_p)
     rev_c, rev_d = chg(revenue, rev_p)
 
-    # ── AI 인사이트 한 줄 ──
-    bits = []
-    if ad_p:
-        d = (ad - ad_p) / ad_p * 100
-        bits.append(f"광고비 {abs(d):.0f}% {'증가' if d >= 0 else '감소'}")
-    if rev_p:
-        d = (revenue - rev_p) / rev_p * 100
-        bits.append(f"매출 {abs(d):.0f}% {'증가' if d >= 0 else '감소'}")
-    grade = "효율 우수" if roas >= 300 else ("효율 양호" if roas >= 150 else "효율 점검 필요")
-    msg = " · ".join(bits) if bits else "데이터 집계 중"
-    icon = "fa-circle-check" if roas >= 150 else "fa-triangle-exclamation"
-    icol = GOLD_B if roas >= 150 else CORAL
+    # ── AI 인사이트 한 줄 (Claude API, 실패 시 규칙기반 폴백) ──
+    cmask0 = (con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)
+    catall = con[cmask0].groupby("_type")["_amt"].sum().sort_values(ascending=False)
+    top_cat = f"{catall.index[0]}({catall.iloc[0]/1e8:.1f}억)" if not catall.empty else "-"
+    # 문의당 비용(CPI) 미리 계산 (당월/당해 · 연간요약 기준)
+    _ann = load_annual(); cpi_v = 0.0; inq_v = 0
+    if not _ann.empty:
+        _y = str(end.year); _s = _ann[_ann["연도"] == _y].copy()
+        if "년간" not in period:
+            _s["_mn"] = _s["월"].astype(str).str.replace("월", "").str.strip()
+            _s = _s[_s["_mn"] == str(end.month)]
+        if not _s.empty and _s["문의"].sum() > 0:
+            inq_v = _s["문의"].sum(); cpi_v = _s["총광고비"].sum() / inq_v
+    summary = (f"기간단위:{period.split()[-1]}({cmp_label}). "
+               f"광고비 {money(ad)}원(비교 {ad_c or '데이터없음'}), "
+               f"계약매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), "
+               f"ROAS {roas:.0f}%, 계약 {n_con}건, "
+               f"문의당비용(CPI) {money(cpi_v)}원, 사건분류 매출1위 {top_cat}.")
+    llm = ai_insight(summary)
+    if llm:
+        body, icol = llm, GOLD_B
+    else:
+        bits = []
+        if ad_p:
+            d = (ad - ad_p) / ad_p * 100
+            bits.append(f"광고비 {abs(d):.0f}% {'증가' if d >= 0 else '감소'}")
+        if rev_p:
+            d = (revenue - rev_p) / rev_p * 100
+            bits.append(f"매출 {abs(d):.0f}% {'증가' if d >= 0 else '감소'}")
+        grade = "효율 우수" if roas >= 300 else ("효율 양호" if roas >= 150 else "효율 점검 필요")
+        msg = " · ".join(bits) if bits else "데이터 집계 중"
+        body = f"{cmp_label} {msg} — ROAS {roas:.0f}% ({grade})"
+        icol = GOLD_B if roas >= 150 else CORAL
+    tag = "AI 분석" if llm else "요약"
     st.markdown(f"""<div class="kb-card" style="border-left:3px solid {icol};padding:14px 18px;margin-bottom:14px;">
-      <i class="fa-solid {icon}" style="color:{icol};margin-right:8px;"></i>
-      <span style="font-size:14px;">{cmp_label} <b style="color:{GOLD_B};">{msg}</b> — ROAS {roas:.0f}% <span style="color:{icol};">({grade})</span></span></div>""",
+      <i class="fa-solid fa-robot" style="color:{icol};margin-right:8px;"></i>
+      <span style="font-size:11px;color:{MUTED};margin-right:6px;">[{tag}]</span>
+      <span style="font-size:14px;">{body}</span></div>""",
       unsafe_allow_html=True)
 
     c = st.columns(4)
@@ -347,6 +412,21 @@ def render_summary():
             adc = sub["총광고비"].sum()
             cpi = adc / inq if inq else 0
             cpa = adc / cont if cont else 0
+            # ✨ 문의당 비용(CPI) 강조 배너 — 광고 효율의 핵심!!! ✨
+            st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
+              display:flex;justify-content:space-between;align-items:center;padding:18px 24px;margin-bottom:14px;">
+              <div>
+                <div style="font-size:12px;color:{MUTED};letter-spacing:1px;">
+                  <i class="fa-solid fa-coins" style="color:{GOLD};margin-right:7px;"></i>문의당 비용 (CPI) · {flabel}</div>
+                <div style="font-family:'Noto Serif KR',serif;font-size:40px;font-weight:600;color:{GOLD_B};margin-top:4px;line-height:1;">
+                  {money(cpi)}<span style="font-size:17px;color:{MUTED};margin-left:2px;">원</span></div>
+                <div style="font-size:11px;color:{MUTED};margin-top:6px;">광고비를 문의 1건당 비용으로 환산 · 낮을수록 효율적</div>
+              </div>
+              <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
+                문의 <b style="color:#E8E6DE;">{inq:.0f}</b>건<br>
+                광고비 <b style="color:#E8E6DE;">{money(adc)}</b>원<br>
+                수임당(CPA) <b style="color:{CORAL};">{money(cpa)}</b>원</div>
+            </div>""", unsafe_allow_html=True)
             st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {flabel} (문의 시트 기준)</div>', unsafe_allow_html=True)
             fc = st.columns([3, 2])
             with fc[0]:
@@ -465,12 +545,13 @@ def render_daily():
     cpi = total_ad / n_inq if n_inq else 0
 
     # KPI
-    c = st.columns(5)
+    c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(total_ad), "원")
     kpi(c[1], "fa-bullseye", "광고 전환", f"{total_conv:.0f}", "건")
-    kpi(c[2], "fa-phone", "문의", f"{n_inq}", "건", desc=f"CPI {money(cpi)}원")
-    kpi(c[3], "fa-file-signature", "계약", f"{n_con}", "건")
-    kpi(c[4], "fa-sack-dollar", "계약금액", money(con_amt), "원")
+    kpi(c[2], "fa-phone", "문의", f"{n_inq}", "건")
+    kpi(c[3], "fa-coins", "문의당 비용", money(cpi), "원", desc="CPI · 핵심지표")
+    kpi(c[4], "fa-file-signature", "계약", f"{n_con}", "건")
+    kpi(c[5], "fa-sack-dollar", "계약금액", money(con_amt), "원")
 
     # 매체별 광고비
     st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 광고</div>', unsafe_allow_html=True)
@@ -521,10 +602,11 @@ def render_ad_tab(media, full):
     raw["date"] = pd.to_datetime(raw["date"])
     dmin, dmax = raw["date"].min().date(), raw["date"].max().date()
 
-    # ── 기간 프리셋 탭 ──
+    # ── 기간 선택 (부드러운 드롭다운) ──
     presets = ["어제", "최근7일(오늘제외)", "이번주", "지난주", "이번달",
                "이번분기", "지난분기", "최근30일", "최근90일", "최근365일", "직접선택"]
-    sel = st.radio("기간", presets, index=4, horizontal=True, key=f"{media}_preset")
+    cpre, _ = st.columns([1, 2])
+    sel = cpre.selectbox("기간", presets, index=4, key=f"{media}_preset")
     if sel == "직접선택":
         c1, c2 = st.columns(2)
         start = c1.date_input("시작일", dmin, min_value=dmin, max_value=dmax, key=f"{media}_s")
@@ -558,6 +640,7 @@ def render_ad_tab(media, full):
     fig.update_layout(yaxis=dict(ticksuffix="만원"),
         yaxis2=dict(overlaying="y", side="right", showgrid=False, title="전환(건)", color="#5BB4C4"),
         legend=dict(orientation="h", y=1.12))
+    thin_xticks(fig, d2.lbl)
     st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
 
     # ── 일자별 상세 표 (전환 포함!!!) ──
@@ -628,8 +711,9 @@ def render_ad_tab(media, full):
 def render_etc():
     st.markdown('<div class="eyebrow">기타 매체 · 카카오모먼트 · 모비온</div>', unsafe_allow_html=True)
     today = date.today()
-    p = st.radio("기간", ["이번달", "지난달", "최근 30일", "올해", "전체"],
-                 index=0, horizontal=True, key="etc_period")
+    cpre, _ = st.columns([1, 2])
+    p = cpre.selectbox("기간", ["이번달", "지난달", "최근 30일", "올해", "전체"],
+                       index=0, key="etc_period")
     if p == "이번달":
         s, e = today.replace(day=1), today
     elif p == "지난달":
@@ -665,6 +749,8 @@ def render_etc():
         f.add_trace(go.Scatter(x=[klabel(d) for d in md.index], y=md.values / 1e4,
                     name=m, mode="lines", line=dict(color=cmap.get(m, CORAL), width=2)))
     f.update_yaxes(ticksuffix="만")
+    alllbl = pd.Series([klabel(d) for d in sorted(df["date"].unique())])
+    thin_xticks(f, alllbl)
     st.plotly_chart(fig_theme(f, 260), use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 요약</div>', unsafe_allow_html=True)
