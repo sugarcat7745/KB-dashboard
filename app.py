@@ -525,33 +525,35 @@ def render_summary():
     nav[0].button("◀ 이전", on_click=shift_anchor, args=(-1,), key=f"sp_{unit}", use_container_width=True)
     nav[2].button("다음 ▶", on_click=shift_anchor, args=(1,), key=f"sn_{unit}",
                   use_container_width=True, disabled=(st.session_state[akey] >= today))
-    sel = nav[1].date_input("기준일", value=st.session_state[akey], max_value=today,
-                            key=f"sda_{unit}", label_visibility="collapsed")
-    if sel != st.session_state[akey]:
-        st.session_state[akey] = sel
-        st.rerun()
     anchor = st.session_state[akey]
 
     if "일간" in period:
         start = end = anchor
         ps = pe = anchor - timedelta(days=1); cmp_label = "전일 대비"
+        plabel = f"{anchor.year}. {anchor.month:02d}. {anchor.day:02d}"
     elif "주간" in period:
         monday = anchor - timedelta(days=anchor.weekday())
         start = monday
         end = min(monday + timedelta(days=6), today)
         ps = monday - timedelta(days=7); pe = monday - timedelta(days=1); cmp_label = "전주 대비"
+        plabel = f"{start.month}/{start.day} ~ {end.month}/{end.day}"
     elif "월간" in period:
         start = date(anchor.year, anchor.month, 1)
         nxt = date(anchor.year + 1, 1, 1) if anchor.month == 12 else date(anchor.year, anchor.month + 1, 1)
         end = min(nxt - timedelta(days=1), today)
         pm_y, pm_m = (anchor.year, anchor.month - 1) if anchor.month > 1 else (anchor.year - 1, 12)
         ps = date(pm_y, pm_m, 1); pe = start - timedelta(days=1); cmp_label = "전월 대비"
+        plabel = f"{anchor.year}년 {anchor.month}월"
     else:
         start = date(anchor.year, 1, 1)
         end = min(date(anchor.year, 12, 31), today)
         ps = date(anchor.year - 1, 1, 1)
         pe = date(anchor.year - 1, today.month, today.day) if anchor.year == today.year else date(anchor.year - 1, 12, 31)
         cmp_label = "전년 대비"
+        plabel = f"{anchor.year}년"
+    nav[1].markdown(f"<div style='text-align:center;font-family:\"Noto Serif KR\",serif;"
+                    f"font-size:20px;font-weight:600;color:{GOLD_B};padding-top:3px;'>{plabel}</div>",
+                    unsafe_allow_html=True)
     st.caption(f"📅 {start} ~ {end}")
 
     # 전매체 광고비 (ad_keyword + ad_etc)
