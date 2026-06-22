@@ -13,6 +13,7 @@ st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖�
 # ══════════════════════════════════════════════
 CONTRACT_SHEET_ID = "1TpgTCEeFkFYBGhzqhA70xtMh6wd18laL0tTLYuc9M6Y"
 AD_SHEET_ID = "1GTrBYugFEUgx4guZNhtIDApR_-GZLhu_TmRldeLT0pY"  # 연간요약(문의)
+INQ_SHEET_ID = "1jvOGtJrkOQSV6qLFmbR72ueB8ebDnmk9C7Z_mNEOeNA"  # 문의 월별탭
 MONTHLY_GOAL = 250_000_000  # 월 목표 2.5억
 BQ_PROJECT, BQ_DATASET = "kb-dashboard-499704", "kb_ads"
 
@@ -157,6 +158,38 @@ def load_annual():
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
+def load_inq_tab(tab_name):
+    try:
+        ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet(tab_name)
+        data = ws.get_all_values()
+        hr = next((i for i, r in enumerate(data) if "문의일자" in r or "문의시간" in r), None)
+        if hr is None: return pd.DataFrame()
+        header = data[hr]; rows = []; last_date = ""
+        for row in data[hr+1:]:
+            if not row or len(row) < 2: continue
+            if str(row[0]).strip() != "1": continue
+            b = str(row[1]).strip()
+            if b.isdigit() and len(b) == 6: last_date = b
+            elif not b: row = list(row); row[1] = last_date
+            padded = list(row) + [""] * (len(header) - len(row))
+            rows.append(padded[:len(header)])
+        if not rows: return pd.DataFrame()
+        df = pd.DataFrame(rows, columns=header)
+        dc = next((c for c in df.columns if "문의일자" in c), None)
+        if dc:
+            df["_dt"] = pd.to_datetime(df[dc].astype(str).str.strip(), format="%y%m%d", errors="coerce")
+            df = df[df["_dt"].notna()]
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+def load_inq_for_date(day):
+    tab = f"{str(day.year)[2:]}.{str(day.month).zfill(2)}"
+    df = load_inq_tab(tab)
+    if df.empty or "_dt" not in df.columns: return pd.DataFrame()
+    return df[df["_dt"].dt.date == day]
+
+@st.cache_data(ttl=300)
 def load_contracts():
     ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
     df = pd.DataFrame(ws.get_all_records())
@@ -229,6 +262,93 @@ def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
     col.markdown(f"""<div class="kpi"><i class="kpi-ic fa-solid {icon}"></i>
       <div class="l">{label}</div><div class="v">{value}<small>{unit}</small></div>
       {chg_html}<div class="d">{desc}</div></div>""", unsafe_allow_html=True)
+
+def render_daily():
+    st.markdown('<div class="eyebrow">일간 요약</div>', unsafe_allow_html=True)
+    con = load_contracts()
+    dmin = con["_date"].min().date()
+    dmax = date.today()
+    if "dday" not in st.session_state:
+        st.session_state.dday = dmax - timedelta(days=1)
+    if st.session_state.dday < dmin: st.session_state.dday = dmin
+    if st.session_state.dday > dmax: st.session_state.dday = dmax
+
+    def shift(n):
+        nd = st.session_state.dday + timedelta(days=n)
+        if dmin <= nd <= dmax: st.session_state.dday = nd
+
+    c1, c2, c3 = st.columns([1, 2, 1])
+    c1.button("◀ 이전날", on_click=shift, args=(-1,), use_container_width=True, key="d_prev")
+    c3.button("다음날 ▶", on_click=shift, args=(1,), use_container_width=True, key="d_next")
+    picked = c2.date_input("날짜", st.session_state.dday, min_value=dmin, max_value=dmax,
+                           label_visibility="collapsed", key="d_pick")
+    if picked != st.session_state.dday:
+        st.session_state.dday = picked
+    day = st.session_state.dday
+    wd = ["월", "화", "수", "목", "금", "토", "일"][day.weekday()]
+    st.markdown(f'<div style="text-align:center;font-family:\'Noto Serif KR\',serif;font-size:26px;'
+                f'font-weight:600;color:{GOLD_B};margin:8px 0 18px;">{day.year}. {day.month:02d}. {day.day:02d} ({wd})</div>',
+                unsafe_allow_html=True)
+
+    # 광고 (그날, 매체별)
+    try:
+        ad = bq(f"SELECT media,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date='{day}' GROUP BY media")
+    except Exception:
+        ad = pd.DataFrame()
+    total_ad = ad.cost.sum() if not ad.empty else 0
+    total_conv = ad.conv.sum() if not ad.empty else 0
+
+    inq = load_inq_for_date(day)
+    n_inq = len(inq)
+    cday = con[con["_date"].dt.date == day]
+    n_con, con_amt = len(cday), cday["_amt"].sum()
+    cpi = total_ad / n_inq if n_inq else 0
+
+    # KPI
+    c = st.columns(5)
+    kpi(c[0], "fa-won-sign", "광고비", money(total_ad), "원")
+    kpi(c[1], "fa-bullseye", "광고 전환", f"{total_conv:.0f}", "건")
+    kpi(c[2], "fa-phone", "문의", f"{n_inq}", "건", desc=f"CPI {money(cpi)}원")
+    kpi(c[3], "fa-file-signature", "계약", f"{n_con}", "건")
+    kpi(c[4], "fa-sack-dollar", "계약금액", money(con_amt), "원")
+
+    # 매체별 광고비
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 광고</div>', unsafe_allow_html=True)
+    if not ad.empty:
+        rows = "".join(f"<tr><td>{r.media}</td><td class='num'>{money(r.cost)}</td><td>{int(r.imp):,}</td>"
+            f"<td>{int(r.clk):,}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in ad.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>매체</th><th>광고비</th><th>노출</th>'
+            f'<th>클릭</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+    else:
+        st.caption("이 날짜의 광고 데이터가 없습니다.")
+
+    # 문의 내용
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-comments"></i> 문의 내용 ({n_inq}건)</div>', unsafe_allow_html=True)
+    if n_inq:
+        name_c = next((c for c in inq.columns if "이름" in c), None)
+        way_c  = next((c for c in inq.columns if "접수" in c or "방식" in c), None)
+        cont_c = next((c for c in inq.columns if "문의내용" in c or "내용" in c), None)
+        rows = ""
+        for _, r in inq.iterrows():
+            nm = r.get(name_c, "") if name_c else ""
+            wy = r.get(way_c, "") if way_c else ""
+            ct = r.get(cont_c, "") if cont_c else ""
+            rows += f"<tr><td>{nm}</td><td>{wy}</td><td style='text-align:left;'>{ct}</td></tr>"
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>이름</th><th>접수방식</th>'
+            f'<th style="text-align:left;">문의내용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+    else:
+        st.caption("이 날짜의 문의가 없습니다.")
+
+    # 계약 내용
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-file-contract"></i> 계약 내역 ({n_con}건)</div>', unsafe_allow_html=True)
+    if n_con:
+        rows = "".join(f"<tr><td>{r._type}</td><td style='text-align:left;'>{r.get('사건','')}</td>"
+            f"<td class='num'>{r._amt:,.0f}원</td><td>{r._inflow}</td></tr>" for _, r in cday.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>계약유형</th><th style="text-align:left;">사건</th>'
+            f'<th>금액</th><th>구분</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+    else:
+        st.caption("이 날짜의 계약이 없습니다.")
 
 def render_ad_tab(media, full):
     st.markdown(f'<div class="eyebrow">{media} 광고 분석</div>', unsafe_allow_html=True)
@@ -354,10 +474,14 @@ def main():
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div></div></div>""", unsafe_allow_html=True)
 
-    tabs = st.tabs(["📊 SUMMARY", "📑 계약", "🟢 네이버", "🔴 구글", "⚪ 기타"])
+    tabs = st.tabs(["📊 SUMMARY", "🗓️ 일간요약", "📑 계약", "🟢 네이버", "🔴 구글", "⚪ 기타"])
+
+    # ────────── 일간요약 탭 ──────────
+    with tabs[1]:
+        render_daily()
 
     # ────────── 계약 탭 (실데이터!!!) ──────────
-    with tabs[1]:
+    with tabs[2]:
         try:
             df = load_contracts()
         except Exception as e:
@@ -499,12 +623,12 @@ def main():
             st.warning(f"데이터 로딩 중: {e}")
 
     # ────────── 네이버 / 구글 탭 (실데이터!!!) ──────────
-    with tabs[2]:
-        render_ad_tab("네이버", full=True)
     with tabs[3]:
+        render_ad_tab("네이버", full=True)
+    with tabs[4]:
         render_ad_tab("구글", full=False)
     # ────────── 기타 탭 ──────────
-    with tabs[4]:
+    with tabs[5]:
         st.markdown("""<div class="placeholder"><i class="fa-solid fa-gear fa-spin"></i>
           <div style="font-size:16px;margin-top:8px;">기타 매체 연동 준비 중</div>
           <div style="font-size:13px;margin-top:6px;">추가 광고 매체 데이터가 들어오면 표시됩니다.</div></div>""",
