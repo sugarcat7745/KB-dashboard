@@ -382,10 +382,8 @@ def render_daily():
     c1, c2, c3 = st.columns([1, 2, 1])
     c1.button("◀ 이전날", on_click=shift, args=(-1,), use_container_width=True, key="d_prev")
     c3.button("다음날 ▶", on_click=shift, args=(1,), use_container_width=True, key="d_next")
-    picked = c2.date_input("날짜", st.session_state.dday, min_value=dmin, max_value=dmax,
-                           label_visibility="collapsed", key="d_pick")
-    if picked != st.session_state.dday:
-        st.session_state.dday = picked
+    c2.date_input("날짜", min_value=dmin, max_value=dmax,
+                  label_visibility="collapsed", key="dday")
     day = st.session_state.dday
     wd = ["월", "화", "수", "목", "금", "토", "일"][day.weekday()]
     st.markdown(f'<div style="text-align:center;font-family:\'Noto Serif KR\',serif;font-size:26px;'
@@ -568,6 +566,60 @@ def render_ad_tab(media, full):
 # ══════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════
+def render_etc():
+    st.markdown('<div class="eyebrow">기타 매체 · 카카오모먼트 · 모비온</div>', unsafe_allow_html=True)
+    today = date.today()
+    p = st.radio("기간", ["이번달", "지난달", "최근 30일", "올해", "전체"],
+                 index=0, horizontal=True, key="etc_period")
+    if p == "이번달":
+        s, e = today.replace(day=1), today
+    elif p == "지난달":
+        e = today.replace(day=1) - timedelta(days=1); s = e.replace(day=1)
+    elif p == "최근 30일":
+        s, e = today - timedelta(days=29), today
+    elif p == "올해":
+        s, e = today.replace(month=1, day=1), today
+    else:
+        s, e = date(2024, 1, 1), today
+    st.caption(f"📅 {s} ~ {e}")
+
+    try:
+        df = bq(f"SELECT date,media,cost,impressions,clicks,conversions "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{s}' AND '{e}' ORDER BY date")
+    except Exception as ex:
+        st.warning(f"기타매체 조회 실패: {ex}"); return
+    if df.empty:
+        st.info("이 기간 기타매체(카카오/모비온) 데이터가 없습니다."); return
+
+    tc, ti, tk, tv = df["cost"].sum(), df["impressions"].sum(), df["clicks"].sum(), df["conversions"].sum()
+    c = st.columns(4)
+    kpi(c[0], "fa-won-sign", "광고비", money(tc), "원")
+    kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "")
+    kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "", desc=f"CTR {tk/ti*100:.2f}%" if ti else "")
+    kpi(c[3], "fa-bolt", "전환", f"{tv:.0f}", "")
+
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비</div>', unsafe_allow_html=True)
+    cmap = {"카카오모먼트": GOLD, "모비온": TEAL}
+    f = go.Figure()
+    for m in df["media"].unique():
+        md = df[df["media"] == m].groupby("date")["cost"].sum()
+        f.add_trace(go.Scatter(x=[klabel(d) for d in md.index], y=md.values / 1e4,
+                    name=m, mode="lines", line=dict(color=cmap.get(m, CORAL), width=2)))
+    f.update_yaxes(ticksuffix="만")
+    st.plotly_chart(fig_theme(f, 260), use_container_width=True, config={"displayModeBar": False})
+
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 요약</div>', unsafe_allow_html=True)
+    g = df.groupby("media").agg(c=("cost", "sum"), i=("impressions", "sum"),
+                                k=("clicks", "sum"), v=("conversions", "sum"))
+    rows = "".join(
+        f"<tr><td>{m}</td><td class='num'>{money(r.c)}</td><td>{int(r.i):,}</td>"
+        f"<td>{int(r.k):,}</td><td class='num'>{r.k/r.i*100:.2f}%</td><td class='num'>{r.v:.0f}</td></tr>"
+        for m, r in g.iterrows())
+    st.markdown(f'<table class="kb-tbl"><thead><tr><th>매체</th><th>광고비</th><th>노출</th>'
+                f'<th>클릭</th><th>CTR</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>',
+                unsafe_allow_html=True)
+
+
 def main():
     logo = get_logo()
     logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#D2AA50;">법무법인 KB</span>'
@@ -686,11 +738,11 @@ def main():
         render_ad_tab("네이버", full=True)
     with tabs[4]:
         render_ad_tab("구글", full=False)
-    # ────────── 기타 탭 ──────────
+    # ────────── 기타 탭 (카카오/모비온) ──────────
     with tabs[5]:
-        st.markdown("""<div class="placeholder"><i class="fa-solid fa-gear fa-spin"></i>
-          <div style="font-size:16px;margin-top:8px;">기타 매체 연동 준비 중</div>
-          <div style="font-size:13px;margin-top:6px;">추가 광고 매체 데이터가 들어오면 표시됩니다.</div></div>""",
-          unsafe_allow_html=True)
+        try:
+            render_etc()
+        except Exception as e:
+            st.warning(f"기타매체 로딩 중: {e}")
 
 main()
