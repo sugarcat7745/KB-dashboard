@@ -309,10 +309,14 @@ def ai_insight(summary, focus="", tab="", period=""):
                 "1) 데이터는 정직하게 — 좋은 흐름도 우려되는 흐름도 사실대로. 과장·왜곡·은폐는 절대 금지.\n"
                 "2) 균형 있게 — 한 지표만 단편적으로 단정하지 말고 연관 지표를 함께 보라. "
                 "특히 광고비 증가를 그 자체로 '낭비'로 단정하지 말고, 매출·문의·ROAS와 함께 평가하라.\n"
-                "3) 건설적으로 — 문제를 짚을 땐 반드시 '개선 방향'을 함께 제시한다. 비난조·감정적 표현은 금지하고 프로페셔널하게.\n"
-                "4) 광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라.\n"
-                "5) 반드시 구체적 숫자를 인용하고, 실행 제안을 한 가지 포함하라.\n"
-                "6) '효율 점검 필요', '양호' 같은 모호한 표현은 금지. 명확하고 간결하게.\n"
+                "3) 건설적으로 — 문제를 짚을 땐 반드시 '개선 방향'을 함께 제시한다. 비난조·감정적 표현은 금지.\n"
+                "4) 차분한 어조 — '급격히 악화', '즉시', '심각한', '위험', '이상 현상', '시급히' 같은 과장되거나 "
+                "자극적인 표현은 절대 쓰지 말 것. 대신 '점검이 필요해 보입니다', '확인을 권장합니다', "
+                "'개선 여지가 있습니다'처럼 침착하고 차분하게 표현한다. CPI가 0이거나 비정상 수치여도 "
+                "'데이터 확인이 필요해 보입니다' 정도로 담담하게 안내한다.\n"
+                "5) 광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라.\n"
+                "6) 반드시 구체적 숫자를 인용하고, 실행 제안을 한 가지 포함하라.\n"
+                "7) 막연히 모호한 표현은 금지. 명확하고 간결하게(2~3문장).\n"
                 + (focus + "\n" if focus else "") + "\n"
                 + summary}],
         )
@@ -324,6 +328,23 @@ def ai_insight(summary, focus="", tab="", period=""):
         return text
     except Exception:
         return None
+
+
+def ai_banner(summary, tab, period, focus=""):
+    """admin 전용 — 각 탭 상단 AI 인사이트 배너 (데이터 기반)."""
+    if st.session_state.get("auth_user") != "admin":
+        return
+    txt = ai_insight(summary, focus, tab=tab, period=period)
+    if not txt:
+        return
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,rgba(210,170,80,.10),rgba(190,150,60,.03));'
+        f'border:1px solid rgba(210,170,80,.25);border-left:3px solid #D2AA50;border-radius:12px;'
+        f'padding:13px 18px;margin:4px 0 16px;font-size:13.5px;line-height:1.65;color:#D8D4CA;">'
+        f'<span style="color:#F0C86E;font-weight:700;white-space:nowrap;">'
+        f'<i class="fa-solid fa-robot"></i> AI 분석</span>&nbsp;&nbsp;{txt}</div>',
+        unsafe_allow_html=True)
+
 
 @st.cache_data(ttl=3600)
 def get_logo():
@@ -1152,6 +1173,13 @@ def render_ad_tab(media, full):
     ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0
     ptc, pti, ptk = pdat.cost.sum(), pdat.imp.sum(), pdat.clk.sum()
     pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
+    # AI 인사이트 (admin)
+    ai_banner(
+        f"매체:{media}. 기간 {sd}~{ed}. 광고비 {tc:,.0f}원(직전 동기간 {ptc:,.0f}원), "
+        f"노출 {ti:,.0f}, 클릭 {tk:,.0f}, CTR {ctr:.2f}%(직전 {pctr:.2f}%), CPC {cpc:,.0f}원(직전 {pcpc:,.0f}원). "
+        f"전환 데이터는 부정확하여 제외함.",
+        f"광고-{media}", f"{sd}~{ed}",
+        focus="이 매체의 광고 효율(CTR·CPC) 흐름과 직전 대비 변화를 차분히 평가하고 개선 방향을 1가지 제안하라.")
     cmp_caption(f"직전 {span}일 대비")
     c = st.columns(5)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
@@ -1267,6 +1295,11 @@ def render_etc():
     pti = pdf["impressions"].sum() if not pdf.empty else 0
     ptk = pdf["clicks"].sum() if not pdf.empty else 0
     pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
+    ai_banner(
+        f"기타매체(카카오/모비온 등). 기간 {s}~{e}. 광고비 {tc:,.0f}원(직전 {ptc:,.0f}원), "
+        f"노출 {ti:,.0f}, 클릭 {tk:,.0f}, CTR {ctr:.2f}%, CPC {cpc:,.0f}원.",
+        "광고-기타", f"{s}~{e}",
+        focus="기타매체 광고 효율을 차분히 평가하고 개선 방향을 1가지 제안하라.")
     cmp_caption(f"직전 {span}일 대비")
     c = st.columns(5)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
@@ -1327,6 +1360,12 @@ def render_inquiries():
     pstart, pend = start - timedelta(days=span), start - timedelta(days=1)
     inqp = inq[(inq["date"].dt.date >= pstart) & (inq["date"].dt.date <= pend)]
     p_total = len(inqp); p_sang = int(inqp["consulted"].sum()); p_suim = int(inqp["contracted"].sum())
+    s_rate = suim/total*100 if total else 0
+    ai_banner(
+        f"문의 분석. 기간 {start}~{end}. 문의 {total}건(직전 {p_total}건), 상담 {sangdam}건(직전 {p_sang}건), "
+        f"수임 {suim}건(직전 {p_suim}건). 수임전환율 {s_rate:.1f}%. ",
+        "문의", f"{start}~{end}",
+        focus="문의→상담→수임 퍼널의 전환 흐름을 차분히 평가하고, 어느 단계를 개선하면 좋을지 1가지 제안하라.")
     cmp_caption(f"직전 {span}일 대비")
     c = st.columns(3)
     kpi(c[0], "fa-phone", "문의", f"{total:,}", "건", *delta_str(total, p_total, "cnt"))
@@ -1656,6 +1695,14 @@ def main():
             cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
             cf_new = cf[cf["_is_new"]]
             cfn_sum = cf_new["_amt"].sum(); cfd_sum = cf["_amt"].sum() - cfn_sum
+            byt = cf_new.groupby("_type")["_amt"].sum().sort_values(ascending=False)
+            type_str = ", ".join(f"{t} {v:,.0f}원" for t, v in byt.head(6).items())
+            ai_banner(
+                f"계약 매출 분석. 기간 {cs}~{ce}. 신건매출 {cfn_sum:,.0f}원({len(cf_new)}건), "
+                f"파생매출 {cfd_sum:,.0f}원. 신건 사건유형별: {type_str}. "
+                f"신건 건당 평균 {(cfn_sum/len(cf_new) if len(cf_new) else 0):,.0f}원.",
+                "계약", f"{cs}~{ce}",
+                focus="신건 매출 구성과 사건유형별 비중을 차분히 평가하고, 매출 확대를 위한 제안을 1가지 제시하라.")
             pc = st.columns(4)
             kpi(pc[0], "fa-sack-dollar", "기간 신건매출", won(cfn_sum), desc=f"{cs} ~ {ce}")
             kpi(pc[1], "fa-file-signature", "기간 신건계약", f"{len(cf_new):,}", "건", desc=f"전체 {len(cf):,}건")
