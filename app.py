@@ -140,6 +140,10 @@ def get_bq():
 def bq(sql):
     return get_bq().query(sql).to_dataframe()
 
+def bq_fresh(sql):
+    """캐시 없이 즉시 조회 — 로그처럼 방금 쌓인 내역이 바로 보여야 하는 곳 전용."""
+    return get_bq().query(sql).to_dataframe()
+
 def get_client_ip():
     """클라이언트 IP 추출. Streamlit Cloud(프록시 뒤)에서는 unknown일 수 있음 — best effort."""
     try:
@@ -1568,7 +1572,7 @@ def render_admin_log():
     # ── 로그인 이력 ──
     st.markdown('<div class="sec-title"><i class="fa-solid fa-right-to-bracket"></i> 로그인 이력</div>', unsafe_allow_html=True)
     try:
-        ldf = bq(f"SELECT ts,user,ip FROM `{BQ_PROJECT}.{BQ_DATASET}.login_log` ORDER BY ts DESC LIMIT 200")
+        ldf = bq_fresh(f"SELECT ts,user,ip FROM `{BQ_PROJECT}.{BQ_DATASET}.login_log` ORDER BY ts DESC LIMIT 200")
     except Exception:
         ldf = pd.DataFrame()
     if ldf.empty:
@@ -1586,7 +1590,7 @@ def render_admin_log():
     # ── AI 사용 로그 ──
     st.markdown('<div class="sec-title"><i class="fa-solid fa-robot"></i> AI 사용 로그</div>', unsafe_allow_html=True)
     try:
-        df = bq(f"SELECT ts,user,tab,period,insight,input_tokens,output_tokens,est_cost_krw "
+        df = bq_fresh(f"SELECT ts,user,tab,period,insight,input_tokens,output_tokens,est_cost_krw "
                 f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ai_usage_log` ORDER BY ts DESC LIMIT 200")
     except Exception:
         st.caption("아직 AI 사용 로그가 없습니다. (AI 인사이트가 실제 호출되면 기록됩니다.)")
