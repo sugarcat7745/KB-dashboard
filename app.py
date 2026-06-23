@@ -15,6 +15,14 @@ except ImportError:
 
 st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖️", layout="wide")
 
+try:
+    from streamlit_float import float_init, float_css_helper
+    float_init()
+    HAS_FLOAT = True
+except Exception:
+    HAS_FLOAT = False
+
+
 # ══════════════════════════════════════════════
 # 상수
 # ══════════════════════════════════════════════
@@ -1852,42 +1860,38 @@ def main():
         except Exception as e:
             st.warning(f"기타매체 로딩 중: {e}")
 
-    # 우측 하단 플로팅 AI 챗 (admin 전용)
     render_floating_chat()
 
 
 def render_floating_chat():
-    """우측 하단 동그란 FAB → 클릭 시 채팅 패널 (admin 전용). CSS :has() 기반."""
-    if st.session_state.get("auth_user") != "admin":
+    """streamlit-float 기반 우측 하단 플로팅 AI 챗 (admin 전용)."""
+    if not HAS_FLOAT or st.session_state.get("auth_user") != "admin":
         return
     st.session_state.setdefault("fab_open", False)
     st.session_state.setdefault("fab_hist", [])
 
-    if not st.session_state.fab_open:
-        with st.container():
-            st.markdown('<div id="fab-anchor-btn"></div>', unsafe_allow_html=True)
-            if st.button("💬", key="fab_open_btn", help="AI에게 질문하기"):
-                st.session_state.fab_open = True
-                st.rerun()
-        st.markdown("""<style>
-          div[data-testid="stVerticalBlock"]:has(> div #fab-anchor-btn){
-            position:fixed!important; bottom:26px; right:26px; width:62px!important; z-index:99990;
-          }
-          div[data-testid="stVerticalBlock"]:has(> div #fab-anchor-btn) button{
-            width:62px!important; height:62px!important; border-radius:50%!important; font-size:25px!important;
-            background:#D2AA50!important; color:#1a1a17!important; border:none!important;
-            box-shadow:0 6px 22px rgba(210,170,80,.55)!important; padding:0!important;
-          }
-        </style>""", unsafe_allow_html=True)
-    else:
-        with st.container():
-            st.markdown('<div id="fab-anchor-panel"></div>', unsafe_allow_html=True)
-            h = st.columns([5, 1])
-            h[0].markdown('<div style="font-weight:700;color:#D2AA50;font-size:15px;padding-top:5px;">'
-                          '<i class="fa-solid fa-robot"></i> AI 질의</div>', unsafe_allow_html=True)
-            if h[1].button("✕", key="fab_close"):
+    # ── 동그란 FAB 버튼 (항상 표시) ──
+    btn_c = st.container()
+    with btn_c:
+        if st.session_state.fab_open:
+            if st.button("✕", key="fab_close"):
                 st.session_state.fab_open = False
                 st.rerun()
+        else:
+            if st.button("💬", key="fab_open_btn"):
+                st.session_state.fab_open = True
+                st.rerun()
+    btn_c.float(float_css_helper(
+        width="3.6rem", right="1.8rem", bottom="1.8rem",
+        css="height:3.6rem; background:#D2AA50; border-radius:50%; padding:0; "
+            "box-shadow:0 6px 22px rgba(210,170,80,.55); z-index:99990;"))
+
+    # ── 채팅 패널 (열렸을 때) ──
+    if st.session_state.fab_open:
+        panel = st.container()
+        with panel:
+            st.markdown('<div style="font-weight:700;color:#D2AA50;font-size:15px;margin-bottom:10px;">'
+                        '<i class="fa-solid fa-robot"></i> AI 질의</div>', unsafe_allow_html=True)
             q = st.text_input("질문", key="fab_q", label_visibility="collapsed",
                               placeholder="데이터에 대해 물어보세요…")
             if st.button("전송", key="fab_send", use_container_width=True, type="primary") and q and q.strip():
@@ -1904,17 +1908,15 @@ def render_floating_chat():
                         f'border-radius:12px 12px 12px 2px;padding:8px 12px;display:inline-block;font-size:12.5px;'
                         f'color:#D8D4CA;line-height:1.55;max-width:92%;">{answer}</span></div>')
             if box:
-                st.markdown(f'<div style="max-height:300px;overflow-y:auto;margin-top:6px;padding-right:4px;">{box}</div>',
+                st.markdown(f'<div style="max-height:260px;overflow-y:auto;margin-top:6px;">{box}</div>',
                             unsafe_allow_html=True)
             else:
-                st.caption("궁금한 점을 입력해보세요. 예: \"올해 형사 매출 얼마야?\"")
-        st.markdown("""<style>
-          div[data-testid="stVerticalBlock"]:has(> div #fab-anchor-panel){
-            position:fixed!important; bottom:26px; right:26px; width:380px!important; max-height:82vh; z-index:99990;
-            background:#14130f; border:1px solid rgba(210,170,80,.4); border-radius:18px;
-            padding:16px 18px!important; box-shadow:0 14px 44px rgba(0,0,0,.65); overflow-y:auto;
-          }
-        </style>""", unsafe_allow_html=True)
+                st.caption('예: "올해 형사 매출 얼마야?"')
+        panel.float(float_css_helper(
+            width="min(86vw, 380px)", right="1.8rem", bottom="6rem",
+            css="background:#14130f; border:1px solid rgba(210,170,80,.4); border-radius:18px; "
+                "padding:16px 18px; box-shadow:0 14px 44px rgba(0,0,0,.65); max-height:76vh; "
+                "overflow-y:auto; z-index:99989;"))
 
 
 main()
