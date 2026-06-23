@@ -210,31 +210,37 @@ def log_ai_usage(user, tab, period, insight, usage):
 
 @st.cache_data(ttl=300)
 def build_data_context():
-    """AI 질의용 데이터 요약 컨텍스트 (집계값만 — 로우데이터 전체 노출 없이 안전)."""
+    """AI 질의용 데이터 요약 컨텍스트 (전체 연도 집계 — 연도 비교 가능, 로우데이터 미노출)."""
     con = load_contracts()
     ann = load_annual()
     today = date.today()
-    P = [f"기준일: {today}"]
+    P = [f"기준일: {today} (오늘까지 발생한 실데이터 기준)"]
     if not con.empty:
+        # 연도별 총매출 (신건/파생)
+        for yr in sorted([y for y in con["_y"].unique() if str(y) not in ("nan", "")]):
+            yc = con[con["_y"] == yr]
+            tot = yc["_amt"].sum(); new = yc[yc["_is_new"]]["_amt"].sum()
+            P.append(f"[{yr}년 계약매출] 전체 {tot:,.0f}원 (신건 {new:,.0f}원 / 파생 {tot-new:,.0f}원)")
+        # 올해 사건유형별 + 월별
         cy = con[con["_y"] == str(today.year)]
         if not cy.empty:
-            tot = cy["_amt"].sum(); new = cy[cy["_is_new"]]["_amt"].sum()
-            P.append(f"[계약매출·올해] 전체 {tot:,.0f}원 (신건 {new:,.0f}원 / 파생 {tot-new:,.0f}원)")
             bt = cy[cy["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=False)
-            P.append("올해 신건 사건유형별 매출: " + "; ".join(f"{t} {v:,.0f}원" for t, v in bt.head(12).items()))
+            P.append(f"{today.year}년 신건 사건유형별 매출: " + "; ".join(f"{t} {v:,.0f}원" for t, v in bt.head(12).items()))
             mm = cy[cy["_is_new"]].groupby("_m")["_amt"].sum()
-            P.append("올해 월별 신건매출: " + "; ".join(f"{int(m)}월 {v:,.0f}원" for m, v in mm.items()))
-            mip = cy[cy["_unpaid"] > 0]["_unpaid"].sum() if "_unpaid" in cy.columns else 0
-            P.append(f"올해 미수금 합계: {mip:,.0f}원")
+            P.append(f"{today.year}년 월별 신건매출: " + "; ".join(f"{int(m)}월 {v:,.0f}원" for m, v in mm.items()))
     if not ann.empty:
-        ay = ann[ann["연도"] == str(today.year)]
-        if not ay.empty:
-            P.append("올해 월별 광고비·문의·상담·수임: " + "; ".join(
+        # 전체 연도 월별 광고비·문의·상담·수임 (연도 비교용)
+        for yr in sorted([y for y in ann["연도"].unique() if str(y) not in ("nan", "")]):
+            ay = ann[ann["연도"] == yr]
+            if ay.empty:
+                continue
+            P.append(f"[{yr}년 광고·문의 월별] " + "; ".join(
                 f"{r['월']} 광고비{int(r['총광고비']):,}원/문의{int(r['문의'])}건/상담{int(r['상담'])}건/수임{int(r['수임'])}건"
                 for _, r in ay.iterrows()))
     P.append("[정의] 신건=온라인 광고로 유입된 신규 고객 / 파생=기존 고객의 재의뢰. 매출 기준은 기본보수액. "
              "사건유형(형사·민사·이혼 등)은 '계약' 분류이고, 광고 카테고리(교통·성범죄 등)와는 별개 체계임. "
-             "광고 전환수는 부정확하여 대시보드에서 제외함(광고비·노출·클릭·CPI만 신뢰).")
+             "광고 전환수는 부정확하여 대시보드에서 제외함(광고비·노출·클릭·CPI만 신뢰). "
+             "데이터가 특정 연·월까지만 있으면 그 범위만 답하고, 없는 기간은 '데이터에 없다'고 안내할 것.")
     return "\n".join(P)
 
 
@@ -251,9 +257,11 @@ def ai_chat_answer(question, context):
         m = client.messages.create(
             model="claude-haiku-4-5-20251001", max_tokens=700,
             messages=[{"role": "user", "content":
-                "너는 법무법인 광고·매출 대시보드의 데이터 분석 도우미다. "
-                "아래 [데이터]만을 근거로 사용자 질문에 한국어로 친절하고 간결하게 답하라. "
-                "데이터에 없는 내용은 '제공된 데이터에는 없습니다'라고 솔직히 밝히고, "
+                "너는 법무법인 KB 광고·매출 대시보드의 데이터 분석 도우미다. "
+                "대화 상대는 'KB 담당자님'이다. 항상 'KB 담당자님'이라고 정중히 호칭하고, "
+                "시종일관 깍듯하고 공손한 존댓말로 응대하라. "
+                "아래 [데이터]만을 근거로 질문에 한국어로 친절하고 간결하게 답하라. "
+                "데이터에 없는 내용은 'KB 담당자님, 해당 정보는 제공된 데이터에 없습니다'처럼 솔직히 밝히고, "
                 "추정이 필요하면 추정임을 명시하라. 숫자는 데이터 기준으로 정확히 인용하라.\n\n"
                 f"[데이터]\n{context}\n\n[질문]\n{question}"}])
         ans = m.content[0].text.strip()
