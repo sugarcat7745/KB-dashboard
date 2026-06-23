@@ -309,7 +309,7 @@ def ai_insight(summary, focus="", tab="", period=""):
         client = anthropic.Anthropic(api_key=key)
         m = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=260,
+            max_tokens=320,
             messages=[{"role": "user", "content":
                 "너는 법무법인 광고·매출 대시보드의 전문 분석가다. 보고 대상은 법무법인 대표다. "
                 "아래 숫자를 근거로 핵심 인사이트를 한국어 1~2문장으로 작성하라.\n"
@@ -324,7 +324,10 @@ def ai_insight(summary, focus="", tab="", period=""):
                 "'데이터 확인이 필요해 보입니다' 정도로 담담하게 안내한다.\n"
                 "5) 광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라.\n"
                 "6) 반드시 구체적 숫자를 인용하고, 실행 제안을 한 가지 포함하라.\n"
-                "7) 막연히 모호한 표현은 금지. 명확하고 간결하게(2~3문장).\n"
+                "7) 막연히 모호한 표현은 금지. 명확하고 간결하게.\n"
+                "8) 출력 형식 — 반드시 1~2문장의 '순수 텍스트'로만 작성하라. 마크다운 제목(#), "
+                "목록(•, -, 1.), 굵은 글씨(**), '리포트'·'핵심 인사이트'·'구체적 평가' 같은 제목이나 "
+                "구획 표시는 절대 쓰지 말 것. 한 단락의 자연스러운 문장으로만 답하라.\n"
                 + (focus + "\n" if focus else "") + "\n"
                 + summary}],
         )
@@ -1870,28 +1873,27 @@ def render_floating_chat():
     st.session_state.setdefault("fab_open", False)
     st.session_state.setdefault("fab_hist", [])
 
-    # ── 동그란 FAB 버튼 (항상 표시) ──
-    btn_c = st.container()
-    with btn_c:
-        if st.session_state.fab_open:
-            if st.button("✕", key="fab_close"):
-                st.session_state.fab_open = False
-                st.rerun()
-        else:
+    if not st.session_state.fab_open:
+        # ── 닫힘: 동그란 FAB 버튼만 ──
+        btn_c = st.container()
+        with btn_c:
             if st.button("💬", key="fab_open_btn"):
                 st.session_state.fab_open = True
                 st.rerun()
-    btn_c.float(float_css_helper(
-        width="3.6rem", right="1.8rem", bottom="1.8rem",
-        css="height:3.6rem; background:#D2AA50; border-radius:50%; padding:0; "
+        btn_c.float(float_css_helper(
+            width="3.6rem", height="3.6rem", right="1.8rem", bottom="1.8rem",
+            background="#D2AA50", css="border-radius:50%; padding:0; "
             "box-shadow:0 6px 22px rgba(210,170,80,.55); z-index:99990;"))
-
-    # ── 채팅 패널 (열렸을 때) ──
-    if st.session_state.fab_open:
+    else:
+        # ── 열림: 채팅 패널만 (헤더에 닫기 버튼) ──
         panel = st.container()
         with panel:
-            st.markdown('<div style="font-weight:700;color:#D2AA50;font-size:15px;margin-bottom:10px;">'
-                        '<i class="fa-solid fa-robot"></i> AI 질의</div>', unsafe_allow_html=True)
+            h = st.columns([5, 1])
+            h[0].markdown('<div style="font-weight:700;color:#D2AA50;font-size:15px;padding-top:5px;">'
+                          '<i class="fa-solid fa-robot"></i> AI 질의</div>', unsafe_allow_html=True)
+            if h[1].button("✕", key="fab_close"):
+                st.session_state.fab_open = False
+                st.rerun()
             q = st.text_input("질문", key="fab_q", label_visibility="collapsed",
                               placeholder="데이터에 대해 물어보세요…")
             if st.button("전송", key="fab_send", use_container_width=True, type="primary") and q and q.strip():
@@ -1913,10 +1915,10 @@ def render_floating_chat():
             else:
                 st.caption('예: "올해 형사 매출 얼마야?"')
         panel.float(float_css_helper(
-            width="min(86vw, 380px)", right="1.8rem", bottom="6rem",
-            css="background:#14130f; border:1px solid rgba(210,170,80,.4); border-radius:18px; "
-                "padding:16px 18px; box-shadow:0 14px 44px rgba(0,0,0,.65); max-height:76vh; "
-                "overflow-y:auto; z-index:99989;"))
+            width="min(86vw, 380px)", right="1.8rem", bottom="1.8rem",
+            background="#14130f", border="1px solid rgba(210,170,80,.4)",
+            css="border-radius:18px; padding:16px 18px; box-shadow:0 14px 44px rgba(0,0,0,.65); "
+                "max-height:78vh; overflow-y:auto; z-index:99990;"))
 
 
 main()
