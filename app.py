@@ -1127,7 +1127,8 @@ def render_ad_tab(media, full):
     if raw.empty:
         st.info(f"{media} 데이터가 없습니다."); return
     raw["date"] = pd.to_datetime(raw["date"])
-    dmin, dmax = raw["date"].min().date(), raw["date"].max().date()
+    dmin = raw["date"].min().date()
+    dmax = date.today()   # 달력 기준 통일: 기준일=오늘 (어제=달력상 어제). 하한만 데이터 최소일.
     start, end = period_selector(media, dmin, dmax, default="지난 7일")
     d = raw[(raw["date"].dt.date >= start) & (raw["date"].dt.date <= end)]
     sd, ed = str(start), str(end)
@@ -1236,9 +1237,10 @@ def render_etc():
     today = date.today()
     try:
         rng = bq(f"SELECT MIN(date) mn, MAX(date) mx FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc`")
-        dmin = pd.to_datetime(rng["mn"].iloc[0]).date(); dmax = pd.to_datetime(rng["mx"].iloc[0]).date()
+        dmin = pd.to_datetime(rng["mn"].iloc[0]).date()
     except Exception:
-        dmin, dmax = date(2024, 1, 1), today
+        dmin = date(2024, 1, 1)
+    dmax = today   # 달력 기준 통일: 기준일=오늘
     s, e = period_selector("etc", dmin, dmax, default="지난 7일")
 
     try:
