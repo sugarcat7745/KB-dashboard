@@ -15,13 +15,6 @@ except ImportError:
 
 st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖️", layout="wide")
 
-try:
-    from streamlit_float import float_init, float_css_helper
-    float_init()
-    HAS_FLOAT = True
-except Exception:
-    HAS_FLOAT = False
-
 
 # ══════════════════════════════════════════════
 # 상수
@@ -1627,6 +1620,153 @@ def render_admin_log():
                     unsafe_allow_html=True)
 
 
+
+
+def render_contracts():
+    try:
+        df = load_contracts()
+    except Exception as e:
+        st.error(f"계약서 시트를 읽지 못했습니다: {e}")
+        df = None
+
+    if df is not None and len(df):
+        tab_header("fa-file-contract", "계약 매출 분석", "신건 · 파생 · 입금 · 미수금")
+
+        cmin, cmax = df["_date"].min().date(), df["_date"].max().date()
+        cs, ce = period_selector("con", cmin, cmax, default="올해")
+        cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
+        cf_new = cf[cf["_is_new"]]
+        cfn_sum = cf_new["_amt"].sum(); cfd_sum = cf["_amt"].sum() - cfn_sum
+        byt = cf_new.groupby("_type")["_amt"].sum().sort_values(ascending=False)
+        type_str = ", ".join(f"{t} {v:,.0f}원" for t, v in byt.head(6).items())
+        ai_banner(
+            f"계약 매출 분석. 기간 {cs}~{ce}. 신건매출 {cfn_sum:,.0f}원({len(cf_new)}건), "
+            f"파생매출 {cfd_sum:,.0f}원. 신건 사건유형별: {type_str}. "
+            f"신건 건당 평균 {(cfn_sum/len(cf_new) if len(cf_new) else 0):,.0f}원.",
+            "계약", f"{cs}~{ce}",
+            focus="신건 매출 구성과 사건유형별 비중을 차분히 평가하고, 매출 확대를 위한 제안을 1가지 제시하라.")
+        pc = st.columns(4)
+        kpi(pc[0], "fa-sack-dollar", "기간 신건매출", won(cfn_sum), desc=f"{cs} ~ {ce}")
+        kpi(pc[1], "fa-file-signature", "기간 신건계약", f"{len(cf_new):,}", "건", desc=f"전체 {len(cf):,}건")
+        kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum), desc="참고용")
+        kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(cfn_sum/len(cf_new)/1e4 if len(cf_new) else 0):.0f}", "만", desc="신건 건당")
+        if len(cf):
+            with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
+                rows = "".join(
+                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td><td>{r['_type']}</td>"
+                    f"<td>{'신건' if r['_is_new'] else '파생'}</td><td class='num'>{money(r['_amt'])}</td>"
+                    f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
+                    for _, r in cf.sort_values("_date").iterrows())
+                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>유형</th>'
+                            f'<th>구분</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        else:
+            st.caption("이 기간 계약이 없습니다.")
+
+        # ════ 대단락: 연간 누적 분석 ════
+        st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 연간 누적 분석</div>', unsafe_allow_html=True)
+        this_y = datetime.now().year
+        this_ym = datetime.now().strftime("%Y-%m")
+        cur = df[df["_y"] == this_y]
+        prev = df[df["_y"] == this_y - 1]
+
+        cur_new = cur[cur["_is_new"]]
+        new_sum = cur_new["_amt"].sum()                 # 신건 누적 (메인 기준!!!)
+        deriv_sum = cur["_amt"].sum() - new_sum          # 파생(참고용)
+        cur_cnt, new_cnt = len(cur), len(cur_new)
+        # 전년 동기(같은 월까지) — 신건 기준 비교
+        max_m = cur["_m"].max() if len(cur) else 0
+        prev_new_same = prev[(prev["_m"] <= max_m) & prev["_is_new"]]
+        yoy = ((new_sum - prev_new_same["_amt"].sum()) / prev_new_same["_amt"].sum() * 100
+               if prev_new_same["_amt"].sum() else 0)
+        new_ratio = new_sum / (new_sum + deriv_sum) * 100 if (new_sum + deriv_sum) else 0
+        avg_amt = new_sum / new_cnt if new_cnt else 0    # 신건 평균
+        month_new = df[(df["_ym"] == this_ym) & df["_is_new"]]["_amt"].sum()  # 신건 이번달
+
+        c = st.columns(6)
+        kpi(c[0], "fa-sack-dollar", f"{this_y} 신건 누적", won(new_sum),
+            chg=f"{'▲' if yoy>=0 else '▼'} {abs(yoy):.1f}%", chg_dir="up" if yoy>=0 else "down", desc="전년 동기 대비(신건)")
+        kpi(c[1], "fa-file-signature", "신건 계약", f"{new_cnt:,}", "건", desc=f"전체 {cur_cnt:,}건")
+        kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum), desc="참고용 · 재의뢰")
+        kpi(c[3], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만", desc="건당")
+        kpi(c[4], "fa-calendar-check", "이번 달 신건", won(month_new),
+            chg=f"{month_new/MONTHLY_GOAL*100:.0f}%", desc="목표 2.5억 대비")
+        kpi(c[5], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%", desc="전체 매출 중")
+
+        # ── 입금 현황 + 미수금 (전체 기간) ──
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
+        t_amt, t_paid, t_unpaid = df["_amt"].sum(), df["_paid"].sum(), df["_unpaid"].sum()
+        rate = t_paid / t_amt * 100 if t_amt else 0
+        ci = st.columns(3)
+        kpi(ci[0], "fa-circle-check", "입금 완료", money(t_paid), "원", desc=f"수금률 {rate:.1f}%")
+        kpi(ci[1], "fa-circle-exclamation", "미수금", money(t_unpaid), "원",
+            chg=f"{t_unpaid/t_amt*100:.1f}%" if t_amt else None, chg_dir="down", desc="아직 못 받은 돈")
+        kpi(ci[2], "fa-percent", "수금률", f"{rate:.1f}", "%", desc="입금 ÷ 기본보수")
+
+        # 미수금 리스트 (클릭하면 펼침)
+        unpaid = df[df["_unpaid"] > 0].sort_values("_unpaid", ascending=False)
+        with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원  (클릭하여 펼치기)"):
+            if unpaid.empty:
+                st.success("미수금이 없습니다! 전액 수금 완료!")
+            else:
+                rows = "".join(
+                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%Y-%m-%d')}</td>"
+                    f"<td class='num'>{money(r['_amt'])}</td><td class='num'>{money(r['_paid'])}</td>"
+                    f"<td class='num' style='color:{CORAL};font-weight:600;'>{money(r['_unpaid'])}</td></tr>"
+                    for _, r in unpaid.iterrows())
+                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th>'
+                    f'<th>기본보수</th><th>입금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>',
+                    unsafe_allow_html=True)
+
+        st.write("")
+        # 월별 추세 (YoY)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
+        years = sorted(df["_y"].unique())
+        colors = {years[-1]: GOLD}
+        if len(years) >= 2: colors[years[-2]] = TEAL
+        if len(years) >= 3: colors[years[-3]] = GRAY
+        fig = go.Figure()
+        for y in years[-3:]:
+            yd = df[(df["_y"] == y) & df["_is_new"]].groupby("_m")["_amt"].sum()
+            vals = [yd.get(m, None) for m in range(1, 13)]
+            vals = [v/1e8 if v else None for v in vals]
+            dash = "dash" if y == years[-3] and len(years) >= 3 else "solid"
+            fig.add_trace(go.Scatter(
+                x=[f"{m}월" for m in range(1, 13)], y=vals, name=str(y),
+                mode="lines+markers", line=dict(color=colors.get(y, GRAY), dash=dash, width=2),
+                connectgaps=False))
+        fig.update_yaxes(ticksuffix="억")
+        st.plotly_chart(fig_theme(fig), use_container_width=True, config={"displayModeBar": False})
+
+        cc = st.columns(2)
+        # 신건/파생 도넛
+        with cc[0]:
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 신건 vs 파생</div>', unsafe_allow_html=True)
+            fig2 = go.Figure(go.Pie(labels=["신건", "파생"], values=[new_sum, deriv_sum],
+                hole=0.62, marker=dict(colors=[GOLD, GRAY]), textinfo="label+percent"))
+            st.plotly_chart(fig_theme(fig2, 230), use_container_width=True, config={"displayModeBar": False})
+        # 계약유형별 (전체기간)
+        with cc[1]:
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 신건 매출 (전체기간)</div>', unsafe_allow_html=True)
+            tg = df[df["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=True).tail(6)
+            fig3 = go.Figure(go.Bar(x=tg.values/1e8, y=tg.index, orientation="h",
+                marker=dict(color=GOLD)))
+            fig3.update_xaxes(ticksuffix="억")
+            st.plotly_chart(fig_theme(fig3, 230), use_container_width=True, config={"displayModeBar": False})
+
+        # 계약유형 × 연도 표
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 계약유형별 신건 매출 (연도별)</div>', unsafe_allow_html=True)
+        pv = df[df["_is_new"]].pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
+        pv["합계"] = pv.sum(axis=1)
+        pv = pv.sort_values("합계", ascending=False)
+        ys = [c for c in pv.columns if c != "합계"]
+        rows = ""
+        for typ, row in pv.iterrows():
+            tds = "".join(f"<td>{won(row[y])}</td>" for y in ys)
+            rows += f"<tr><td>{typ}</td>{tds}<td class='num'>{won(row['합계'])}</td></tr>"
+        head = "".join(f"<th>{y}</th>" for y in ys)
+        st.markdown(f"""<table class="kb-tbl"><thead><tr><th>계약유형</th>{head}<th>합계</th></tr></thead>
+          <tbody>{rows}</tbody></table>""", unsafe_allow_html=True)
+
 def main():
     # ── 로그인 게이트 ──
     if not st.session_state.get("auth_user"):
@@ -1674,251 +1814,47 @@ def main():
             st.session_state.pop(k, None)
         st.rerun()
 
-    # AI 기능(질의·로그)은 아직 관리자 전용
-    tab_labels = ["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"]
-    if user == "admin":
-        tab_labels.append("🤖 AI 질의")
-        tab_labels.append("🛡️ AI로그")
-    tabs = st.tabs(tab_labels)
-    if user == "admin":
-        with tabs[7]:
-            render_ai_chat()
-        with tabs[8]:
-            render_admin_log()
+    is_admin = (user == "admin")
+    top_labels = ["📊 요약", "📈 광고", "💼 실적"] + (["🤖 AI"] if is_admin else [])
+    top = st.tabs(top_labels)
 
-    # ────────── 일간요약 탭 ──────────
-    with tabs[1]:
-        render_daily()
-
-    # ────────── 계약 탭 (실데이터!!!) ──────────
-    with tabs[2]:
-        try:
-            df = load_contracts()
-        except Exception as e:
-            st.error(f"계약서 시트를 읽지 못했습니다: {e}")
-            df = None
-
-        if df is not None and len(df):
-            tab_header("fa-file-contract", "계약 매출 분석", "신건 · 파생 · 입금 · 미수금")
-
-            cmin, cmax = df["_date"].min().date(), df["_date"].max().date()
-            cs, ce = period_selector("con", cmin, cmax, default="올해")
-            cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
-            cf_new = cf[cf["_is_new"]]
-            cfn_sum = cf_new["_amt"].sum(); cfd_sum = cf["_amt"].sum() - cfn_sum
-            byt = cf_new.groupby("_type")["_amt"].sum().sort_values(ascending=False)
-            type_str = ", ".join(f"{t} {v:,.0f}원" for t, v in byt.head(6).items())
-            ai_banner(
-                f"계약 매출 분석. 기간 {cs}~{ce}. 신건매출 {cfn_sum:,.0f}원({len(cf_new)}건), "
-                f"파생매출 {cfd_sum:,.0f}원. 신건 사건유형별: {type_str}. "
-                f"신건 건당 평균 {(cfn_sum/len(cf_new) if len(cf_new) else 0):,.0f}원.",
-                "계약", f"{cs}~{ce}",
-                focus="신건 매출 구성과 사건유형별 비중을 차분히 평가하고, 매출 확대를 위한 제안을 1가지 제시하라.")
-            pc = st.columns(4)
-            kpi(pc[0], "fa-sack-dollar", "기간 신건매출", won(cfn_sum), desc=f"{cs} ~ {ce}")
-            kpi(pc[1], "fa-file-signature", "기간 신건계약", f"{len(cf_new):,}", "건", desc=f"전체 {len(cf):,}건")
-            kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum), desc="참고용")
-            kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(cfn_sum/len(cf_new)/1e4 if len(cf_new) else 0):.0f}", "만", desc="신건 건당")
-            if len(cf):
-                with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
-                    rows = "".join(
-                        f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td><td>{r['_type']}</td>"
-                        f"<td>{'신건' if r['_is_new'] else '파생'}</td><td class='num'>{money(r['_amt'])}</td>"
-                        f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
-                        for _, r in cf.sort_values("_date").iterrows())
-                    st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>유형</th>'
-                                f'<th>구분</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-            else:
-                st.caption("이 기간 계약이 없습니다.")
-
-            # ════ 대단락: 연간 누적 분석 ════
-            st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 연간 누적 분석</div>', unsafe_allow_html=True)
-            this_y = datetime.now().year
-            this_ym = datetime.now().strftime("%Y-%m")
-            cur = df[df["_y"] == this_y]
-            prev = df[df["_y"] == this_y - 1]
-
-            cur_new = cur[cur["_is_new"]]
-            new_sum = cur_new["_amt"].sum()                 # 신건 누적 (메인 기준!!!)
-            deriv_sum = cur["_amt"].sum() - new_sum          # 파생(참고용)
-            cur_cnt, new_cnt = len(cur), len(cur_new)
-            # 전년 동기(같은 월까지) — 신건 기준 비교
-            max_m = cur["_m"].max() if len(cur) else 0
-            prev_new_same = prev[(prev["_m"] <= max_m) & prev["_is_new"]]
-            yoy = ((new_sum - prev_new_same["_amt"].sum()) / prev_new_same["_amt"].sum() * 100
-                   if prev_new_same["_amt"].sum() else 0)
-            new_ratio = new_sum / (new_sum + deriv_sum) * 100 if (new_sum + deriv_sum) else 0
-            avg_amt = new_sum / new_cnt if new_cnt else 0    # 신건 평균
-            month_new = df[(df["_ym"] == this_ym) & df["_is_new"]]["_amt"].sum()  # 신건 이번달
-
-            c = st.columns(6)
-            kpi(c[0], "fa-sack-dollar", f"{this_y} 신건 누적", won(new_sum),
-                chg=f"{'▲' if yoy>=0 else '▼'} {abs(yoy):.1f}%", chg_dir="up" if yoy>=0 else "down", desc="전년 동기 대비(신건)")
-            kpi(c[1], "fa-file-signature", "신건 계약", f"{new_cnt:,}", "건", desc=f"전체 {cur_cnt:,}건")
-            kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum), desc="참고용 · 재의뢰")
-            kpi(c[3], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만", desc="건당")
-            kpi(c[4], "fa-calendar-check", "이번 달 신건", won(month_new),
-                chg=f"{month_new/MONTHLY_GOAL*100:.0f}%", desc="목표 2.5억 대비")
-            kpi(c[5], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%", desc="전체 매출 중")
-
-            # ── 입금 현황 + 미수금 (전체 기간) ──
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
-            t_amt, t_paid, t_unpaid = df["_amt"].sum(), df["_paid"].sum(), df["_unpaid"].sum()
-            rate = t_paid / t_amt * 100 if t_amt else 0
-            ci = st.columns(3)
-            kpi(ci[0], "fa-circle-check", "입금 완료", money(t_paid), "원", desc=f"수금률 {rate:.1f}%")
-            kpi(ci[1], "fa-circle-exclamation", "미수금", money(t_unpaid), "원",
-                chg=f"{t_unpaid/t_amt*100:.1f}%" if t_amt else None, chg_dir="down", desc="아직 못 받은 돈")
-            kpi(ci[2], "fa-percent", "수금률", f"{rate:.1f}", "%", desc="입금 ÷ 기본보수")
-
-            # 미수금 리스트 (클릭하면 펼침)
-            unpaid = df[df["_unpaid"] > 0].sort_values("_unpaid", ascending=False)
-            with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원  (클릭하여 펼치기)"):
-                if unpaid.empty:
-                    st.success("미수금이 없습니다! 전액 수금 완료!")
-                else:
-                    rows = "".join(
-                        f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%Y-%m-%d')}</td>"
-                        f"<td class='num'>{money(r['_amt'])}</td><td class='num'>{money(r['_paid'])}</td>"
-                        f"<td class='num' style='color:{CORAL};font-weight:600;'>{money(r['_unpaid'])}</td></tr>"
-                        for _, r in unpaid.iterrows())
-                    st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th>'
-                        f'<th>기본보수</th><th>입금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>',
-                        unsafe_allow_html=True)
-
-            st.write("")
-            # 월별 추세 (YoY)
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
-            years = sorted(df["_y"].unique())
-            colors = {years[-1]: GOLD}
-            if len(years) >= 2: colors[years[-2]] = TEAL
-            if len(years) >= 3: colors[years[-3]] = GRAY
-            fig = go.Figure()
-            for y in years[-3:]:
-                yd = df[(df["_y"] == y) & df["_is_new"]].groupby("_m")["_amt"].sum()
-                vals = [yd.get(m, None) for m in range(1, 13)]
-                vals = [v/1e8 if v else None for v in vals]
-                dash = "dash" if y == years[-3] and len(years) >= 3 else "solid"
-                fig.add_trace(go.Scatter(
-                    x=[f"{m}월" for m in range(1, 13)], y=vals, name=str(y),
-                    mode="lines+markers", line=dict(color=colors.get(y, GRAY), dash=dash, width=2),
-                    connectgaps=False))
-            fig.update_yaxes(ticksuffix="억")
-            st.plotly_chart(fig_theme(fig), use_container_width=True, config={"displayModeBar": False})
-
-            cc = st.columns(2)
-            # 신건/파생 도넛
-            with cc[0]:
-                st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 신건 vs 파생</div>', unsafe_allow_html=True)
-                fig2 = go.Figure(go.Pie(labels=["신건", "파생"], values=[new_sum, deriv_sum],
-                    hole=0.62, marker=dict(colors=[GOLD, GRAY]), textinfo="label+percent"))
-                st.plotly_chart(fig_theme(fig2, 230), use_container_width=True, config={"displayModeBar": False})
-            # 계약유형별 (전체기간)
-            with cc[1]:
-                st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 신건 매출 (전체기간)</div>', unsafe_allow_html=True)
-                tg = df[df["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=True).tail(6)
-                fig3 = go.Figure(go.Bar(x=tg.values/1e8, y=tg.index, orientation="h",
-                    marker=dict(color=GOLD)))
-                fig3.update_xaxes(ticksuffix="억")
-                st.plotly_chart(fig_theme(fig3, 230), use_container_width=True, config={"displayModeBar": False})
-
-            # 계약유형 × 연도 표
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 계약유형별 신건 매출 (연도별)</div>', unsafe_allow_html=True)
-            pv = df[df["_is_new"]].pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
-            pv["합계"] = pv.sum(axis=1)
-            pv = pv.sort_values("합계", ascending=False)
-            ys = [c for c in pv.columns if c != "합계"]
-            rows = ""
-            for typ, row in pv.iterrows():
-                tds = "".join(f"<td>{won(row[y])}</td>" for y in ys)
-                rows += f"<tr><td>{typ}</td>{tds}<td class='num'>{won(row['합계'])}</td></tr>"
-            head = "".join(f"<th>{y}</th>" for y in ys)
-            st.markdown(f"""<table class="kb-tbl"><thead><tr><th>계약유형</th>{head}<th>합계</th></tr></thead>
-              <tbody>{rows}</tbody></table>""", unsafe_allow_html=True)
-
-    # ────────── SUMMARY 탭 (일간/주간/월간/년간 토글) ──────────
-    with tabs[0]:
-        tab_header("fa-chart-pie", "전 매체 통합 요약", "광고비 · 매출 · ROAS · 문의 종합")
-        try:
+    with top[0]:
+        v = st.radio("보기", ["통합 요약", "일자별 요약"], horizontal=True,
+                     label_visibility="collapsed", key="nav_sum")
+        if v == "통합 요약":
             render_summary()
-        except Exception as e:
-            st.warning(f"데이터 로딩 중: {e}")
+        else:
+            render_daily()
 
-    # ────────── 문의 탭 ──────────
-    with tabs[3]:
-        try:
+    with top[1]:
+        m = st.radio("매체", ["네이버", "구글", "기타"], horizontal=True,
+                     label_visibility="collapsed", key="nav_ad")
+        if m == "네이버":
+            render_ad_tab("네이버", full=True)
+        elif m == "구글":
+            render_ad_tab("구글", full=False)
+        else:
+            try:
+                render_etc()
+            except Exception as e:
+                st.warning(f"기타매체 로딩 중: {e}")
+
+    with top[2]:
+        p = st.radio("구분", ["계약", "문의"], horizontal=True,
+                     label_visibility="collapsed", key="nav_perf")
+        if p == "계약":
+            render_contracts()
+        else:
             render_inquiries()
-        except Exception as e:
-            st.warning(f"문의 데이터 로딩 중: {e}")
 
-    # ────────── 네이버 / 구글 탭 (실데이터!!!) ──────────
-    with tabs[4]:
-        render_ad_tab("네이버", full=True)
-    with tabs[5]:
-        render_ad_tab("구글", full=False)
-    # ────────── 기타 탭 (카카오/모비온) ──────────
-    with tabs[6]:
-        try:
-            render_etc()
-        except Exception as e:
-            st.warning(f"기타매체 로딩 중: {e}")
-
-    render_floating_chat()
-
-
-def render_floating_chat():
-    """streamlit-float 기반 우측 하단 플로팅 AI 챗 (admin 전용)."""
-    if not HAS_FLOAT or st.session_state.get("auth_user") != "admin":
-        return
-    st.session_state.setdefault("fab_open", False)
-    st.session_state.setdefault("fab_hist", [])
-
-    if not st.session_state.fab_open:
-        # ── 닫힘: 동그란 FAB 버튼만 ──
-        btn_c = st.container()
-        with btn_c:
-            if st.button("💬", key="fab_open_btn"):
-                st.session_state.fab_open = True
-                st.rerun()
-        btn_c.float(float_css_helper(
-            width="3.6rem", height="3.6rem", right="1.8rem", bottom="1.8rem",
-            background="#D2AA50", css="border-radius:50%; padding:0; "
-            "box-shadow:0 6px 22px rgba(210,170,80,.55); z-index:99990;"))
-    else:
-        # ── 열림: 채팅 패널만 (헤더에 닫기 버튼) ──
-        panel = st.container()
-        with panel:
-            h = st.columns([5, 1])
-            h[0].markdown('<div style="font-weight:700;color:#D2AA50;font-size:15px;padding-top:5px;">'
-                          '<i class="fa-solid fa-robot"></i> AI 질의</div>', unsafe_allow_html=True)
-            if h[1].button("✕", key="fab_close"):
-                st.session_state.fab_open = False
-                st.rerun()
-            q = st.text_input("질문", key="fab_q", label_visibility="collapsed",
-                              placeholder="데이터에 대해 물어보세요…")
-            if st.button("전송", key="fab_send", use_container_width=True, type="primary") and q and q.strip():
-                with st.spinner("AI가 분석 중…"):
-                    ctx = build_data_context()
-                    ans = ai_chat_answer(q.strip(), ctx)
-                st.session_state.fab_hist.insert(0, (q.strip(), ans))
-            box = ""
-            for question, answer in st.session_state.fab_hist[:6]:
-                box += (f'<div style="text-align:right;margin:9px 0 4px;"><span style="background:rgba(210,170,80,.18);'
-                        f'border:1px solid rgba(210,170,80,.3);border-radius:12px 12px 2px 12px;padding:7px 12px;'
-                        f'display:inline-block;font-size:12.5px;color:#E8E4DA;max-width:88%;text-align:left;">{question}</span></div>'
-                        f'<div style="margin:0 0 8px;"><span style="background:#1f1f1c;border:1px solid #2c2c28;'
-                        f'border-radius:12px 12px 12px 2px;padding:8px 12px;display:inline-block;font-size:12.5px;'
-                        f'color:#D8D4CA;line-height:1.55;max-width:92%;">{answer}</span></div>')
-            if box:
-                st.markdown(f'<div style="max-height:260px;overflow-y:auto;margin-top:6px;">{box}</div>',
-                            unsafe_allow_html=True)
+    if is_admin:
+        with top[3]:
+            a = st.radio("AI", ["AI 질의", "AI 로그"], horizontal=True,
+                         label_visibility="collapsed", key="nav_ai")
+            if a == "AI 질의":
+                render_ai_chat()
             else:
-                st.caption('예: "올해 형사 매출 얼마야?"')
-        panel.float(float_css_helper(
-            width="min(86vw, 380px)", right="1.8rem", bottom="1.8rem",
-            background="#14130f", border="1px solid rgba(210,170,80,.4)",
-            css="border-radius:18px; padding:16px 18px; box-shadow:0 14px 44px rgba(0,0,0,.65); "
-                "max-height:78vh; overflow-y:auto; z-index:99990;"))
+                render_admin_log()
 
 
 main()
