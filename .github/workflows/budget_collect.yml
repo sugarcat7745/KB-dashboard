@@ -1,0 +1,37 @@
+name: 캠페인 예산·소진 수집
+
+on:
+  schedule:
+    # KST 09~24시 매시 정각 수집 (실시간 소진 흐름) — UTC 기준 0~15시
+    - cron: '0 0-15 * * *'
+  workflow_dispatch:   # 수동 실행 버튼도 제공 (Actions 탭에서 ▶ 클릭)
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설치
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 라이브러리 설치
+        run: pip install requests pandas google-cloud-bigquery db-dtypes pyarrow
+
+      - name: GCP 서비스계정 키 생성
+        run: echo '${{ secrets.GCP_SA_KEY }}' > credentials.json
+
+      - name: 캠페인 예산 수집 실행
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          GOOGLE_APPLICATION_CREDENTIALS: credentials.json
+        run: python KB_캠페인예산_수집.py
+
+      - name: 키 파일 정리
+        if: always()
+        run: rm -f credentials.json
