@@ -139,8 +139,38 @@ def get_bq():
 def bq(sql):
     return get_bq().query(sql).to_dataframe()
 
+def log_ai_usage(user, tab, period, insight, usage):
+    """AI 실제 호출(토큰 소모) 시 BigQuery에 사용 로그 적재. 캐시 히트는 호출 안 되므로 자동 제외."""
+    try:
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.ai_usage_log"
+        schema = [
+            bigquery.SchemaField("ts", "TIMESTAMP"),
+            bigquery.SchemaField("user", "STRING"),
+            bigquery.SchemaField("tab", "STRING"),
+            bigquery.SchemaField("period", "STRING"),
+            bigquery.SchemaField("insight", "STRING"),
+            bigquery.SchemaField("input_tokens", "INTEGER"),
+            bigquery.SchemaField("output_tokens", "INTEGER"),
+            bigquery.SchemaField("est_cost_krw", "FLOAT"),
+        ]
+        client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
+        it = int(getattr(usage, "input_tokens", 0) or 0)
+        ot = int(getattr(usage, "output_tokens", 0) or 0)
+        # Haiku 추정 단가(입력 $1 / 출력 $5 per 1M) × 환율 1,400 — 어디까지나 추정치
+        cost = round((it * 1.0 + ot * 5.0) / 1_000_000 * 1400, 2)
+        client.insert_rows_json(tid, [{
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": user, "tab": tab, "period": period,
+            "insight": (insight or "")[:400],
+            "input_tokens": it, "output_tokens": ot, "est_cost_krw": cost,
+        }])
+    except Exception:
+        pass
+
 @st.cache_data(ttl=1800)
-def ai_insight(summary, focus=""):
+def ai_insight(summary, focus="", tab="", period=""):
     """대시보드 데이터를 Claude에게 보내 진짜 인사이트 한 줄을 받음. 실패하면 None."""
     if not HAS_ANTHROPIC:
         return None
@@ -152,17 +182,27 @@ def ai_insight(summary, focus=""):
         client = anthropic.Anthropic(api_key=key)
         m = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=220,
+            max_tokens=260,
             messages=[{"role": "user", "content":
-                "너는 법무법인 광고·매출 대시보드를 보는 데이터 분석가다. 아래 숫자를 근거로 "
-                "대표에게 보고할 핵심 인사이트를 한국어 1~2문장으로 작성하라. "
-                "광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라. "
-                + (focus + " " if focus else "") +
-                "반드시 구체적 숫자를 인용하고, '무엇을 해야 하는지' 실행 제안을 한 가지 포함하라. "
-                "'효율 점검 필요', '양호' 같은 뻔하고 모호한 표현은 금지. 날카롭고 간결하게.\n\n"
+                "너는 법무법인 광고·매출 대시보드의 전문 분석가다. 보고 대상은 법무법인 대표다. "
+                "아래 숫자를 근거로 핵심 인사이트를 한국어 1~2문장으로 작성하라.\n"
+                "[작성 원칙]\n"
+                "1) 데이터는 정직하게 — 좋은 흐름도 우려되는 흐름도 사실대로. 과장·왜곡·은폐는 절대 금지.\n"
+                "2) 균형 있게 — 한 지표만 단편적으로 단정하지 말고 연관 지표를 함께 보라. "
+                "특히 광고비 증가를 그 자체로 '낭비'로 단정하지 말고, 매출·전환·ROAS와 함께 평가하라.\n"
+                "3) 건설적으로 — 문제를 짚을 땐 반드시 '개선 방향'을 함께 제시한다. 비난조·감정적 표현은 금지하고 프로페셔널하게.\n"
+                "4) 광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라.\n"
+                "5) 반드시 구체적 숫자를 인용하고, 실행 제안을 한 가지 포함하라.\n"
+                "6) '효율 점검 필요', '양호' 같은 모호한 표현은 금지. 명확하고 간결하게.\n"
+                + (focus + "\n" if focus else "") + "\n"
                 + summary}],
         )
-        return m.content[0].text.strip()
+        text = m.content[0].text.strip()
+        try:
+            log_ai_usage(st.session_state.get("auth_user", "익명"), tab, period, text, m.usage)
+        except Exception:
+            pass
+        return text
     except Exception:
         return None
 
@@ -628,7 +668,7 @@ def render_summary():
         "월간": "이 리포트는 '월간'이다. 월 목표 2.5억 달성 페이스와 남은 기간 전망을 중심으로 보라.",
         "년간": "이 리포트는 '연간'이다. 전년 대비 추세와 사건분류 의존도(다각화) 관점으로 크게 보라.",
     }
-    llm = ai_insight(summary, focus_map.get(unit, ""))
+    llm = ai_insight(summary, focus_map.get(unit, ""), tab="SUMMARY", period=plabel)
     if llm:
         body, icol = llm, GOLD_B
     else:
@@ -1260,7 +1300,84 @@ def render_inquiries():
         st.caption("💡 이름을 검색하면 그 사람의 문의 이력 + 계약 + 미수금을 한 화면에서 대조합니다.")
 
 
+def render_login():
+    logo = get_logo()
+    logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:60px;margin-bottom:18px;">'
+                 if logo else '<div class="serif" style="font-size:28px;color:#D2AA50;margin-bottom:18px;">법무법인 KB</div>')
+    c1, c2, c3 = st.columns([1, 1.2, 1])
+    with c2:
+        st.markdown(f'<div style="text-align:center;padding:40px 0 10px;">{logo_html}'
+                    f'<div class="serif" style="font-size:22px;color:#E8E4DA;">광고·매출 통합 대시보드</div>'
+                    f'<div style="font-size:13px;color:#8a8a82;margin-top:6px;">로그인이 필요합니다</div></div>',
+                    unsafe_allow_html=True)
+        uid = st.text_input("아이디", key="login_id", placeholder="아이디")
+        pw = st.text_input("비밀번호", type="password", key="login_pw", placeholder="비밀번호")
+        if st.button("로그인", use_container_width=True, type="primary"):
+            try:
+                users = dict(st.secrets["users"])
+            except Exception:
+                users = {}
+            if uid in users and str(users[uid]) == pw:
+                st.session_state["auth_user"] = uid
+                st.rerun()
+            else:
+                st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+        st.caption("계정 문의는 대행사 담당자에게 요청하세요.")
+
+
+def render_admin_log():
+    """관리자(admin) 전용 — AI 사용 로그 + 토큰/비용 집계."""
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-robot"></i> AI 사용 로그 (관리자)</div>', unsafe_allow_html=True)
+    try:
+        df = bq(f"SELECT ts,user,tab,period,insight,input_tokens,output_tokens,est_cost_krw "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ai_usage_log` ORDER BY ts DESC LIMIT 200")
+    except Exception:
+        st.caption("아직 AI 사용 로그가 없습니다. (AI 인사이트가 실제 호출되면 기록됩니다.)")
+        return
+    if df.empty:
+        st.caption("아직 AI 사용 로그가 없습니다.")
+        return
+    tot_in = int(df["input_tokens"].sum()); tot_out = int(df["output_tokens"].sum())
+    tot_cost = float(df["est_cost_krw"].sum()); n_call = len(df)
+    k = st.columns(4)
+    kpi(k[0], "fa-bolt", "AI 호출", f"{n_call}", "회")
+    kpi(k[1], "fa-arrow-down", "입력 토큰", f"{tot_in:,}", "")
+    kpi(k[2], "fa-arrow-up", "출력 토큰", f"{tot_out:,}", "")
+    kpi(k[3], "fa-won-sign", "누적 추정비용", f"{tot_cost:,.0f}", "원")
+    st.caption("※ 비용은 Haiku 추정 단가 기준의 참고치입니다.")
+    # 사용자별 집계
+    by = df.groupby("user").agg(호출=("ts", "size"), 입력=("input_tokens", "sum"),
+                                출력=("output_tokens", "sum"), 비용=("est_cost_krw", "sum")).reset_index()
+    cols = ["계정", "호출(회)", "입력토큰", "출력토큰", "추정비용(원)"]
+    rows = [[(r["user"], r["user"]), (str(int(r["호출"])), int(r["호출"])),
+             (f'{int(r["입력"]):,}', int(r["입력"])), (f'{int(r["출력"]):,}', int(r["출력"])),
+             (f'{r["비용"]:,.0f}', r["비용"])] for _, r in by.iterrows()]
+    sortable_table(cols, rows, height=min(320, 70 + len(rows) * 38))
+    # 최근 호출 내역
+    with st.expander(f"📜 최근 호출 내역 — {n_call}건"):
+        rr = "".join(f"<tr><td>{r.ts}</td><td>{r.user}</td><td>{r.tab}</td><td>{r.period}</td>"
+                     f"<td style='text-align:left;'>{str(r.insight)[:60]}…</td>"
+                     f"<td class='num'>{int(r.input_tokens)}/{int(r.output_tokens)}</td></tr>"
+                     for _, r in df.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>시각</th><th>계정</th><th>탭</th><th>기간</th>'
+                    f'<th style="text-align:left;">인사이트</th><th>토큰(in/out)</th></tr></thead><tbody>{rr}</tbody></table>',
+                    unsafe_allow_html=True)
+
+
 def main():
+    # ── 로그인 게이트 ──
+    if not st.session_state.get("auth_user"):
+        render_login()
+        return
+    user = st.session_state["auth_user"]
+    # 사이드바: 계정 정보 + 로그아웃
+    with st.sidebar:
+        st.markdown(f"**👤 {user}**" + ("  ·  🛡️ 관리자" if user == "admin" else ""))
+        if st.button("로그아웃", use_container_width=True):
+            for k in ("auth_user", "login_id", "login_pw"):
+                st.session_state.pop(k, None)
+            st.rerun()
+
     logo = get_logo()
     logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#D2AA50;">법무법인 KB</span>'
     today = datetime.now().strftime("%Y. %m. %d")
@@ -1281,7 +1398,14 @@ def main():
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div>{live}</div></div>""", unsafe_allow_html=True)
 
-    tabs = st.tabs(["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"])
+    # 관리자면 AI 사용 로그 탭 추가
+    tab_labels = ["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"]
+    if user == "admin":
+        tab_labels.append("🛡️ AI로그")
+    tabs = st.tabs(tab_labels)
+    if user == "admin":
+        with tabs[-1]:
+            render_admin_log()
 
     # ────────── 일간요약 탭 ──────────
     with tabs[1]:
