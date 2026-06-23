@@ -1,0 +1,27 @@
+name: collect-naver-master-weekly
+
+on:
+  schedule:
+    - cron: "0 20 * * 0"   # UTC 일요일 20:00 = KST 월요일 05:00 (주1회)
+  workflow_dispatch: {}
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install requests google-cloud-bigquery pandas pyarrow db-dtypes
+
+      - name: Run master collector
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
+        run: python collect_naver_master.py
