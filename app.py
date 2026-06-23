@@ -1319,8 +1319,9 @@ def render_inquiries():
     con = load_contracts()
     ann = load_annual()
 
-    # ── 기간 선택 (네이버/구글 탭과 동일) ──
-    imin, imax = inq["date"].min().date(), inq["date"].max().date()
+    # ── 기간 선택 (달력 기준 통일: 기준일=오늘, 하한만 데이터 최소일) ──
+    imin = inq["date"].min().date()
+    imax = date.today()
     start, end = period_selector("inq", imin, imax, default="올해")
     inqf = inq[(inq["date"].dt.date >= start) & (inq["date"].dt.date <= end)]
 
@@ -1632,7 +1633,8 @@ def render_contracts():
     if df is not None and len(df):
         tab_header("fa-file-contract", "계약 매출 분석", "신건 · 파생 · 입금 · 미수금")
 
-        cmin, cmax = df["_date"].min().date(), df["_date"].max().date()
+        cmin = df["_date"].min().date()
+        cmax = date.today()   # 달력 기준 통일: 기준일=오늘
         cs, ce = period_selector("con", cmin, cmax, default="올해")
         cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
         cf_new = cf[cf["_is_new"]]
