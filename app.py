@@ -773,7 +773,8 @@ def render_summary():
         "월간": "이 리포트는 '월간'이다. 월 목표 2.5억 달성 페이스와 남은 기간 전망을 중심으로 보라.",
         "년간": "이 리포트는 '연간'이다. 전년 대비 추세와 사건분류 의존도(다각화) 관점으로 크게 보라.",
     }
-    llm = ai_insight(summary, focus_map.get(unit, ""), tab="SUMMARY", period=plabel)
+    is_admin = st.session_state.get("auth_user") == "admin"
+    llm = ai_insight(summary, focus_map.get(unit, ""), tab="SUMMARY", period=plabel) if is_admin else None
     if llm:
         body, icol = llm, GOLD_B
     else:
@@ -1550,15 +1551,16 @@ def main():
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div>{live}</div></div>""", unsafe_allow_html=True)
 
-    # 관리자면 AI 사용 로그 탭 추가
-    tab_labels = ["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타", "🤖 AI 질의"]
+    # AI 기능(질의·로그)은 아직 관리자 전용
+    tab_labels = ["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"]
     if user == "admin":
+        tab_labels.append("🤖 AI 질의")
         tab_labels.append("🛡️ AI로그")
     tabs = st.tabs(tab_labels)
-    with tabs[7]:
-        render_ai_chat()
     if user == "admin":
-        with tabs[-1]:
+        with tabs[7]:
+            render_ai_chat()
+        with tabs[8]:
             render_admin_log()
 
     # ────────── 일간요약 탭 ──────────
