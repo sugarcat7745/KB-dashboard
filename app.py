@@ -706,62 +706,14 @@ def tab_header(icon_fa, title, sub, color="#D2AA50", rgb="210,170,80"):
 def render_summary():
     con = load_contracts()
     today = date.today()
-    period = st.radio("기간", ["🗓️ 일간", "📆 주간", "📅 월간", "📈 년간"],
-                      index=2, horizontal=True, key="sum_period")
-
-    unit = period.split()[-1]
-    akey = f"sum_anchor_{unit}"
-    if akey not in st.session_state:
-        st.session_state[akey] = today
-    def shift_anchor(n):
-        a = st.session_state[akey]
-        if "일간" in period:
-            na = a + timedelta(days=n)
-        elif "주간" in period:
-            na = a + timedelta(weeks=n)
-        elif "월간" in period:
-            m, y = a.month + n, a.year
-            while m < 1: m += 12; y -= 1
-            while m > 12: m -= 12; y += 1
-            na = date(y, m, min(a.day, 28))
-        else:
-            na = date(a.year + n, a.month, min(a.day, 28))
-        st.session_state[akey] = min(na, today)
-
-    nav = st.columns([1, 2, 1])
-    nav[0].button("◀ 이전", on_click=shift_anchor, args=(-1,), key=f"sp_{unit}", use_container_width=True)
-    nav[2].button("다음 ▶", on_click=shift_anchor, args=(1,), key=f"sn_{unit}",
-                  use_container_width=True, disabled=(st.session_state[akey] >= today))
-    anchor = st.session_state[akey]
-
-    if "일간" in period:
-        start = end = anchor
-        ps = pe = anchor - timedelta(days=1); cmp_label = "전일 대비"
-        plabel = f"{anchor.year}. {anchor.month:02d}. {anchor.day:02d}"
-    elif "주간" in period:
-        monday = anchor - timedelta(days=anchor.weekday())
-        start = monday
-        end = min(monday + timedelta(days=6), today)
-        ps = monday - timedelta(days=7); pe = monday - timedelta(days=1); cmp_label = "전주 대비"
-        plabel = f"{start.month}/{start.day} ~ {end.month}/{end.day}"
-    elif "월간" in period:
-        start = date(anchor.year, anchor.month, 1)
-        nxt = date(anchor.year + 1, 1, 1) if anchor.month == 12 else date(anchor.year, anchor.month + 1, 1)
-        end = min(nxt - timedelta(days=1), today)
-        pm_y, pm_m = (anchor.year, anchor.month - 1) if anchor.month > 1 else (anchor.year - 1, 12)
-        ps = date(pm_y, pm_m, 1); pe = start - timedelta(days=1); cmp_label = "전월 대비"
-        plabel = f"{anchor.year}년 {anchor.month}월"
-    else:
-        start = date(anchor.year, 1, 1)
-        end = min(date(anchor.year, 12, 31), today)
-        ps = date(anchor.year - 1, 1, 1)
-        pe = date(anchor.year - 1, today.month, today.day) if anchor.year == today.year else date(anchor.year - 1, 12, 31)
-        cmp_label = "전년 대비"
-        plabel = f"{anchor.year}년"
-    nav[1].markdown(f"<div style='text-align:center;font-family:\"Noto Serif KR\",serif;"
-                    f"font-size:20px;font-weight:600;color:{GOLD_B};padding-top:3px;'>{plabel}</div>",
-                    unsafe_allow_html=True)
-    st.caption(f"📅 {start} ~ {end}")
+    dmin = date(today.year - 1, 1, 1)
+    start, end = period_selector("sum", dmin, today, default="올해")
+    # 직전 동일 길이 기간 (광고·실적 탭과 동일 비교 방식)
+    span = (end - start).days + 1
+    ps, pe = start - timedelta(days=span), start - timedelta(days=1)
+    cmp_label = f"직전 {span}일 대비"
+    plabel = f"{start} ~ {end}"
+    st.caption(f"📅 {start} ~ {end} · {cmp_label}")
 
     # 전매체 광고비 (ad_keyword + ad_etc)
     def spend(s, e):
@@ -783,7 +735,7 @@ def render_summary():
     ad, ad_p = spend(start, end), spend(ps, pe)
     # 📊 대표님 요청: 매출에 파생사건 포함/제외 토글 (기본=순수 신건만)
     include_deriv = st.toggle("파생사건 포함 매출 보기", value=False,
-                              key=f"deriv_{unit}",
+                              key="deriv_sum",
                               help="끄면 순수 온라인 신건 매출만(기본), 켜면 신건+파생 합산 매출")
     new_only = not include_deriv
     revenue, rev_p = rev(start, end, new_only), rev(ps, pe, new_only)
@@ -814,14 +766,11 @@ def render_summary():
                f"신건매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), 파생매출(참고) {money(deriv)}원, "
                f"ROAS {roas:.0f}%, 신건계약 {n_con}건, "
                f"문의당비용(CPI) {money(cpi_v)}원, 사건분류 매출1위 {top_cat}.")
-    focus_map = {
-        "일간": "이 리포트는 '어제 하루'다. 특정 매체 광고비 급변이나 문의 급감 같은 그날의 이상 신호를 우선 짚어라.",
-        "주간": "이 리포트는 '주간'이다. 요일별 흐름과 지난주 대비 변화에 집중하라.",
-        "월간": "이 리포트는 '월간'이다. 월 목표 2.5억 달성 페이스와 남은 기간 전망을 중심으로 보라.",
-        "년간": "이 리포트는 '연간'이다. 전년 대비 추세와 사건분류 의존도(다각화) 관점으로 크게 보라.",
-    }
     is_admin = st.session_state.get("auth_user") == "admin"
-    llm = ai_insight(summary, focus_map.get(unit, ""), tab="SUMMARY", period=plabel) if is_admin else None
+    focus = (f"이 리포트의 기간은 {plabel}이며 직전 동일 길이 기간과 비교한다. "
+             "광고비·매출·문의·ROAS의 기간 대비 변화를 차분히 평가하고, "
+             "월 목표 2.5억 달성 페이스와 사건분류 의존도(다각화) 관점을 함께 짚어라.")
+    llm = ai_insight(summary, focus, tab="SUMMARY", period=plabel) if is_admin else None
     if llm:
         body, icol = llm, GOLD_B
     else:
