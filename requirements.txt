@@ -1,4 +1,5 @@
 streamlit
+streamlit-float
 gspread
 google-auth
 google-auth-httplib2
