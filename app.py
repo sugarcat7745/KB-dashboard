@@ -180,6 +180,21 @@ def clean_num(s):
     except: return 0.0
 
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=120)
+def load_budget(day=None):
+    """캠페인 예산/소진 스냅샷. day 지정시 그날 마지막 스냅샷, 없으면 전체 최신."""
+    try:
+        tbl = f"`{BQ_PROJECT}.{BQ_DATASET}.ad_budget`"
+        if day:
+            sub = f"WHERE date='{day}' AND collected_at=(SELECT MAX(collected_at) FROM {tbl} WHERE date='{day}')"
+        else:
+            sub = f"WHERE collected_at=(SELECT MAX(collected_at) FROM {tbl})"
+        return bq(f"SELECT campaign_name,daily_budget,total_charge_cost,remaining,status,"
+                  f"use_daily_budget,collected_at,date FROM {tbl} {sub} ORDER BY daily_budget DESC")
+    except Exception:
+        return pd.DataFrame()
+
+
 def load_annual():
     try:
         ws = get_gc().open_by_key(AD_SHEET_ID).worksheet("연간요약")
@@ -867,6 +882,36 @@ def render_daily():
     rows = rows[::-1]  # 최신 날짜 먼저
     sortable_table(columns, rows, height=min(480, 70 + len(rows) * 38))
 
+    # ── 캠페인별 예산 대비 소진 (운영중만! OFF 제외) — ad_budget 기준 ──
+    bud = load_budget(day=e)
+    if not bud.empty:
+        bud = bud[bud["status"] != "PAUSED"]   # 🔴 OFF(중지) 캠페인은 그날 제외!!!
+    if not bud.empty:
+        try:
+            snap = pd.to_datetime(bud["collected_at"].iloc[0])
+            stamp = f"{snap:%m/%d %H:%M} 기준"
+        except Exception:
+            stamp = ""
+        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 캠페인별 예산 대비 소진 '
+                    f'<span style="color:#8a8a82;font-size:12px;font-weight:400;">(운영중 · {stamp})</span></div>',
+                    unsafe_allow_html=True)
+        rows_html = ""
+        for _, r in bud.iterrows():
+            db = int(r.daily_budget or 0); tc = int(r.total_charge_cost or 0)
+            if bool(r.use_daily_budget) and db > 0:
+                pct = min(tc / db * 100, 100)
+                color = CORAL if pct >= 90 else (GOLD_B if pct >= 70 else GOLD)
+                gauge = (f'<div style="flex:1;background:#26261f;border-radius:5px;height:9px;overflow:hidden;">'
+                         f'<div style="width:{pct:.0f}%;background:{color};height:100%;"></div></div>')
+                info = f'{money(tc)} / {money(db)} <b style="color:{color};">{pct:.0f}%</b>'
+            else:
+                gauge = '<div style="flex:1;color:#777;font-size:11px;padding-left:2px;">예산 무제한</div>'
+                info = f'{money(tc)} 소진'
+            rows_html += (f'<div style="display:flex;align-items:center;gap:14px;padding:8px 0;border-bottom:1px solid #232320;">'
+                          f'<div style="width:170px;font-size:13px;color:#E8E4DA;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{r.campaign_name}</div>'
+                          f'{gauge}<div style="width:185px;text-align:right;font-size:12px;color:#9a9a90;">{info}</div></div>')
+        st.markdown(f'<div class="kb-card" style="padding:6px 18px;">{rows_html}</div>', unsafe_allow_html=True)
+
     # 단일 날짜 선택 시 그날 문의·계약 상세 내역
     if s == e:
         inq_day = load_inq_for_date(s)
@@ -1219,9 +1264,22 @@ def main():
     logo = get_logo()
     logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#D2AA50;">법무법인 KB</span>'
     today = datetime.now().strftime("%Y. %m. %d")
+    # 실시간 수집 배지 (ad_budget 최신 수집시각)
+    bdf = load_budget()
+    live = ""
+    if not bdf.empty:
+        try:
+            last = pd.to_datetime(bdf["collected_at"].iloc[0])
+            live = (f'<div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;margin-top:4px;">'
+                    f'<span style="width:7px;height:7px;border-radius:50%;background:#E0524E;'
+                    f'box-shadow:0 0 6px #E0524E;animation:blink 1.4s infinite;"></span>'
+                    f'<span style="font-size:11px;color:#9a9a90;">실시간 수집 · {last:%m/%d %H:%M} 갱신</span></div>'
+                    f'<style>@keyframes blink{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}</style>')
+        except Exception:
+            live = ""
     st.markdown(f"""<div class="kb-top"><div>{logo_html}</div>
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
-      <div class="w">{today} 기준</div></div></div>""", unsafe_allow_html=True)
+      <div class="w">{today} 기준</div>{live}</div></div>""", unsafe_allow_html=True)
 
     tabs = st.tabs(["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"])
 
