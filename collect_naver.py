@@ -113,11 +113,11 @@ def build_df(rows):
     g["media"] = MEDIA
     g["campaign"] = g["campaign_id"]      # 이름 매핑 전 — ID 그대로
     g["adgroup"] = g["adgroup_id"]
-    g["keyword"] = g["keyword_id"]
+    g["keyword"] = g["keyword_id"]        # 기본=ID (마스터 매칭되면 이름으로 교체)
     g["cpc"] = (g["cost"] / g["clicks"].replace(0, pd.NA)).fillna(0).round(0)
     g["ctr"] = (g["clicks"] / g["impressions"].replace(0, pd.NA) * 100).fillna(0).round(2)
     g["avg_rank"] = (g["rank_sum"] / g["impressions"].replace(0, pd.NA)).fillna(0).round(1)
-    cols = ["date", "media", "campaign", "adgroup", "keyword",
+    cols = ["date", "media", "campaign", "adgroup", "keyword", "keyword_id",
             "impressions", "clicks", "cost", "conversions", "cpc", "ctr", "avg_rank"]
     return g[cols]
 
@@ -127,6 +127,23 @@ def bq_client():
     info = json.loads(os.environ["GCP_SA_JSON"])
     creds = service_account.Credentials.from_service_account_info(info)
     return bigquery.Client(project=PROJECT, credentials=creds)
+
+
+def attach_keyword_names(bq, df):
+    """naver_kw_master(키워드ID→이름)를 JOIN해 keyword 칸을 이름으로 채움.
+       마스터 없거나 미매칭이면 ID 그대로 유지. (적재 전 keyword_id 컬럼은 제거)"""
+    try:
+        m = bq.query(f"SELECT keyword_id, keyword_name FROM `{PROJECT}.{DATASET}.naver_kw_master`").to_dataframe()
+    except Exception:
+        print("  마스터 테이블 없음 — 키워드는 ID로 유지 (마스터 수집 먼저 돌리면 이름 채워짐)")
+        return df.drop(columns=["keyword_id"], errors="ignore")
+    if m.empty:
+        return df.drop(columns=["keyword_id"], errors="ignore")
+    name_map = dict(zip(m["keyword_id"].astype(str), m["keyword_name"]))
+    df["keyword"] = df["keyword_id"].astype(str).map(name_map).fillna(df["keyword"])
+    matched = df["keyword_id"].astype(str).isin(name_map).sum()
+    print(f"  키워드 이름 매칭: {matched}/{len(df)}행")
+    return df.drop(columns=["keyword_id"], errors="ignore")
 
 
 def load_to_bq(bq, df, dates):
@@ -172,7 +189,9 @@ def main():
         print("수집 데이터 없음 — 적재 건너뜀"); return
     print(f"  → 합산 후 {len(df)}행 · 총광고비 {df['cost'].sum():,.0f}원")
 
-    n_new, n_total = load_to_bq(bq_client(), df, dates)
+    bq = bq_client()
+    df = attach_keyword_names(bq, df)        # 마스터로 키워드 이름 채우기
+    n_new, n_total = load_to_bq(bq, df, dates)
     print(f"[적재 완료] 신규 {n_new}행 · ad_keyword 총 {n_total}행 (media='네이버' 갱신: {dates})")
 
 
