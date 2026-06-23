@@ -715,6 +715,31 @@ def render_summary():
     plabel = f"{start} ~ {end}"
     st.caption(f"📅 {start} ~ {end} · {cmp_label}")
 
+    # ── 기간(start~end)이 걸친 (연,월) 집합 → 연간요약 시트 합산 헬퍼 ──
+    #    period_selector(start~end) 방식으로 통일하면서, 연간요약(월 단위)도
+    #    선택 기간이 걸친 월들만 합산. 비교군은 상단 KPI와 동일하게 직전 동일길이([ps,pe]).
+    def months_in(s, e):
+        out, y, m = set(), s.year, s.month
+        while (y, m) <= (e.year, e.month):
+            out.add((y, m))
+            m += 1
+            if m > 12:
+                m, y = 1, y + 1
+        return out
+
+    def ann_sum_range(adf, s, e):
+        if adf is None or adf.empty:
+            return (0.0, 0.0, 0.0, 0.0)
+        months = months_in(s, e)
+        t = adf.copy()
+        t["_yi"] = pd.to_numeric(t["연도"], errors="coerce")
+        t["_mi"] = pd.to_numeric(t["월"].astype(str).str.replace("월", "", regex=False), errors="coerce")
+        t = t.dropna(subset=["_yi", "_mi"])
+        sel = t[t.apply(lambda r: (int(r["_yi"]), int(r["_mi"])) in months, axis=1)]
+        if sel.empty:
+            return (0.0, 0.0, 0.0, 0.0)
+        return (sel["문의"].sum(), sel["상담"].sum(), sel["수임"].sum(), sel["총광고비"].sum())
+
     # 전매체 광고비 (ad_keyword + ad_etc)
     def spend(s, e):
         try:
@@ -755,13 +780,10 @@ def render_summary():
     # 문의당 비용(CPI) 미리 계산 (당월/당해 · 연간요약 기준)
     _ann = load_annual(); cpi_v = 0.0; inq_v = 0
     if not _ann.empty:
-        _y = str(end.year); _s = _ann[_ann["연도"] == _y].copy()
-        if "년간" not in period:
-            _s["_mn"] = _s["월"].astype(str).str.replace("월", "").str.strip()
-            _s = _s[_s["_mn"] == str(end.month)]
-        if not _s.empty and _s["문의"].sum() > 0:
-            inq_v = _s["문의"].sum(); cpi_v = _s["총광고비"].sum() / inq_v
-    summary = (f"기간단위:{period.split()[-1]}({cmp_label}). 모든 매출 측정은 신건 기준이다. "
+        _i, _cn, _ct, _ad = ann_sum_range(_ann, start, end)
+        if _i > 0:
+            inq_v = _i; cpi_v = _ad / _i
+    summary = (f"기간:{plabel}({cmp_label}). 모든 매출 측정은 신건 기준이다. "
                f"광고비 {money(ad)}원(비교 {ad_c or '데이터없음'}), "
                f"신건매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), 파생매출(참고) {money(deriv)}원, "
                f"ROAS {roas:.0f}%, 신건계약 {n_con}건, "
@@ -803,20 +825,9 @@ def render_summary():
     # ── 퍼널 (문의→상담→수임) + CPI/CPA · 전부 비교!!! ──
     ann = load_annual()
     if not ann.empty:
-        flabel = "올해 누적" if "년간" in period else f"{end.month}월"
-        def ann_sum(yr, mn=None):
-            s = ann[ann["연도"] == str(yr)].copy()
-            if mn is not None:
-                s["_mn"] = s["월"].astype(str).str.replace("월", "").str.strip()
-                s = s[s["_mn"] == str(mn)]
-            return (s["문의"].sum(), s["상담"].sum(), s["수임"].sum(), s["총광고비"].sum())
-        if "년간" in period:
-            inq, cons, cont, adc = ann_sum(end.year)
-            p_inq, p_cons, p_cont, p_adc = ann_sum(end.year - 1)
-        else:
-            inq, cons, cont, adc = ann_sum(end.year, end.month)
-            pm_y, pm_m = (end.year, end.month - 1) if end.month > 1 else (end.year - 1, 12)
-            p_inq, p_cons, p_cont, p_adc = ann_sum(pm_y, pm_m)
+        flabel = plabel
+        inq, cons, cont, adc = ann_sum_range(ann, start, end)
+        p_inq, p_cons, p_cont, p_adc = ann_sum_range(ann, ps, pe)
         if inq > 0:
             cpi = adc / inq if inq else 0
             cpa = adc / cont if cont else 0
@@ -867,8 +878,9 @@ def render_summary():
     except Exception:
         mix = pd.DataFrame()
 
-    # 월간: 목표바
-    if "월간" in period:
+    # 단일 월(같은 연·월) 조회 시에만: 월 목표 달성바
+    is_single_month = (start.year == end.year and start.month == end.month)
+    if is_single_month:
         pct = min(revenue / MONTHLY_GOAL * 100, 100)
         st.markdown(f"""<div class="kb-card" style="margin-top:8px;">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
@@ -882,52 +894,18 @@ def render_summary():
 
     cc = st.columns([3, 2])
     with cc[0]:
-        if "년간" in period:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 연도별 신건 매출</div>', unsafe_allow_html=True)
-            yr = con[con["_is_new"]].groupby("_y")["_amt"].sum()
-            f1 = go.Figure(go.Bar(x=[f"{int(y)}년" for y in yr.index], y=yr.values/1e8, marker=dict(color=GOLD), text=[f"{v/1e8:.1f}억" for v in yr.values], textposition="outside"))
-            f1.update_yaxes(ticksuffix="억")
-            st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
-        elif "주간" in period:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-week"></i> 요일별 광고비 (이 주)</div>', unsafe_allow_html=True)
-            wlabels = ["월", "화", "수", "목", "금", "토", "일"]
-            try:
-                a1 = bq(f"SELECT date,SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY date")
-                a2 = bq(f"SELECT date,SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY date")
-                adall = pd.concat([a1, a2], ignore_index=True)
-                adall["date"] = pd.to_datetime(adall["date"])
-                adall["_wd"] = adall["date"].dt.weekday
-                bywd = adall.groupby("_wd")["c"].sum()
-                vals = [bywd.get(i, 0) / 1e4 for i in range(7)]
-            except Exception:
-                vals = [0] * 7
-            fwd = go.Figure(go.Bar(x=wlabels, y=vals, marker=dict(color=GOLD),
-                text=[f"{v:.0f}만" if v else "" for v in vals], textposition="outside"))
-            fwd.update_yaxes(ticksuffix="만")
-            st.plotly_chart(fig_theme(fwd, 250), use_container_width=True, config={"displayModeBar": False})
-        elif "일간" in period:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 매체별 광고비 (그날)</div>', unsafe_allow_html=True)
-            if not mix.empty and mix["cost"].sum() > 0:
-                mm = mix.groupby("media")["cost"].sum().sort_values(ascending=True)
-                fm = go.Figure(go.Bar(y=list(mm.index), x=mm.values/1e4, orientation="h",
-                    marker=dict(color=GOLD), text=[f"{v/1e4:,.0f}만" for v in mm.values], textposition="outside"))
-                fm.update_xaxes(ticksuffix="만")
-                st.plotly_chart(fig_theme(fm, 250), use_container_width=True, config={"displayModeBar": False})
-            else:
-                st.caption("이 날 광고비 데이터가 없습니다.")
-        else:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
-            yrs = sorted(con["_y"].unique())[-3:]
-            colors = {yrs[-1]: GOLD}
-            if len(yrs) >= 2: colors[yrs[-2]] = TEAL
-            if len(yrs) >= 3: colors[yrs[-3]] = GRAY
-            f1 = go.Figure()
-            for y in yrs:
-                yd = con[(con["_y"] == y) & con["_is_new"]].groupby("_m")["_amt"].sum()
-                f1.add_trace(go.Scatter(x=[f"{m}월" for m in range(1, 13)], y=[yd.get(m, None) and yd.get(m)/1e8 for m in range(1, 13)],
-                    name=str(int(y)), mode="lines+markers", line=dict(color=colors.get(y, GRAY), dash="dash" if y == yrs[0] and len(yrs) >= 3 else "solid"), connectgaps=False))
-            f1.update_yaxes(ticksuffix="억")
-            st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
+        yrs = sorted(con["_y"].unique())[-3:]
+        colors = {yrs[-1]: GOLD}
+        if len(yrs) >= 2: colors[yrs[-2]] = TEAL
+        if len(yrs) >= 3: colors[yrs[-3]] = GRAY
+        f1 = go.Figure()
+        for y in yrs:
+            yd = con[(con["_y"] == y) & con["_is_new"]].groupby("_m")["_amt"].sum()
+            f1.add_trace(go.Scatter(x=[f"{m}월" for m in range(1, 13)], y=[yd.get(m, None) and yd.get(m)/1e8 for m in range(1, 13)],
+                name=str(int(y)), mode="lines+markers", line=dict(color=colors.get(y, GRAY), dash="dash" if y == yrs[0] and len(yrs) >= 3 else "solid"), connectgaps=False))
+        f1.update_yaxes(ticksuffix="억")
+        st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
     with cc[1]:
         st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 매체별 광고비</div>', unsafe_allow_html=True)
         if not mix.empty and mix["cost"].sum() > 0:
