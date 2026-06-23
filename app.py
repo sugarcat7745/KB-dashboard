@@ -4,7 +4,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
-import base64, urllib.request, time, random
+import base64, urllib.request, time, random, hmac, hashlib
 from datetime import datetime, date, timedelta
 
 try:
@@ -518,10 +518,46 @@ def load_contracts():
     df["_y"] = df["_date"].dt.year
     df["_m"] = df["_date"].dt.month
     df["_ym"] = df["_date"].dt.to_period("M").astype(str)
-    df["_type"] = df[typ_col]
+    df["_type_raw"] = df[typ_col].astype(str)
     df["_inflow"] = df[inflow_col].astype(str)
     df["_is_new"] = df["_inflow"].str.contains("신건")
     df["_name"] = df[name_col].astype(str).str.strip() if name_col else ""
+
+    # ── 사건유형 쉼표 분리 (explode) ──────────────────────────────
+    # 규칙(강동현님 지정):
+    #   · 한 계약에 유형이 N개면(예: "형사, 민사") → 매출/입금/미수를 n분의 1 균등분배
+    #   · 정수 나눗셈에서 남는 잔금(원 단위)은 "맨 앞(첫 번째)" 유형에 몰아줌
+    #     → N이 3·5 등 홀수여도 합계가 1원도 안 틀림
+    #   · 건수: 분리된 각 행 = 개별 1건 (형님 요청)
+    #   · 원계약 추적용 _cid(계약 식별자) · _split_n(쪼갠 개수) 보존
+    #   · "집행·신청"의 가운뎃점(·)은 쉼표가 아니므로 절대 안 쪼개짐
+    money_cols = ["_amt", "_paid", "_unpaid"]
+    df = df.reset_index(drop=True)
+    _rows = []
+    for _idx, _r in df.iterrows():
+        _parts = [p.strip() for p in str(_r["_type_raw"]).split(",")]
+        _parts = [p for p in _parts if p]
+        if not _parts:
+            _parts = ["미분류"]
+        _n = len(_parts)
+        # money 컬럼별 분배액 사전계산 (정수 원 단위 + 나머지 맨 앞)
+        _split = {}
+        for _mc in money_cols:
+            _tot = int(round(float(_r[_mc] or 0)))
+            _base = _tot // _n
+            _rem = _tot - _base * _n
+            _arr = [_base] * _n
+            _arr[0] += _rem
+            _split[_mc] = _arr
+        for _j, _t in enumerate(_parts):
+            _nr = _r.copy()
+            _nr["_type"] = _t
+            for _mc in money_cols:
+                _nr[_mc] = float(_split[_mc][_j])
+            _nr["_cid"] = _idx
+            _nr["_split_n"] = _n
+            _rows.append(_nr)
+    df = pd.DataFrame(_rows).reset_index(drop=True)
     return df
 
 def fig_theme(fig, h=240):
@@ -667,6 +703,7 @@ def period_selector(key, dmin, dmax, default="지난 7일", title="기간별 조
             ds, de = preset(name)
             st.session_state[skey] = max(ds, dmin)
             st.session_state[ekey] = min(de, dmax)
+            st.rerun()   # 깨끗한 새 실행에서 date_input이 새 값을 잡도록 (한 클릭 늦음 방지)
     c1, c2 = st.columns(2)
     start = c1.date_input("시작일 (달력 클릭)", min_value=dmin, max_value=dmax, key=skey)
     end   = c2.date_input("종료일 (달력 클릭)", min_value=dmin, max_value=dmax, key=ekey)
@@ -1426,6 +1463,39 @@ def render_welcome_splash(user):
     time.sleep(1.8)
 
 
+# ── 새로고침해도 로그인 유지 (URL 서명 토큰) ──────────────
+#   브라우저 새로고침 시 Streamlit이 세션을 새로 만들어 로그인이 풀림.
+#   → URL 쿼리파라미터(?s=토큰)에 "서명된" 토큰을 심어 복원. URL은 새로고침에도 유지됨.
+#   토큰 = "아이디.HMAC(아이디)" 형태. 서명키는 기존 users 시크릿에서 파생(새 시크릿 불필요).
+#   비밀번호는 URL에 안 들어가며, 서명키 없이는 위조 불가.
+def _auth_key():
+    try:
+        base = "|".join(f"{k}={v}" for k, v in sorted(dict(st.secrets["users"]).items()))
+    except Exception:
+        base = "kb-dashboard-fallback-key"
+    return base.encode("utf-8")
+
+def _make_token(user):
+    sig = hmac.new(_auth_key(), user.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return f"{user}.{sig}"
+
+def _verify_token(token):
+    try:
+        user, sig = str(token).rsplit(".", 1)
+    except Exception:
+        return None
+    good = hmac.new(_auth_key(), user.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
+    return user if hmac.compare_digest(sig, good) else None
+
+def _set_login_url(user):
+    try: st.query_params["s"] = _make_token(user)
+    except Exception: pass
+
+def _clear_login_url():
+    try: st.query_params.clear()
+    except Exception: pass
+
+
 def render_login():
     logo = get_logo()
     logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:60px;margin-bottom:18px;">'
@@ -1446,6 +1516,7 @@ def render_login():
             if uid in users and str(users[uid]) == pw:
                 st.session_state["auth_user"] = uid
                 st.session_state["show_splash"] = True
+                _set_login_url(uid)   # 새로고침해도 유지되도록 URL에 서명토큰
                 log_login(uid, get_client_ip())
                 st.rerun()
             else:
@@ -1697,8 +1768,16 @@ def render_contracts():
 def main():
     # ── 로그인 게이트 ──
     if not st.session_state.get("auth_user"):
-        render_login()
-        return
+        # 새로고침으로 세션이 비었어도, URL 서명토큰이 유효하면 복원
+        tok = None
+        try: tok = st.query_params.get("s")
+        except Exception: tok = None
+        restored = _verify_token(tok) if tok else None
+        if restored:
+            st.session_state["auth_user"] = restored
+        else:
+            render_login()
+            return
     user = st.session_state["auth_user"]
     # 로그인 직후 1회 — 환영 스플래시 (기분 좋은 인트로!)
     if st.session_state.pop("show_splash", False):
@@ -1710,6 +1789,7 @@ def main():
         if st.button("로그아웃", use_container_width=True):
             for k in ("auth_user", "login_id", "login_pw"):
                 st.session_state.pop(k, None)
+            _clear_login_url()
             st.rerun()
 
     logo = get_logo()
@@ -1739,6 +1819,7 @@ def main():
     if lo[2].button("🚪 로그아웃", use_container_width=True, key="logout_main"):
         for k in ("auth_user", "login_id", "login_pw"):
             st.session_state.pop(k, None)
+        _clear_login_url()
         st.rerun()
 
     is_admin = (user == "admin")
