@@ -4,7 +4,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
-import base64, urllib.request
+import base64, urllib.request, time, random
 from datetime import datetime, date, timedelta
 
 try:
@@ -1405,6 +1405,43 @@ def render_inquiries():
         st.caption("💡 이름을 검색하면 그 사람의 문의 이력 + 계약 + 미수금을 한 화면에서 대조합니다.")
 
 
+def render_welcome_splash(user):
+    """로그인 직후 1회 — 검은 화면에 환영 문구가 페이드인되는 인트로."""
+    logo = get_logo()
+    logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:72px;margin-bottom:26px;">'
+                 if logo else '<div class="serif" style="font-size:30px;color:#D2AA50;margin-bottom:26px;">법무법인 KB</div>')
+    msgs = [
+        "안녕하세요, 법무법인 KB 담당자님 ☀️",
+        "KB 담당자님, 오늘도 좋은 하루 되세요 😊",
+        "KB 담당자님, 환영합니다 🙌",
+        "오늘의 성과를 정성껏 준비했습니다 ✨",
+        "좋은 소식이 기다리고 있길 바랍니다 🍀",
+        "차 한잔의 여유와 함께 시작하세요 ☕",
+        "KB 담당자님, 오늘도 수임 가득한 하루 되세요 ⚖️",
+        "KB 담당자님, 만나뵙게 되어 반갑습니다 😊",
+        "오늘도 우상향하는 하루 되시길 바랍니다 📈",
+        "KB 담당자님, 편안히 살펴보세요 🌿",
+    ]
+    msg = random.choice(msgs)
+    st.markdown(f"""
+    <style>
+      @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(26px); }} to {{ opacity:1; transform:translateY(0); }} }}
+      @keyframes glow {{ 0%,100% {{ opacity:.5; }} 50% {{ opacity:1; }} }}
+    </style>
+    <div style="position:fixed;inset:0;background:radial-gradient(circle at 50% 38%,#16140f 0%,#0a0a08 70%);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;">
+      <div style="text-align:center;">
+        <div style="animation:fadeUp .9s ease;">{logo_html}</div>
+        <div style="font-family:'Noto Serif KR',serif;font-size:27px;color:#F0C86E;font-weight:600;
+          margin-bottom:16px;letter-spacing:-.5px;animation:fadeUp 1.3s ease;">{msg}</div>
+        <div style="font-size:13px;color:#8a8a82;animation:fadeUp 1.7s ease, glow 1.8s ease-in-out infinite 1.7s;">
+          데이터를 불러오는 중입니다…</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    time.sleep(1.8)
+
+
 def render_login():
     logo = get_logo()
     logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:60px;margin-bottom:18px;">'
@@ -1424,6 +1461,7 @@ def render_login():
                 users = {}
             if uid in users and str(users[uid]) == pw:
                 st.session_state["auth_user"] = uid
+                st.session_state["show_splash"] = True
                 log_login(uid, get_client_ip())
                 st.rerun()
             else:
@@ -1531,6 +1569,10 @@ def main():
         render_login()
         return
     user = st.session_state["auth_user"]
+    # 로그인 직후 1회 — 환영 스플래시 (기분 좋은 인트로!)
+    if st.session_state.pop("show_splash", False):
+        render_welcome_splash(user)
+        st.rerun()
     # 사이드바: 계정 정보 + 로그아웃
     with st.sidebar:
         st.markdown(f"**👤 {user}**" + ("  ·  🛡️ 관리자" if user == "admin" else ""))
