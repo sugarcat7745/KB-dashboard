@@ -207,6 +207,65 @@ def log_ai_usage(user, tab, period, insight, usage):
     except Exception:
         pass
 
+
+@st.cache_data(ttl=300)
+def build_data_context():
+    """AI 질의용 데이터 요약 컨텍스트 (집계값만 — 로우데이터 전체 노출 없이 안전)."""
+    con = load_contracts()
+    ann = load_annual()
+    today = date.today()
+    P = [f"기준일: {today}"]
+    if not con.empty:
+        cy = con[con["_y"] == str(today.year)]
+        if not cy.empty:
+            tot = cy["_amt"].sum(); new = cy[cy["_is_new"]]["_amt"].sum()
+            P.append(f"[계약매출·올해] 전체 {tot:,.0f}원 (신건 {new:,.0f}원 / 파생 {tot-new:,.0f}원)")
+            bt = cy[cy["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=False)
+            P.append("올해 신건 사건유형별 매출: " + "; ".join(f"{t} {v:,.0f}원" for t, v in bt.head(12).items()))
+            mm = cy[cy["_is_new"]].groupby("_m")["_amt"].sum()
+            P.append("올해 월별 신건매출: " + "; ".join(f"{int(m)}월 {v:,.0f}원" for m, v in mm.items()))
+            mip = cy[cy["_unpaid"] > 0]["_unpaid"].sum() if "_unpaid" in cy.columns else 0
+            P.append(f"올해 미수금 합계: {mip:,.0f}원")
+    if not ann.empty:
+        ay = ann[ann["연도"] == str(today.year)]
+        if not ay.empty:
+            P.append("올해 월별 광고비·문의·상담·수임: " + "; ".join(
+                f"{r['월']} 광고비{int(r['총광고비']):,}원/문의{int(r['문의'])}건/상담{int(r['상담'])}건/수임{int(r['수임'])}건"
+                for _, r in ay.iterrows()))
+    P.append("[정의] 신건=온라인 광고로 유입된 신규 고객 / 파생=기존 고객의 재의뢰. 매출 기준은 기본보수액. "
+             "사건유형(형사·민사·이혼 등)은 '계약' 분류이고, 광고 카테고리(교통·성범죄 등)와는 별개 체계임. "
+             "광고 전환수는 부정확하여 대시보드에서 제외함(광고비·노출·클릭·CPI만 신뢰).")
+    return "\n".join(P)
+
+
+def ai_chat_answer(question, context):
+    """대표님 자유 질문 → Claude가 데이터 컨텍스트 기반 답변 + 토큰 로그."""
+    if not HAS_ANTHROPIC:
+        return "AI 기능이 현재 비활성화 상태입니다."
+    try:
+        key = st.secrets["anthropic_api_key"]
+    except Exception:
+        return "AI 키가 설정되지 않았습니다. (관리자에게 문의)"
+    try:
+        client = anthropic.Anthropic(api_key=key)
+        m = client.messages.create(
+            model="claude-haiku-4-5-20251001", max_tokens=700,
+            messages=[{"role": "user", "content":
+                "너는 법무법인 광고·매출 대시보드의 데이터 분석 도우미다. "
+                "아래 [데이터]만을 근거로 사용자 질문에 한국어로 친절하고 간결하게 답하라. "
+                "데이터에 없는 내용은 '제공된 데이터에는 없습니다'라고 솔직히 밝히고, "
+                "추정이 필요하면 추정임을 명시하라. 숫자는 데이터 기준으로 정확히 인용하라.\n\n"
+                f"[데이터]\n{context}\n\n[질문]\n{question}"}])
+        ans = m.content[0].text.strip()
+        try:
+            log_ai_usage(st.session_state.get("auth_user", "익명"), "AI질의", question[:60], ans, m.usage)
+        except Exception:
+            pass
+        return ans
+    except Exception as e:
+        return f"답변 생성에 실패했습니다: {e}"
+
+
 @st.cache_data(ttl=1800)
 def ai_insight(summary, focus="", tab="", period=""):
     """대시보드 데이터를 Claude에게 보내 진짜 인사이트 한 줄을 받음. 실패하면 None."""
@@ -227,7 +286,7 @@ def ai_insight(summary, focus="", tab="", period=""):
                 "[작성 원칙]\n"
                 "1) 데이터는 정직하게 — 좋은 흐름도 우려되는 흐름도 사실대로. 과장·왜곡·은폐는 절대 금지.\n"
                 "2) 균형 있게 — 한 지표만 단편적으로 단정하지 말고 연관 지표를 함께 보라. "
-                "특히 광고비 증가를 그 자체로 '낭비'로 단정하지 말고, 매출·전환·ROAS와 함께 평가하라.\n"
+                "특히 광고비 증가를 그 자체로 '낭비'로 단정하지 말고, 매출·문의·ROAS와 함께 평가하라.\n"
                 "3) 건설적으로 — 문제를 짚을 땐 반드시 '개선 방향'을 함께 제시한다. 비난조·감정적 표현은 금지하고 프로페셔널하게.\n"
                 "4) 광고 효율의 핵심 지표는 '문의당 비용(CPI)'이니 가능하면 CPI를 중심으로 해석하라.\n"
                 "5) 반드시 구체적 숫자를 인용하고, 실행 제안을 한 가지 포함하라.\n"
@@ -675,8 +734,14 @@ def render_summary():
         return f"{'▲' if d>=0 else '▼'} {abs(d):.1f}%", ("up" if d >= 0 else "down")
 
     ad, ad_p = spend(start, end), spend(ps, pe)
-    revenue, rev_p = rev(start, end, True), rev(ps, pe, True)   # 신건만!!! (목표·비교 기준)
-    deriv = rev(start, end, False) - revenue                    # 파생(참고용)
+    # 📊 대표님 요청: 매출에 파생사건 포함/제외 토글 (기본=순수 신건만)
+    include_deriv = st.toggle("파생사건 포함 매출 보기", value=False,
+                              key=f"deriv_{unit}",
+                              help="끄면 순수 온라인 신건 매출만(기본), 켜면 신건+파생 합산 매출")
+    new_only = not include_deriv
+    revenue, rev_p = rev(start, end, new_only), rev(ps, pe, new_only)
+    deriv = rev(start, end, False) - rev(start, end, True)      # 파생 금액(항상 참고)
+    rev_label = "전체 매출(신건+파생)" if include_deriv else "신건 매출"
     roas = revenue / ad * 100 if ad else 0
     roas_p = rev_p / ad_p * 100 if ad_p else 0
     n_con = int(((con["_date"].dt.date >= start) & (con["_date"].dt.date <= end) & con["_is_new"]).sum())
@@ -703,7 +768,7 @@ def render_summary():
                f"ROAS {roas:.0f}%, 신건계약 {n_con}건, "
                f"문의당비용(CPI) {money(cpi_v)}원, 사건분류 매출1위 {top_cat}.")
     focus_map = {
-        "일간": "이 리포트는 '어제 하루'다. 특정 매체 광고비 급변이나 전환 급감 같은 그날의 이상 신호를 우선 짚어라.",
+        "일간": "이 리포트는 '어제 하루'다. 특정 매체 광고비 급변이나 문의 급감 같은 그날의 이상 신호를 우선 짚어라.",
         "주간": "이 리포트는 '주간'이다. 요일별 흐름과 지난주 대비 변화에 집중하라.",
         "월간": "이 리포트는 '월간'이다. 월 목표 2.5억 달성 페이스와 남은 기간 전망을 중심으로 보라.",
         "년간": "이 리포트는 '연간'이다. 전년 대비 추세와 사건분류 의존도(다각화) 관점으로 크게 보라.",
@@ -734,7 +799,7 @@ def render_summary():
                 f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {cmp_label} 증감</div>', unsafe_allow_html=True)
     c = st.columns(4)
     kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d)
-    kpi(c[1], "fa-sack-dollar", "신건 매출", money(revenue), "원", chg=rev_c, chg_dir=rev_d)
+    kpi(c[1], "fa-sack-dollar", rev_label, money(revenue), "원", chg=rev_c, chg_dir=rev_d)
     kpi(c[2], "fa-file-signature", "신건 계약", f"{n_con}", "건", *delta_str(n_con, n_con_p, "cnt"))
     kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", *delta_str(roas, roas_p, "pct"))
 
@@ -1059,32 +1124,27 @@ def render_ad_tab(media, full):
     pstart, pend = start - timedelta(days=span), start - timedelta(days=1)
     pdat = raw[(raw["date"].dt.date >= pstart) & (raw["date"].dt.date <= pend)]
 
-    # ── KPI 6개 (전기간 대비 증감 · 수치) ──
-    tc, ti, tk, tv = d.cost.sum(), d.imp.sum(), d.clk.sum(), d.conv.sum()
+    # ── KPI 5개 (전기간 대비 증감) — 전환값은 부정확하여 제외 ──
+    tc, ti, tk = d.cost.sum(), d.imp.sum(), d.clk.sum()
     ctr = tk/ti*100 if ti else 0; cpc = tc/tk if tk else 0
-    ptc, pti, ptk, ptv = pdat.cost.sum(), pdat.imp.sum(), pdat.clk.sum(), pdat.conv.sum()
+    ptc, pti, ptk = pdat.cost.sum(), pdat.imp.sum(), pdat.clk.sum()
     pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
     cmp_caption(f"직전 {span}일 대비")
-    c = st.columns(6)
+    c = st.columns(5)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
     kpi(c[1], "fa-eye", "노출수", money(ti), "", *delta_str(ti, pti, "num"))
     kpi(c[2], "fa-hand-pointer", "클릭수", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
     kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
     kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
-    kpi(c[5], "fa-bullseye", "전환수", f"{tv:.0f}", "건", *delta_str(tv, ptv, "cnt"))
 
-    # ── 일별 광고비 + 전환 추세 ──
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비 · 전환 추세</div>', unsafe_allow_html=True)
+    # ── 일별 광고비 추세 ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비 추세</div>', unsafe_allow_html=True)
     d2 = d.copy()
     d2["lbl"] = d2.date.apply(klabel)
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=d2.lbl, y=d2.cost/1e4, name="광고비", mode="lines+markers",
         line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(210,170,80,0.1)"))
-    fig.add_trace(go.Scatter(x=d2.lbl, y=d2.conv, name="전환", mode="lines+markers",
-        line=dict(color=TEAL, width=2), yaxis="y2"))
-    fig.update_layout(yaxis=dict(ticksuffix="만원"),
-        yaxis2=dict(overlaying="y", side="right", showgrid=False, title="전환(건)", color="#5BB4C4"),
-        legend=dict(orientation="h", y=1.12))
+    fig.update_layout(yaxis=dict(ticksuffix="만원"), legend=dict(orientation="h", y=1.12))
     thin_xticks(fig, d2.lbl)
     st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
 
@@ -1099,56 +1159,54 @@ def render_ad_tab(media, full):
             (kdate_wd(r.date), pd.Timestamp(r.date).strftime("%Y%m%d")),
             (f"{r.cost:,.0f}", r.cost), (f"{int(r.imp):,}", r.imp),
             (f"{int(r.clk):,}", r.clk), (f"{r.CTR}%", r.CTR),
-            (f"{int(r.CPC):,}", r.CPC), (f"{r.conv:.0f}", r.conv)])
-    sortable_table(["날짜", "광고비", "노출", "클릭", "CTR", "CPC", "전환"], rows,
+            (f"{int(r.CPC):,}", r.CPC)])
+    sortable_table(["날짜", "광고비", "노출", "클릭", "CTR", "CPC"], rows,
                    height=min(440, 60 + len(rows)*37))
 
-    # ── 키워드 TOP 10 (전환 포함!!!) ──
-    kw = bq(f"SELECT keyword,SUM(cost) cost,SUM(clicks) clk,SUM(impressions) imp,SUM(conversions) conv "
+    # ── 키워드 TOP 10 (광고비순) ──
+    kw = bq(f"SELECT keyword,SUM(cost) cost,SUM(clicks) clk,SUM(impressions) imp "
             f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' AND keyword NOT IN ('-','') "
             f"AND date BETWEEN '{sd}' AND '{ed}' GROUP BY keyword ORDER BY cost DESC LIMIT 10")
     st.markdown('<div class="sec-title"><i class="fa-solid fa-magnifying-glass"></i> 키워드 TOP 10 (광고비순)</div>', unsafe_allow_html=True)
     rows = "".join(f"<tr><td>{r.keyword}</td><td class='num'>{r.cost:,.0f}원</td><td>{int(r.clk):,}</td>"
-        f"<td>{int(r.imp):,}</td><td class='num'>{r.conv:.0f}</td></tr>" for _, r in kw.iterrows())
+        f"<td>{int(r.imp):,}</td></tr>" for _, r in kw.iterrows())
     st.markdown(f'<table class="kb-tbl"><thead><tr><th>키워드</th><th>광고비</th><th>클릭</th>'
-        f'<th>노출</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        f'<th>노출</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
     if not full:
         return
-    # ── 연령 / 성별 (전환 포함) ──
+    # ── 연령 / 성별 (광고비) ──
     cc = st.columns(2)
     with cc[0]:
-        age = bq(f"SELECT age,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_age` "
+        age = bq(f"SELECT age,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_age` "
                  f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY age ORDER BY cost DESC")
         st.markdown('<div class="sec-title"><i class="fa-solid fa-users"></i> 연령별 광고비</div>', unsafe_allow_html=True)
         f1 = go.Figure(go.Bar(x=age.cost/1e4, y=age.age, orientation="h", marker=dict(color=GOLD),
-            text=[f"전환 {int(x)}" for x in age.conv], textposition="auto"))
+            text=[f"{x:.0f}만" for x in age.cost/1e4], textposition="auto"))
         f1.update_xaxes(ticksuffix="만")
         st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
     with cc[1]:
-        gen = bq(f"SELECT gender,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_gender` "
+        gen = bq(f"SELECT gender,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_gender` "
                  f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY gender")
         st.markdown('<div class="sec-title"><i class="fa-solid fa-venus-mars"></i> 성별 광고비</div>', unsafe_allow_html=True)
         f2 = go.Figure(go.Pie(labels=gen.gender, values=gen.cost, hole=0.6,
             marker=dict(colors=[TEAL, CORAL, GRAY])))
         st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
 
-    # ── 디바이스 / 노출매체 (전환 + 전환당비용!!!) ──
+    # ── 디바이스 / 노출매체 (광고비) ──
     cc2 = st.columns(2)
     with cc2[0]:
-        dev = bq(f"SELECT device,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
+        dev = bq(f"SELECT device,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
                  f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY device ORDER BY cost DESC")
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스별 (광고비·전환·CPA)</div>', unsafe_allow_html=True)
-        rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td><td>{r.conv:.0f}</td>"
-            f"<td class='num'>{(r.cost/r.conv if r.conv else 0):,.0f}원</td></tr>" for _, r in dev.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th><th>전환</th><th>전환당비용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스별 광고비</div>', unsafe_allow_html=True)
+        rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in dev.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
     with cc2[1]:
-        pl = bq(f"SELECT placement,SUM(cost) cost,SUM(conversions) conv FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
+        pl = bq(f"SELECT placement,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY placement ORDER BY cost DESC LIMIT 8")
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-tower-broadcast"></i> 노출매체별 (광고비·전환·CPA)</div>', unsafe_allow_html=True)
-        rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td><td>{r.conv:.0f}</td>"
-            f"<td class='num'>{(r.cost/r.conv if r.conv else 0):,.0f}원</td></tr>" for _, r in pl.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th><th>전환</th><th>전환당비용</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-tower-broadcast"></i> 노출매체별 광고비</div>', unsafe_allow_html=True)
+        rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in pl.iterrows())
+        st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════
@@ -1172,7 +1230,7 @@ def render_etc():
     if df.empty:
         st.info("이 기간 기타매체(카카오/모비온) 데이터가 없습니다."); return
 
-    tc, ti, tk, tv = df["cost"].sum(), df["impressions"].sum(), df["clicks"].sum(), df["conversions"].sum()
+    tc, ti, tk = df["cost"].sum(), df["impressions"].sum(), df["clicks"].sum()
     ctr = tk / ti * 100 if ti else 0
     cpc = tc / tk if tk else 0
     # 직전 동일 길이 기간
@@ -1185,16 +1243,14 @@ def render_etc():
     ptc = pdf["cost"].sum() if not pdf.empty else 0
     pti = pdf["impressions"].sum() if not pdf.empty else 0
     ptk = pdf["clicks"].sum() if not pdf.empty else 0
-    ptv = pdf["conversions"].sum() if not pdf.empty else 0
     pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
     cmp_caption(f"직전 {span}일 대비")
-    c = st.columns(6)
+    c = st.columns(5)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
     kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "", *delta_str(ti, pti, "num"))
     kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
     kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
     kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
-    kpi(c[5], "fa-bolt", "전환", f"{tv:.0f}", "건", *delta_str(tv, ptv, "cnt"))
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비</div>', unsafe_allow_html=True)
     cmap = {"카카오모먼트": GOLD, "모비온": TEAL}
@@ -1210,13 +1266,13 @@ def render_etc():
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 요약</div>', unsafe_allow_html=True)
     g = df.groupby("media").agg(c=("cost", "sum"), i=("impressions", "sum"),
-                                k=("clicks", "sum"), v=("conversions", "sum"))
+                                k=("clicks", "sum"))
     rows = "".join(
         f"<tr><td>{m}</td><td class='num'>{money(r.c)}</td><td>{int(r.i):,}</td>"
-        f"<td>{int(r.k):,}</td><td class='num'>{r.k/r.i*100:.2f}%</td><td class='num'>{r.v:.0f}</td></tr>"
+        f"<td>{int(r.k):,}</td><td class='num'>{r.k/r.i*100 if r.i else 0:.2f}%</td></tr>"
         for m, r in g.iterrows())
     st.markdown(f'<table class="kb-tbl"><thead><tr><th>매체</th><th>광고비</th><th>노출</th>'
-                f'<th>클릭</th><th>CTR</th><th>전환</th></tr></thead><tbody>{rows}</tbody></table>',
+                f'<th>클릭</th><th>CTR</th></tr></thead><tbody>{rows}</tbody></table>',
                 unsafe_allow_html=True)
 
 
@@ -1366,6 +1422,42 @@ def render_login():
         st.caption("계정 문의는 대행사 담당자에게 요청하세요.")
 
 
+def render_ai_chat():
+    tab_header("fa-robot", "AI 데이터 질의", "데이터에 대해 궁금한 점을 자유롭게 물어보세요", color="#5BB4C4", rgb="91,180,196")
+    st.caption("⚠️ AI 답변은 참고용입니다. 정확하지 않을 수 있으니 중요한 수치는 각 탭에서 확인하세요.")
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    # 예시 질문 칩
+    st.markdown('<div style="font-size:12px;color:#8a8a82;margin:4px 0;">💡 예시: '
+                '"올해 형사 사건 매출 얼마야?" · "광고비 제일 많이 쓴 달은?" · "수임 전환이 가장 좋은 달은?"</div>',
+                unsafe_allow_html=True)
+    q = st.text_input("질문", key="ai_q", label_visibility="collapsed",
+                      placeholder="질문을 입력하세요…")
+    cc = st.columns([1, 1, 4])
+    ask = cc[0].button("질문하기", use_container_width=True, type="primary")
+    if cc[1].button("대화 초기화", use_container_width=True):
+        st.session_state.chat_history = []
+        st.rerun()
+    if ask and q and q.strip():
+        with st.spinner("AI가 데이터를 분석 중…"):
+            ctx = build_data_context()
+            ans = ai_chat_answer(q.strip(), ctx)
+        st.session_state.chat_history.insert(0, (q.strip(), ans))
+    # 대화 이력 (최신 먼저)
+    for question, answer in st.session_state.chat_history:
+        st.markdown(
+            f'<div style="display:flex;justify-content:flex-end;margin:14px 0 6px;">'
+            f'<div style="background:rgba(210,170,80,.15);border:1px solid rgba(210,170,80,.3);'
+            f'border-radius:14px 14px 2px 14px;padding:10px 16px;max-width:75%;font-size:14px;color:#E8E4DA;">{question}</div></div>'
+            f'<div style="display:flex;justify-content:flex-start;margin:0 0 10px;">'
+            f'<div style="background:#1c1c19;border:1px solid #2a2a26;border-radius:14px 14px 14px 2px;'
+            f'padding:12px 16px;max-width:80%;font-size:14px;color:#D8D4CA;line-height:1.6;">'
+            f'<i class="fa-solid fa-robot" style="color:#5BB4C4;margin-right:7px;"></i>{answer}</div></div>',
+            unsafe_allow_html=True)
+    if not st.session_state.chat_history:
+        st.caption("아직 질문이 없습니다. 위에 궁금한 점을 입력해보세요!")
+
+
 def render_admin_log():
     """관리자(admin) 전용 — 로그인 이력 + AI 사용 로그 + 토큰/비용 집계."""
     # ── 로그인 이력 ──
@@ -1459,10 +1551,12 @@ def main():
       <div class="w">{today} 기준</div>{live}</div></div>""", unsafe_allow_html=True)
 
     # 관리자면 AI 사용 로그 탭 추가
-    tab_labels = ["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"]
+    tab_labels = ["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타", "🤖 AI 질의"]
     if user == "admin":
         tab_labels.append("🛡️ AI로그")
     tabs = st.tabs(tab_labels)
+    with tabs[7]:
+        render_ai_chat()
     if user == "admin":
         with tabs[-1]:
             render_admin_log()
