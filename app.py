@@ -237,9 +237,23 @@ def build_data_context():
             P.append(f"[{yr}년 광고·문의 월별] " + "; ".join(
                 f"{r['월']} 광고비{int(r['총광고비']):,}원/문의{int(r['문의'])}건/상담{int(r['상담'])}건/수임{int(r['수임'])}건"
                 for _, r in ay.iterrows()))
+    # 매체별(네이버/구글) 광고 실적 — BigQuery (구글 성과 분석 가능하게)
+    try:
+        mq = bq(f"SELECT EXTRACT(YEAR FROM date) yr, media, SUM(cost) cost, SUM(impressions) imp, "
+                f"SUM(clicks) clk FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                f"GROUP BY yr, media ORDER BY yr, media")
+        if not mq.empty:
+            P.append("[매체별 연도별 광고실적] " + "; ".join(
+                f"{int(r.yr)}년 {r.media}: 광고비{int(r.cost):,}원/노출{int(r.imp):,}/클릭{int(r.clk):,}"
+                f"/CTR{(r.clk/r.imp*100 if r.imp else 0):.2f}%/CPC{(r.cost/r.clk if r.clk else 0):,.0f}원"
+                for _, r in mq.iterrows()))
+    except Exception:
+        pass
     P.append("[정의] 신건=온라인 광고로 유입된 신규 고객 / 파생=기존 고객의 재의뢰. 매출 기준은 기본보수액. "
              "사건유형(형사·민사·이혼 등)은 '계약' 분류이고, 광고 카테고리(교통·성범죄 등)와는 별개 체계임. "
-             "광고 전환수는 부정확하여 대시보드에서 제외함(광고비·노출·클릭·CPI만 신뢰). "
+             "광고 전환수는 부정확하여 제외함(광고비·노출·클릭·CTR·CPC만 신뢰). "
+             "⚠️ 네이버 광고 상세데이터(노출/클릭)는 2026년 6월부터 적재되어 그 이전은 제한적이며, "
+             "구글은 2025년 2월부터 데이터가 있음. 총광고비·문의·매출은 연간요약 시트 기준으로 과거부터 존재함. "
              "데이터가 특정 연·월까지만 있으면 그 범위만 답하고, 없는 기간은 '데이터에 없다'고 안내할 것.")
     return "\n".join(P)
 
