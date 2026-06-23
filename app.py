@@ -139,6 +139,44 @@ def get_bq():
 def bq(sql):
     return get_bq().query(sql).to_dataframe()
 
+def get_client_ip():
+    """클라이언트 IP 추출. Streamlit Cloud(프록시 뒤)에서는 unknown일 수 있음 — best effort."""
+    try:
+        ip = getattr(st.context, "ip_address", None)
+        if ip:
+            return str(ip)
+    except Exception:
+        pass
+    try:
+        h = st.context.headers
+        xff = h.get("X-Forwarded-For") or h.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
+def log_login(user, ip):
+    """로그인 성공 이력을 BigQuery login_log에 적재."""
+    try:
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.login_log"
+        schema = [
+            bigquery.SchemaField("ts", "TIMESTAMP"),
+            bigquery.SchemaField("user", "STRING"),
+            bigquery.SchemaField("ip", "STRING"),
+        ]
+        client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
+        client.insert_rows_json(tid, [{
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": user, "ip": ip,
+        }])
+    except Exception:
+        pass
+
+
 def log_ai_usage(user, tab, period, insight, usage):
     """AI 실제 호출(토큰 소모) 시 BigQuery에 사용 로그 적재. 캐시 히트는 호출 안 되므로 자동 제외."""
     try:
@@ -1319,6 +1357,7 @@ def render_login():
                 users = {}
             if uid in users and str(users[uid]) == pw:
                 st.session_state["auth_user"] = uid
+                log_login(uid, get_client_ip())
                 st.rerun()
             else:
                 st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
@@ -1326,8 +1365,27 @@ def render_login():
 
 
 def render_admin_log():
-    """관리자(admin) 전용 — AI 사용 로그 + 토큰/비용 집계."""
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-robot"></i> AI 사용 로그 (관리자)</div>', unsafe_allow_html=True)
+    """관리자(admin) 전용 — 로그인 이력 + AI 사용 로그 + 토큰/비용 집계."""
+    # ── 로그인 이력 ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-right-to-bracket"></i> 로그인 이력</div>', unsafe_allow_html=True)
+    try:
+        ldf = bq(f"SELECT ts,user,ip FROM `{BQ_PROJECT}.{BQ_DATASET}.login_log` ORDER BY ts DESC LIMIT 200")
+    except Exception:
+        ldf = pd.DataFrame()
+    if ldf.empty:
+        st.caption("아직 로그인 이력이 없습니다.")
+    else:
+        lk = st.columns(2)
+        kpi(lk[0], "fa-right-to-bracket", "총 로그인", f"{len(ldf)}", "회")
+        kpi(lk[1], "fa-user", "계정 수", f"{ldf['user'].nunique()}", "개")
+        cols = ["시각", "계정", "IP"]
+        rows = [[(str(r.ts), str(r.ts)), (r.user, r.user), (r.ip or "unknown", r.ip or "")]
+                for _, r in ldf.iterrows()]
+        sortable_table(cols, rows, height=min(320, 70 + len(rows) * 38))
+        st.caption("※ IP는 Streamlit Cloud 환경 특성상 'unknown'으로 표시될 수 있습니다.")
+
+    # ── AI 사용 로그 ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-robot"></i> AI 사용 로그</div>', unsafe_allow_html=True)
     try:
         df = bq(f"SELECT ts,user,tab,period,insight,input_tokens,output_tokens,est_cost_krw "
                 f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ai_usage_log` ORDER BY ts DESC LIMIT 200")
