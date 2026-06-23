@@ -406,6 +406,54 @@ def load_annual():
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)
+def load_etc():
+    """기타매체(카카오모먼트·모비온·메타) 비용 시트를 직접 읽어 세로형 DataFrame 반환.
+       BigQuery 적재 없이 '기타매체' 시트가 곧 소스 — 비정기 업데이트가 즉시 반영됨.
+       반환 컬럼: date(datetime)·media·cost·impressions·clicks·conversions"""
+    cols = ["date", "media", "cost", "impressions", "clicks", "conversions"]
+    try:
+        vals = get_gc().open_by_key(AD_SHEET_ID).worksheet("기타매체").get_all_values()
+    except Exception:
+        return pd.DataFrame(columns=cols)
+    if len(vals) < 2:
+        return pd.DataFrame(columns=cols)
+    header = [h.strip() for h in vals[0]]
+    media_list = ["카카오모먼트", "모비온", "메타"]
+    idx = {}
+    for i, h in enumerate(header):
+        for m in media_list:
+            if h == m + "비용": idx[(m, "cost")] = i
+            if h == m + "노출": idx[(m, "imp")] = i
+            if h == m + "클릭": idx[(m, "clk")] = i
+
+    def _n(r, m, key):
+        j = idx.get((m, key))
+        if j is None or j >= len(r):
+            return 0.0
+        s = str(r[j]).replace(",", "").replace("원", "").strip()
+        try:
+            return float(s) if s else 0.0
+        except Exception:
+            return 0.0
+
+    rows = []
+    for r in vals[1:]:
+        if not r or not str(r[0]).strip():
+            continue
+        try:
+            d = pd.to_datetime(str(r[0]).strip().replace(".", "-"), format="%Y-%m-%d")
+        except Exception:
+            continue
+        for m in media_list:
+            cost, imp, clk = _n(r, m, "cost"), _n(r, m, "imp"), _n(r, m, "clk")
+            if cost == 0 and imp == 0 and clk == 0:
+                continue
+            rows.append({"date": d, "media": m, "cost": cost,
+                         "impressions": int(imp), "clicks": int(clk), "conversions": 0})
+    return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+
+@st.cache_data(ttl=300)
 def load_inq_tab(tab_name):
     try:
         ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet(tab_name)
@@ -781,14 +829,15 @@ def render_summary():
             return (0.0, 0.0, 0.0, 0.0)
         return (sel["문의"].sum(), sel["상담"].sum(), sel["수임"].sum(), sel["총광고비"].sum())
 
-    # 전매체 광고비 (ad_keyword + ad_etc)
+    # 전매체 광고비 (ad_keyword + 기타매체 시트)
     def spend(s, e):
         try:
             a = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{s}' AND '{e}'")["c"].iloc[0]
-            b = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{s}' AND '{e}'")["c"].iloc[0]
-            return float(a or 0) + float(b or 0)
         except Exception:
-            return 0.0
+            a = 0
+        etc = load_etc()
+        b = etc[(etc["date"].dt.date >= s) & (etc["date"].dt.date <= e)]["cost"].sum() if not etc.empty else 0
+        return float(a or 0) + float(b or 0)
     def rev(s, e, new=False):
         m = (con["_date"].dt.date >= s) & (con["_date"].dt.date <= e)
         if new: m &= con["_is_new"]
@@ -914,10 +963,15 @@ def render_summary():
     # 매체별 광고비 비중
     try:
         mk = bq(f"SELECT media,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY media")
-        me = bq(f"SELECT media,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{start}' AND '{end}' GROUP BY media")
-        mix = pd.concat([mk, me], ignore_index=True)
     except Exception:
-        mix = pd.DataFrame()
+        mk = pd.DataFrame(columns=["media", "cost"])
+    etc = load_etc()
+    if not etc.empty:
+        em = etc[(etc["date"].dt.date >= start) & (etc["date"].dt.date <= end)]
+        me = em.groupby("media", as_index=False)["cost"].sum()
+    else:
+        me = pd.DataFrame(columns=["media", "cost"])
+    mix = pd.concat([mk, me], ignore_index=True)
 
     # 단일 월(같은 연·월) 조회 시에만: 월 목표 달성바
     is_single_month = (start.year == end.year and start.month == end.month)
@@ -979,14 +1033,27 @@ def render_daily():
     ps, pe = s - timedelta(days=span), s - timedelta(days=1)
 
     def ad_period(a, b):
+        frames = []
         try:
-            return bq(f"""SELECT date,SUM(cost) cost,SUM(impressions) imp,SUM(clicks) clk,SUM(conversions) conv FROM (
-                SELECT date,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{a}' AND '{b}'
-                UNION ALL
-                SELECT date,cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{a}' AND '{b}'
-            ) GROUP BY date ORDER BY date""")
+            kw = bq(f"SELECT date, SUM(cost) cost, SUM(impressions) imp, SUM(clicks) clk "
+                    f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{a}' AND '{b}' GROUP BY date")
+            if not kw.empty:
+                kw["date"] = kw["date"].astype(str)
+                frames.append(kw)
         except Exception:
-            return pd.DataFrame()
+            pass
+        etc = load_etc()
+        if not etc.empty:
+            em = etc[(etc["date"].dt.date >= a) & (etc["date"].dt.date <= b)].copy()
+            if not em.empty:
+                em["date"] = em["date"].dt.strftime("%Y-%m-%d")
+                frames.append(em.groupby("date", as_index=False).agg(
+                    cost=("cost", "sum"), imp=("impressions", "sum"), clk=("clicks", "sum")))
+        if not frames:
+            return pd.DataFrame(columns=["date", "cost", "imp", "clk"])
+        allf = pd.concat(frames, ignore_index=True)
+        return allf.groupby("date", as_index=False).agg(
+            cost=("cost", "sum"), imp=("imp", "sum"), clk=("clk", "sum")).sort_values("date")
     adp = ad_period(s, e); padp = ad_period(ps, pe)
     total_ad = adp.cost.sum() if not adp.empty else 0
     p_ad = padp.cost.sum() if not padp.empty else 0
@@ -1043,8 +1110,9 @@ def render_daily():
     rows = rows[::-1]  # 최신 날짜 먼저
     sortable_table(columns, rows, height=min(480, 70 + len(rows) * 38))
 
-    # ── 캠페인별 예산 대비 소진 (운영중만! OFF 제외) — ad_budget 기준 ──
-    bud = load_budget(day=e)
+    # ── 캠페인별 예산 대비 소진 (운영중만! OFF 제외) — ad_budget 최신 스냅샷 기준 ──
+    #    예산/소진은 "현재 현황"이므로 선택 기간과 무관하게 항상 최신 스냅샷 표시
+    bud = load_budget()
     if not bud.empty:
         bud = bud[bud["status"] != "PAUSED"]   # 🔴 OFF(중지) 캠페인은 그날 제외!!!
     if not bud.empty:
@@ -1237,23 +1305,17 @@ def render_ad_tab(media, full):
 # MAIN
 # ══════════════════════════════════════════════
 def render_etc():
-    tab_header("fa-shapes", "기타 매체", "카카오모먼트 · 모비온", color="#C77B6B", rgb="199,123,107")
+    tab_header("fa-shapes", "기타 매체", "카카오모먼트 · 모비온 · 메타", color="#C77B6B", rgb="199,123,107")
     today = date.today()
-    try:
-        rng = bq(f"SELECT MIN(date) mn, MAX(date) mx FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc`")
-        dmin = pd.to_datetime(rng["mn"].iloc[0]).date()
-    except Exception:
-        dmin = date(2024, 1, 1)
+    etc_all = load_etc()   # 기타매체 시트 직독 (BigQuery 아님)
+    dmin = etc_all["date"].dt.date.min() if not etc_all.empty else date(2024, 1, 1)
     dmax = today   # 달력 기준 통일: 기준일=오늘
     s, e = period_selector("etc", dmin, dmax, default="지난 7일")
 
-    try:
-        df = bq(f"SELECT date,media,cost,impressions,clicks,conversions "
-                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{s}' AND '{e}' ORDER BY date")
-    except Exception as ex:
-        st.warning(f"기타매체 조회 실패: {ex}"); return
+    df = (etc_all[(etc_all["date"].dt.date >= s) & (etc_all["date"].dt.date <= e)].copy()
+          if not etc_all.empty else pd.DataFrame())
     if df.empty:
-        st.info("이 기간 기타매체(카카오/모비온) 데이터가 없습니다."); return
+        st.info("이 기간 기타매체(카카오/모비온/메타) 데이터가 없습니다."); return
 
     tc, ti, tk = df["cost"].sum(), df["impressions"].sum(), df["clicks"].sum()
     ctr = tk / ti * 100 if ti else 0
@@ -1261,10 +1323,8 @@ def render_etc():
     # 직전 동일 길이 기간
     span = (e - s).days + 1
     ps, pe = s - timedelta(days=span), s - timedelta(days=1)
-    try:
-        pdf = bq(f"SELECT cost,impressions,clicks,conversions FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc` WHERE date BETWEEN '{ps}' AND '{pe}'")
-    except Exception:
-        pdf = pd.DataFrame()
+    pdf = (etc_all[(etc_all["date"].dt.date >= ps) & (etc_all["date"].dt.date <= pe)]
+           if not etc_all.empty else pd.DataFrame())
     ptc = pdf["cost"].sum() if not pdf.empty else 0
     pti = pdf["impressions"].sum() if not pdf.empty else 0
     ptk = pdf["clicks"].sum() if not pdf.empty else 0
@@ -1283,7 +1343,7 @@ def render_etc():
     kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비</div>', unsafe_allow_html=True)
-    cmap = {"카카오모먼트": GOLD, "모비온": TEAL}
+    cmap = {"카카오모먼트": GOLD, "모비온": TEAL, "메타": CORAL}
     f = go.Figure()
     for m in df["media"].unique():
         md = df[df["media"] == m].groupby("date")["cost"].sum()
