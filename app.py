@@ -1420,7 +1420,7 @@ def render_login():
                 st.rerun()
             else:
                 st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
-        st.caption("계정 문의는 대행사 담당자에게 요청하세요.")
+        st.caption("🔐 비밀번호는 영업비밀처럼 — 소중히, 그리고 비밀스럽게 다뤄주세요 🤫")
 
 
 def render_ai_chat():
@@ -1550,6 +1550,15 @@ def main():
     st.markdown(f"""<div class="kb-top"><div>{logo_html}</div>
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div>{live}</div></div>""", unsafe_allow_html=True)
+
+    # 메인 우측 상단 로그아웃 (사이드바가 접혀도 항상 보이게)
+    lo = st.columns([4, 1, 1])
+    lo[1].markdown(f'<div style="text-align:right;padding-top:7px;font-size:13px;color:#9a9a90;">'
+                   f'👤 {user}{"  🛡️" if user == "admin" else ""}</div>', unsafe_allow_html=True)
+    if lo[2].button("🚪 로그아웃", use_container_width=True, key="logout_main"):
+        for k in ("auth_user", "login_id", "login_pw"):
+            st.session_state.pop(k, None)
+        st.rerun()
 
     # AI 기능(질의·로그)은 아직 관리자 전용
     tab_labels = ["📊 SUMMARY", "🗓️ 일자별요약", "📑 계약", "💬 문의", "🟢 네이버", "🔴 구글", "⚪ 기타"]
