@@ -1082,6 +1082,36 @@ def deriv_toggle(wkey):
     return st.session_state[wkey]
 
 
+def roas_card(rev, ad, rev_p=None, ad_p=None, period=""):
+    """ROAS 강조 카드 — 광고비·매출 둘 다 있는 화면 공통. (효율 등급 + 직전 대비)"""
+    roas = rev / ad * 100 if ad else 0
+    roas_p = (rev_p / ad_p * 100) if (rev_p and ad_p) else None
+    if roas >= 300:   grade, gc = "효율 우수", GOLD_B
+    elif roas >= 150: grade, gc = "효율 양호", GOLD
+    else:             grade, gc = "효율 점검 필요", CORAL
+    chg_html = ""
+    if roas_p:
+        t, _ = delta_str(roas, roas_p, "pct")
+        if t:
+            cc = GOLD_B if roas >= roas_p else CORAL
+            chg_html = (f'<span style="font-size:13px;margin-left:12px;color:{cc};font-weight:600;">{t} '
+                        f'<span style="color:{MUTED};font-weight:400;">직전 대비</span></span>')
+    st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
+        display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin:6px 0 16px;flex-wrap:wrap;gap:14px;">
+      <div>
+        <div style="font-size:12px;color:{MUTED};letter-spacing:1px;">
+          <i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{(' · ' + period) if period else ''}</div>
+        <div style="margin-top:5px;line-height:1;">
+          <span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>
+          <span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(210,170,80,.14);color:{gc};">{grade}</span>{chg_html}</div>
+        <div style="font-size:11px;color:{MUTED};margin-top:6px;">매출 ÷ 광고비 × 100 · 광고비 100원당 매출 {roas:.0f}원</div>
+      </div>
+      <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
+        매출 <b style="color:#E8E6DE;">{money(rev)}</b>원<br>
+        광고비 <b style="color:#E8E6DE;">{money(ad)}</b>원</div>
+    </div>""", unsafe_allow_html=True)
+
+
 def render_summary():
     tab_header("fa-chart-pie", "통합요약", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
     con = load_contracts()
@@ -1205,10 +1235,8 @@ def render_summary():
       <span style="font-size:14px;">{body}</span></div>""",
       unsafe_allow_html=True)
 
-    # ═══ HERO: 이번 달 목표 달성 (매출·ROAS·달성률·잔여) ═══
+    # ═══ HERO: 이번 달 목표 달성 (달성률·매출·잔여) ═══
     pct = min(revenue / MONTHLY_GOAL * 100, 100)
-    roas_t, roas_dir = delta_str(roas, roas_p, "pct")
-    rcolor = GOLD_B if roas >= 150 else CORAL
     st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(210,170,80,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
         <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
@@ -1218,9 +1246,6 @@ def render_summary():
         <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">{rev_label}</div>
         <div class="serif" style="font-size:22px;font-weight:600;color:{GOLD_B};">{money(revenue)}<small style="font-size:12px;">원</small></div>
         <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
-        <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">ROAS</div>
-        <div class="serif" style="font-size:22px;font-weight:600;color:{rcolor};">{roas:.0f}<small style="font-size:12px;">%</small></div>
-        <div style="font-size:11px;color:{MUTED};">{('전월동기 '+roas_t) if roas_t else '—'}</div></div>
         <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
         <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
       </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
@@ -1236,6 +1261,9 @@ def render_summary():
     kpi(c[3], "fa-headset", "상담", f"{n_sang}", "건", *delta_str(n_sang, n_sang_p, "cnt"))
     kpi(c[4], "fa-file-signature", "수임", f"{n_suim}", "건", *delta_str(n_suim, n_suim_p, "cnt"))
     kpi(c[5], "fa-percent", "수임전환율", f"{conv:.1f}", "%", *delta_str(conv, conv_p, "pct"))
+
+    # ── ROAS 강조 (광고 효율) · 일자별과 동일 카드 ──
+    roas_card(revenue, ad, rev_p, ad_p, plabel)
 
     # ── 전환 퍼널 (문의→상담→수임) · 문의 시트 기준 (6KPI와 동일 소스!!) ──
     if n_inq > 0:
@@ -1365,6 +1393,9 @@ def render_daily():
     kpi(c[3], "fa-comments", "상담", f"{n_sang}", "건", *delta_str(n_sang, p_sang, "cnt"))
     kpi(c[4], "fa-file-signature", con_lbl, f"{n_con}", "건", *delta_str(n_con, p_con, "cnt"))
     kpi(c[5], "fa-sack-dollar", amt_lbl, money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
+
+    # ── ROAS 강조 (광고 효율) ──
+    roas_card(con_amt, total_ad, p_camt, p_ad, f"최근 {span}일")
 
     # ── 어제 매체별 광고비 (네이버·구글=ad_keyword / 카카오·모비온·메타=시트) ──
     def media_spend_day(day):
