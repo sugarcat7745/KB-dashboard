@@ -1204,25 +1204,23 @@ def render_daily():
             stamp = f"{snap:%m/%d %H:%M} 기준"
         except Exception:
             stamp = ""
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 캠페인별 예산 대비 소진 '
-                    f'<span style="color:#8a8a82;font-size:12px;font-weight:400;">(운영중 · {stamp})</span></div>',
-                    unsafe_allow_html=True)
-        rows_html = ""
-        for _, r in bud.iterrows():
-            db = int(r.daily_budget or 0); tc = int(r.total_charge_cost or 0)
-            if bool(r.use_daily_budget) and db > 0:
-                pct = min(tc / db * 100, 100)
-                color = CORAL if pct >= 90 else (GOLD_B if pct >= 70 else GOLD)
-                gauge = (f'<div style="flex:1;background:#26261f;border-radius:5px;height:9px;overflow:hidden;">'
-                         f'<div style="width:{pct:.0f}%;background:{color};height:100%;"></div></div>')
-                info = f'{money(tc)} / {money(db)} <b style="color:{color};">{pct:.0f}%</b>'
-            else:
-                gauge = '<div style="flex:1;color:#777;font-size:11px;padding-left:2px;">예산 무제한</div>'
-                info = f'{money(tc)} 소진'
-            rows_html += (f'<div style="display:flex;align-items:center;gap:14px;padding:8px 0;border-bottom:1px solid #232320;">'
-                          f'<div style="width:170px;font-size:13px;color:#E8E4DA;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{r.campaign_name}</div>'
-                          f'{gauge}<div style="width:185px;text-align:right;font-size:12px;color:#9a9a90;">{info}</div></div>')
-        st.markdown(f'<div class="kb-card" style="padding:6px 18px;">{rows_html}</div>', unsafe_allow_html=True)
+        with st.expander(f"📊 캠페인별 예산 대비 소진  (운영중 · {stamp})", expanded=False):
+            rows_html = ""
+            for _, r in bud.iterrows():
+                db = int(r.daily_budget or 0); tc = int(r.total_charge_cost or 0)
+                if bool(r.use_daily_budget) and db > 0:
+                    pct = min(tc / db * 100, 100)
+                    color = CORAL if pct >= 90 else (GOLD_B if pct >= 70 else GOLD)
+                    gauge = (f'<div style="flex:1;background:#26261f;border-radius:5px;height:9px;overflow:hidden;">'
+                             f'<div style="width:{pct:.0f}%;background:{color};height:100%;"></div></div>')
+                    info = f'{money(tc)} / {money(db)} <b style="color:{color};">{pct:.0f}%</b>'
+                else:
+                    gauge = '<div style="flex:1;color:#777;font-size:11px;padding-left:2px;">예산 무제한</div>'
+                    info = f'{money(tc)} 소진'
+                rows_html += (f'<div style="display:flex;align-items:center;gap:14px;padding:8px 0;border-bottom:1px solid #232320;">'
+                              f'<div style="width:170px;font-size:13px;color:#E8E4DA;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{r.campaign_name}</div>'
+                              f'{gauge}<div style="width:185px;text-align:right;font-size:12px;color:#9a9a90;">{info}</div></div>')
+            st.markdown(f'<div class="kb-card" style="padding:6px 18px;">{rows_html}</div>', unsafe_allow_html=True)
 
     # 단일 날짜 선택 시 그날 문의·계약 상세 내역
     if s == e:
@@ -1312,16 +1310,36 @@ def render_ad_tab(media, full):
     kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
     kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
 
-    # ── 일별 광고비 추세 ──
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비 추세</div>', unsafe_allow_html=True)
-    d2 = d.copy()
-    d2["lbl"] = d2.date.apply(klabel)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=d2.lbl, y=d2.cost/1e4, name="광고비", mode="lines+markers",
-        line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(210,170,80,0.1)"))
-    fig.update_layout(yaxis=dict(ticksuffix="만원"), legend=dict(orientation="h", y=1.12))
-    thin_xticks(fig, d2.lbl)
-    st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
+    # ── 광고비 추세 (오늘/어제 → 최근 7일 일별 / 올해·장기 → 월별로 통일) ──
+    is_single = (start == end)                              # 오늘 또는 어제
+    is_year = (start == dmax.replace(month=1, day=1))       # 올해
+    monthly = is_year or span >= 60                         # 올해·장기는 월별
+    if is_single:
+        t_start, t_end = dmax - timedelta(days=7), dmax - timedelta(days=1)   # 어제부터 최근 7일
+    else:
+        t_start, t_end = start, end
+    tr = raw[(raw["date"].dt.date >= t_start) & (raw["date"].dt.date <= t_end)].copy()
+    ttl = "월별 광고비 추세" if monthly else "일별 광고비 추세"
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-chart-line"></i> {ttl}</div>', unsafe_allow_html=True)
+    if tr.empty:
+        st.caption("이 기간 추세 데이터가 없습니다.")
+    else:
+        if monthly:
+            tr["ym"] = tr["date"].dt.to_period("M")
+            g = tr.groupby("ym", as_index=False)["cost"].sum().sort_values("ym")
+            xs = pd.Series([f"{p.month}월" if p.year == dmax.year else f"{str(p.year)[2:]}.{p.month}월"
+                            for p in g["ym"]])
+            ys = g["cost"] / 1e4
+        else:
+            tr = tr.sort_values("date")
+            xs = tr["date"].apply(klabel).reset_index(drop=True)
+            ys = (tr["cost"] / 1e4).reset_index(drop=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=xs, y=ys, name="광고비", mode="lines+markers",
+            line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(210,170,80,0.1)"))
+        fig.update_layout(yaxis=dict(ticksuffix="만원"), legend=dict(orientation="h", y=1.12))
+        thin_xticks(fig, xs)
+        st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
 
     # ── 일자별 상세 표 (헤더 클릭 정렬!!!) ──
     st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세 <span style="color:#8a8a82;font-size:12px;font-weight:400;">(헤더 클릭 → 정렬)</span></div>', unsafe_allow_html=True)
@@ -1347,57 +1365,6 @@ def render_ad_tab(media, full):
         f"<td>{int(r.imp):,}</td></tr>" for _, r in kw.iterrows())
     st.markdown(f'<table class="kb-tbl"><thead><tr><th>키워드</th><th>광고비</th><th>클릭</th>'
         f'<th>노출</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-
-    if not full:
-        return
-    # ── 연령 / 성별 (광고비) — 네이버 다차원 보고서 시트 직독 ──
-    cc = st.columns(2)
-    with cc[0]:
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-users"></i> 연령별 광고비</div>', unsafe_allow_html=True)
-        adf = load_nv_age()
-        age = (adf[(adf["date"].dt.date >= sd) & (adf["date"].dt.date <= ed)]
-               .groupby("age", as_index=False)["cost"].sum().sort_values("cost", ascending=False)
-               ) if not adf.empty else pd.DataFrame()
-        if age.empty:
-            st.caption("연령 데이터 없음 — '네이버연령' 시트에 보고서를 붙여넣으면 표시됩니다.")
-        else:
-            f1 = go.Figure(go.Bar(x=age.cost / 1e4, y=age.age, orientation="h", marker=dict(color=GOLD),
-                text=[f"{x:.0f}만" for x in age.cost / 1e4], textposition="auto"))
-            f1.update_xaxes(ticksuffix="만")
-            st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
-    with cc[1]:
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-venus-mars"></i> 성별 광고비</div>', unsafe_allow_html=True)
-        gdf = load_nv_gender()
-        gen = (gdf[(gdf["date"].dt.date >= sd) & (gdf["date"].dt.date <= ed)]
-               .groupby("gender", as_index=False)["cost"].sum()) if not gdf.empty else pd.DataFrame()
-        if gen.empty:
-            st.caption("성별 데이터 없음 — '네이버성별' 시트에 붙여넣으면 표시됩니다.")
-        else:
-            f2 = go.Figure(go.Pie(labels=gen.gender, values=gen.cost, hole=0.6,
-                marker=dict(colors=[TEAL, CORAL, GRAY])))
-            st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
-
-    # ── 디바이스 / 노출매체 (광고비) — 네이버 매체디바이스 시트 직독 ──
-    seg = load_nv_seg()
-    segf = seg[(seg["date"].dt.date >= sd) & (seg["date"].dt.date <= ed)] if not seg.empty else pd.DataFrame()
-    cc2 = st.columns(2)
-    with cc2[0]:
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스별 광고비</div>', unsafe_allow_html=True)
-        if segf.empty:
-            st.caption("디바이스 데이터 없음 — '네이버매체디바이스' 시트에 붙여넣으면 표시됩니다.")
-        else:
-            dev = segf.groupby("device", as_index=False)["cost"].sum().sort_values("cost", ascending=False)
-            rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in dev.iterrows())
-            st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-    with cc2[1]:
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-tower-broadcast"></i> 노출매체별 광고비</div>', unsafe_allow_html=True)
-        if segf.empty:
-            st.caption("노출매체 데이터 없음 — 위 시트에 붙여넣으면 표시됩니다.")
-        else:
-            pl = (segf[segf["cost"] > 0].groupby("placement", as_index=False)["cost"].sum()
-                  .sort_values("cost", ascending=False).head(8))
-            rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in pl.iterrows())
-            st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════
