@@ -339,9 +339,7 @@ def ai_insight(summary, focus="", tab="", period=""):
 
 
 def ai_banner(summary, tab, period, focus=""):
-    """admin 전용 — 각 탭 상단 AI 인사이트 배너 (데이터 기반)."""
-    if st.session_state.get("auth_user") != "admin":
-        return
+    """각 탭 상단 AI 인사이트 배너 (데이터 기반) — 전체 사용자 공개."""
     txt = ai_insight(summary, focus, tab=tab, period=period)
     if not txt:
         return
@@ -370,15 +368,33 @@ def clean_num(s):
 @st.cache_data(ttl=300)
 @st.cache_data(ttl=120)
 def load_budget(day=None):
-    """캠페인 예산/소진 스냅샷. day 지정시 그날 마지막 스냅샷, 없으면 전체 최신."""
+    """캠페인 예산/소진 — 해당 날짜(없으면 최신 날짜)의 캠페인별 '최대 소진'.
+       소진은 누적이라 줄지 않으므로, 하루 스냅샷 중 MAX(소진)이 곧 실제 소진.
+       → 일중 0으로 잘못 찍힌 글리치 스냅샷에 휘둘리지 않음. 예산/상태는 최신 스냅샷 기준."""
     try:
         tbl = f"`{BQ_PROJECT}.{BQ_DATASET}.ad_budget`"
-        if day:
-            sub = f"WHERE date='{day}' AND collected_at=(SELECT MAX(collected_at) FROM {tbl} WHERE date='{day}')"
-        else:
-            sub = f"WHERE collected_at=(SELECT MAX(collected_at) FROM {tbl})"
-        return bq(f"SELECT campaign_name,daily_budget,total_charge_cost,remaining,status,"
-                  f"use_daily_budget,collected_at,date FROM {tbl} {sub} ORDER BY daily_budget DESC")
+        date_cond = f"date='{day}'" if day else f"date=(SELECT MAX(date) FROM {tbl})"
+        sql = f"""
+        WITH d AS (SELECT * FROM {tbl} WHERE {date_cond}),
+        spend AS (
+          SELECT campaign_name,
+                 MAX(total_charge_cost) AS total_charge_cost,
+                 MAX(daily_budget)      AS daily_budget
+          FROM d GROUP BY campaign_name
+        ),
+        latest AS (
+          SELECT campaign_name, status, use_daily_budget, collected_at, date,
+                 ROW_NUMBER() OVER (PARTITION BY campaign_name ORDER BY collected_at DESC) AS rn
+          FROM d
+        )
+        SELECT s.campaign_name, s.daily_budget, s.total_charge_cost,
+               GREATEST(s.daily_budget - s.total_charge_cost, 0) AS remaining,
+               l.status, l.use_daily_budget, l.collected_at, l.date
+        FROM spend s JOIN latest l
+          ON s.campaign_name = l.campaign_name AND l.rn = 1
+        ORDER BY s.daily_budget DESC
+        """
+        return bq(sql)
     except Exception:
         return pd.DataFrame()
 
@@ -451,6 +467,73 @@ def load_etc():
             rows.append({"date": d, "media": m, "cost": cost,
                          "impressions": int(imp), "clicks": int(clk), "conversions": 0})
     return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+
+def _nv_report_df(tab, key_col):
+    """네이버 다차원 보고서 시트 탭을 읽어 DataFrame. 제목행 자동 스킵(헤더=key_col 포함 행).
+       날짜('일별')·숫자('노출수'/'클릭수'/'총비용') 정제까지 수행."""
+    try:
+        vals = get_gc().open_by_key(AD_SHEET_ID).worksheet(tab).get_all_values()
+    except Exception:
+        return pd.DataFrame()
+    hdr = None
+    for i, row in enumerate(vals):
+        if key_col in [str(c).strip() for c in row]:
+            hdr = i
+            break
+    if hdr is None:
+        return pd.DataFrame()
+    header = [str(c).strip() for c in vals[hdr]]
+    data = []
+    for r in vals[hdr + 1:]:
+        if not any(str(c).strip() for c in r):
+            continue
+        data.append({header[j]: (r[j] if j < len(r) else "") for j in range(len(header))})
+    df = pd.DataFrame(data)
+    if df.empty or "일별" not in df.columns:
+        return pd.DataFrame()
+    df["date"] = pd.to_datetime(df["일별"].astype(str).str.strip().str.rstrip("."),
+                                format="%Y.%m.%d", errors="coerce")
+    df = df[df["date"].notna()].copy()
+    for c in ["노출수", "클릭수", "총비용"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c].astype(str).str.replace(",", "", regex=False), errors="coerce").fillna(0)
+    return df
+
+
+@st.cache_data(ttl=300)
+def load_nv_age():
+    """네이버 연령별 광고비 — 시트 '네이버연령' 직독."""
+    df = _nv_report_df("네이버연령", "연령대")
+    if df.empty:
+        return pd.DataFrame(columns=["date", "age", "cost", "impressions", "clicks"])
+    return pd.DataFrame({"date": df["date"], "age": df["연령대"].astype(str),
+                         "cost": df["총비용"],
+                         "impressions": df.get("노출수", 0), "clicks": df.get("클릭수", 0)})
+
+
+@st.cache_data(ttl=300)
+def load_nv_gender():
+    """네이버 성별 광고비 — 시트 '네이버성별' 직독."""
+    df = _nv_report_df("네이버성별", "성별")
+    if df.empty:
+        return pd.DataFrame(columns=["date", "gender", "cost", "impressions", "clicks"])
+    return pd.DataFrame({"date": df["date"], "gender": df["성별"].astype(str),
+                         "cost": df["총비용"],
+                         "impressions": df.get("노출수", 0), "clicks": df.get("클릭수", 0)})
+
+
+@st.cache_data(ttl=300)
+def load_nv_seg():
+    """네이버 노출매체/디바이스/지역 광고비 — 시트 '네이버매체디바이스' 직독."""
+    df = _nv_report_df("네이버매체디바이스", "매체이름")
+    if df.empty:
+        return pd.DataFrame(columns=["date", "placement", "device", "region", "cost", "impressions", "clicks"])
+    dev = df["PC/모바일 매체"].astype(str) if "PC/모바일 매체" in df.columns else ""
+    reg = df["지역"].astype(str) if "지역" in df.columns else ""
+    return pd.DataFrame({"date": df["date"], "placement": df["매체이름"].astype(str),
+                         "device": dev, "region": reg, "cost": df["총비용"],
+                         "impressions": df.get("노출수", 0), "clicks": df.get("클릭수", 0)})
 
 
 @st.cache_data(ttl=300)
@@ -882,7 +965,7 @@ def render_summary():
     focus = (f"이 리포트의 기간은 {plabel}이며 직전 동일 길이 기간과 비교한다. "
              "광고비·매출·문의·ROAS의 기간 대비 변화를 차분히 평가하고, "
              "월 목표 2.5억 달성 페이스와 사건분류 의존도(다각화) 관점을 함께 짚어라.")
-    llm = ai_insight(summary, focus, tab="SUMMARY", period=plabel) if is_admin else None
+    llm = ai_insight(summary, focus, tab="SUMMARY", period=plabel)
     if llm:
         body, icol = llm, GOLD_B
     else:
@@ -1267,38 +1350,54 @@ def render_ad_tab(media, full):
 
     if not full:
         return
-    # ── 연령 / 성별 (광고비) ──
+    # ── 연령 / 성별 (광고비) — 네이버 다차원 보고서 시트 직독 ──
     cc = st.columns(2)
     with cc[0]:
-        age = bq(f"SELECT age,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_age` "
-                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY age ORDER BY cost DESC")
         st.markdown('<div class="sec-title"><i class="fa-solid fa-users"></i> 연령별 광고비</div>', unsafe_allow_html=True)
-        f1 = go.Figure(go.Bar(x=age.cost/1e4, y=age.age, orientation="h", marker=dict(color=GOLD),
-            text=[f"{x:.0f}만" for x in age.cost/1e4], textposition="auto"))
-        f1.update_xaxes(ticksuffix="만")
-        st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
+        adf = load_nv_age()
+        age = (adf[(adf["date"].dt.date >= sd) & (adf["date"].dt.date <= ed)]
+               .groupby("age", as_index=False)["cost"].sum().sort_values("cost", ascending=False)
+               ) if not adf.empty else pd.DataFrame()
+        if age.empty:
+            st.caption("연령 데이터 없음 — '네이버연령' 시트에 보고서를 붙여넣으면 표시됩니다.")
+        else:
+            f1 = go.Figure(go.Bar(x=age.cost / 1e4, y=age.age, orientation="h", marker=dict(color=GOLD),
+                text=[f"{x:.0f}만" for x in age.cost / 1e4], textposition="auto"))
+            f1.update_xaxes(ticksuffix="만")
+            st.plotly_chart(fig_theme(f1, 250), use_container_width=True, config={"displayModeBar": False})
     with cc[1]:
-        gen = bq(f"SELECT gender,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_gender` "
-                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY gender")
         st.markdown('<div class="sec-title"><i class="fa-solid fa-venus-mars"></i> 성별 광고비</div>', unsafe_allow_html=True)
-        f2 = go.Figure(go.Pie(labels=gen.gender, values=gen.cost, hole=0.6,
-            marker=dict(colors=[TEAL, CORAL, GRAY])))
-        st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
+        gdf = load_nv_gender()
+        gen = (gdf[(gdf["date"].dt.date >= sd) & (gdf["date"].dt.date <= ed)]
+               .groupby("gender", as_index=False)["cost"].sum()) if not gdf.empty else pd.DataFrame()
+        if gen.empty:
+            st.caption("성별 데이터 없음 — '네이버성별' 시트에 붙여넣으면 표시됩니다.")
+        else:
+            f2 = go.Figure(go.Pie(labels=gen.gender, values=gen.cost, hole=0.6,
+                marker=dict(colors=[TEAL, CORAL, GRAY])))
+            st.plotly_chart(fig_theme(f2, 250), use_container_width=True, config={"displayModeBar": False})
 
-    # ── 디바이스 / 노출매체 (광고비) ──
+    # ── 디바이스 / 노출매체 (광고비) — 네이버 매체디바이스 시트 직독 ──
+    seg = load_nv_seg()
+    segf = seg[(seg["date"].dt.date >= sd) & (seg["date"].dt.date <= ed)] if not seg.empty else pd.DataFrame()
     cc2 = st.columns(2)
     with cc2[0]:
-        dev = bq(f"SELECT device,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
-                 f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY device ORDER BY cost DESC")
         st.markdown('<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스별 광고비</div>', unsafe_allow_html=True)
-        rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in dev.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        if segf.empty:
+            st.caption("디바이스 데이터 없음 — '네이버매체디바이스' 시트에 붙여넣으면 표시됩니다.")
+        else:
+            dev = segf.groupby("device", as_index=False)["cost"].sum().sort_values("cost", ascending=False)
+            rows = "".join(f"<tr><td>{r.device}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in dev.iterrows())
+            st.markdown(f'<table class="kb-tbl"><thead><tr><th>디바이스</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
     with cc2[1]:
-        pl = bq(f"SELECT placement,SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_segment` "
-                f"WHERE media='{media}' AND date BETWEEN '{sd}' AND '{ed}' GROUP BY placement ORDER BY cost DESC LIMIT 8")
         st.markdown('<div class="sec-title"><i class="fa-solid fa-tower-broadcast"></i> 노출매체별 광고비</div>', unsafe_allow_html=True)
-        rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in pl.iterrows())
-        st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+        if segf.empty:
+            st.caption("노출매체 데이터 없음 — 위 시트에 붙여넣으면 표시됩니다.")
+        else:
+            pl = (segf[segf["cost"] > 0].groupby("placement", as_index=False)["cost"].sum()
+                  .sort_values("cost", ascending=False).head(8))
+            rows = "".join(f"<tr><td>{r.placement}</td><td class='num'>{money(r.cost)}</td></tr>" for _, r in pl.iterrows())
+            st.markdown(f'<table class="kb-tbl"><thead><tr><th>노출매체</th><th>광고비</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════
@@ -1891,7 +1990,7 @@ def main():
         st.rerun()
 
     is_admin = (user == "admin")
-    top_labels = ["📊 요약", "📈 광고", "💼 실적"] + (["🤖 AI"] if is_admin else [])
+    top_labels = ["📊 요약", "📈 광고", "💼 실적", "🤖 AI"]
     top = st.tabs(top_labels)
 
     with top[0]:
@@ -1923,14 +2022,16 @@ def main():
         else:
             render_inquiries()
 
-    if is_admin:
-        with top[3]:
+    with top[3]:
+        if is_admin:
             a = st.radio("AI", ["AI 질의", "AI 로그"], horizontal=True,
                          label_visibility="collapsed", key="nav_ai")
-            if a == "AI 질의":
-                render_ai_chat()
-            else:
+            if a == "AI 로그":
                 render_admin_log()
+            else:
+                render_ai_chat()
+        else:
+            render_ai_chat()
 
 
 main()
