@@ -2067,10 +2067,10 @@ def render_contracts():
             "계약", f"{cs}~{ce}",
             focus="신건 매출 구성과 사건유형별 비중을 차분히 평가하고, 매출 확대를 위한 제안을 1가지 제시하라.")
         pc = st.columns(4)
-        kpi(pc[0], "fa-sack-dollar", main_lbl, won(main_sum), desc=f"{cs} ~ {ce}")
-        kpi(pc[1], "fa-file-signature", cnt_lbl, f"{main_cnt:,}", "건", desc=f"전체 {len(cf):,}건")
-        kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum), desc="참고용")
-        kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(main_sum/main_cnt/1e4 if main_cnt else 0):.0f}", "만", desc="건당")
+        kpi(pc[0], "fa-sack-dollar", main_lbl, won(main_sum))
+        kpi(pc[1], "fa-file-signature", cnt_lbl, f"{main_cnt:,}", "건")
+        kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum))
+        kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(main_sum/main_cnt/1e4 if main_cnt else 0):.0f}", "만")
         if len(cf):
             with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
                 rows = "".join(
@@ -2106,22 +2106,22 @@ def render_contracts():
         c = st.columns(6)
         kpi(c[0], "fa-sack-dollar", f"{this_y} 신건 누적", won(new_sum),
             chg=f"{'▲' if yoy>=0 else '▼'} {abs(yoy):.1f}%", chg_dir="up" if yoy>=0 else "down", desc="전년 동기 대비(신건)")
-        kpi(c[1], "fa-file-signature", "신건 계약", f"{new_cnt:,}", "건", desc=f"전체 {cur_cnt:,}건")
-        kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum), desc="참고용 · 재의뢰")
-        kpi(c[3], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만", desc="건당")
+        kpi(c[1], "fa-file-signature", "신건 계약", f"{new_cnt:,}", "건")
+        kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum))
+        kpi(c[3], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만")
         kpi(c[4], "fa-calendar-check", "이번 달 신건", won(month_new),
             chg=f"{month_new/MONTHLY_GOAL*100:.0f}%", desc="목표 2.5억 대비")
-        kpi(c[5], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%", desc="전체 매출 중")
+        kpi(c[5], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%")
 
         # ── 입금 현황 + 미수금 (전체 기간) ──
         st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
         t_amt, t_paid, t_unpaid = df["_amt"].sum(), df["_paid"].sum(), df["_unpaid"].sum()
         rate = t_paid / t_amt * 100 if t_amt else 0
         ci = st.columns(3)
-        kpi(ci[0], "fa-circle-check", "입금 완료", money(t_paid), "원", desc=f"수금률 {rate:.1f}%")
+        kpi(ci[0], "fa-circle-check", "입금 완료", money(t_paid), "원")
         kpi(ci[1], "fa-circle-exclamation", "미수금", money(t_unpaid), "원",
-            chg=f"{t_unpaid/t_amt*100:.1f}%" if t_amt else None, chg_dir="down", desc="아직 못 받은 돈")
-        kpi(ci[2], "fa-percent", "수금률", f"{rate:.1f}", "%", desc="입금 ÷ 기본보수")
+            chg=f"{t_unpaid/t_amt*100:.1f}%" if t_amt else None, chg_dir="down")
+        kpi(ci[2], "fa-percent", "수금률", f"{rate:.1f}", "%")
 
         # 미수금 리스트 (클릭하면 펼침)
         unpaid = df[df["_unpaid"] > 0].sort_values("_unpaid", ascending=False)
