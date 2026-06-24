@@ -1108,10 +1108,12 @@ def deriv_toggle(wkey):
     return st.session_state[wkey]
 
 
-def roas_card(rev, ad, rev_p=None, ad_p=None, period=""):
-    """ROAS 강조 카드 — 광고비·매출 둘 다 있는 화면 공통. (효율 등급 + 직전 대비)"""
+def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True):
+    """ROAS 강조 카드 — 광고비·매출 둘 다 있는 화면 공통. (효율 등급 + 직전 대비 + 영업이익)"""
     roas = rev / ad * 100 if ad else 0
     roas_p = (rev_p / ad_p * 100) if (rev_p and ad_p) else None
+    profit = rev - ad
+    pcolor = GOLD_B if profit >= 0 else CORAL
     if roas >= 300:   grade, gc = "효율 우수", GOLD_B
     elif roas >= 150: grade, gc = "효율 양호", GOLD
     else:             grade, gc = "효율 점검 필요", CORAL
@@ -1122,6 +1124,8 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period=""):
             cc = GOLD_B if roas >= roas_p else CORAL
             chg_html = (f'<span style="font-size:13px;margin-left:12px;color:{cc};font-weight:600;">{t} '
                         f'<span style="color:{MUTED};font-weight:400;">직전 대비</span></span>')
+    profit_row = (f'<br>영업이익 <b style="color:{pcolor};font-size:15px;">{money(profit)}</b>원' if show_profit else '')
+    desc = ("영업이익 = 매출 − 광고비 · " if show_profit else "") + f"광고비 100원당 매출 {roas:.0f}원"
     st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
         display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin:6px 0 16px;flex-wrap:wrap;gap:14px;">
       <div>
@@ -1130,11 +1134,11 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period=""):
         <div style="margin-top:5px;line-height:1;">
           <span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>
           <span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(210,170,80,.14);color:{gc};">{grade}</span>{chg_html}</div>
-        <div style="font-size:11px;color:{MUTED};margin-top:6px;">매출 ÷ 광고비 × 100 · 광고비 100원당 매출 {roas:.0f}원</div>
+        <div style="font-size:11px;color:{MUTED};margin-top:6px;">{desc}</div>
       </div>
       <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
         매출 <b style="color:#E8E6DE;">{money(rev)}</b>원<br>
-        광고비 <b style="color:#E8E6DE;">{money(ad)}</b>원</div>
+        광고비 <b style="color:#E8E6DE;">{money(ad)}</b>원{profit_row}</div>
     </div>""", unsafe_allow_html=True)
 
 
@@ -1421,7 +1425,7 @@ def render_daily():
     kpi(c[5], "fa-sack-dollar", amt_lbl, money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
 
     # ── ROAS 강조 (광고 효율) ──
-    roas_card(con_amt, total_ad, p_camt, p_ad, f"최근 {span}일")
+    roas_card(con_amt, total_ad, p_camt, p_ad, f"최근 {span}일", show_profit=False)
 
     # ── 어제 매체별 광고비 (네이버·구글=ad_keyword / 카카오·모비온·메타=시트) ──
     def media_spend_day(day):
@@ -2130,6 +2134,18 @@ def render_contracts():
         kpi(c[1], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만")
         kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum))
         kpi(c[3], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%")
+
+        # ── ROAS · 영업이익 (이 기간 광고비 불러와서 계산) ──
+        try:
+            _a = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                    f"WHERE date BETWEEN '{cs}' AND '{ce}'")["c"].iloc[0]
+        except Exception:
+            _a = 0
+        _etc = load_etc()
+        _b = (_etc[(_etc["date"].dt.date >= cs) & (_etc["date"].dt.date <= ce)]["cost"].sum()
+              if (_etc is not None and not _etc.empty) else 0)
+        ad_period = float(_a or 0) + float(_b or 0)
+        roas_card(hero_sum, ad_period, period=hero_period)
         if len(cf):
             with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
                 rows = "".join(
