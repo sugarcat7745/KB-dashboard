@@ -1172,6 +1172,49 @@ def render_daily():
     kpi(c[4], "fa-file-signature", "계약", f"{n_con}", "건", *delta_str(n_con, p_con, "cnt"))
     kpi(c[5], "fa-sack-dollar", "계약금액", money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
 
+    # ── 어제 매체별 광고비 (네이버·구글=ad_keyword / 카카오·모비온·메타=시트) ──
+    def media_spend_day(day):
+        out = {}
+        try:
+            mk = bq(f"SELECT media, SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                    f"WHERE date='{day}' GROUP BY media")
+            for _, r in mk.iterrows():
+                out[str(r["media"])] = out.get(str(r["media"]), 0) + float(r["cost"] or 0)
+        except Exception:
+            pass
+        etc = load_etc()
+        if not etc.empty:
+            em = etc[etc["date"].dt.date == day]
+            for m, cst in em.groupby("media")["cost"].sum().items():
+                out[str(m)] = out.get(str(m), 0) + float(cst)
+        return {m: v for m, v in out.items() if v > 0}
+
+    yday = dmax - timedelta(days=1)
+    msp = media_spend_day(yday)
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-coins"></i> 어제({yday:%m/%d}) 매체별 광고비</div>', unsafe_allow_html=True)
+    if not msp:
+        st.caption(f"{yday} 매체별 광고비 데이터가 아직 없습니다 (집계 지연일 수 있습니다).")
+    else:
+        cmap = {"네이버": GOLD, "구글": TEAL, "카카오모먼트": CORAL, "모비온": GOLD_B, "메타": GRAY}
+        total = sum(msp.values())
+        rows_html = ""
+        for m, v in sorted(msp.items(), key=lambda x: -x[1]):
+            col = cmap.get(m, GOLD_D)
+            pctv = v / total * 100 if total else 0
+            rows_html += (f'<div style="display:flex;align-items:center;gap:13px;padding:9px 0;border-bottom:1px solid #232320;">'
+                          f'<div style="width:13px;height:13px;border-radius:3px;background:{col};flex:none;"></div>'
+                          f'<div style="width:120px;font-size:13px;color:#E8E4DA;flex:none;">{m}</div>'
+                          f'<div style="flex:1;background:#26261f;border-radius:5px;height:9px;overflow:hidden;">'
+                          f'<div style="width:{pctv:.0f}%;background:{col};height:100%;"></div></div>'
+                          f'<div style="width:160px;text-align:right;font-size:13px;color:#E8E4DA;flex:none;">{money(v)}원 '
+                          f'<span style="color:#8a8a82;font-size:11px;">{pctv:.0f}%</span></div></div>')
+        rows_html += (f'<div style="display:flex;align-items:center;gap:13px;padding:11px 0 4px;">'
+                      f'<div style="width:13px;flex:none;"></div>'
+                      f'<div style="width:120px;font-size:13px;color:{GOLD_B};font-weight:700;flex:none;">합계</div>'
+                      f'<div style="flex:1;"></div>'
+                      f'<div style="width:160px;text-align:right;font-size:14px;color:{GOLD_B};font-weight:700;flex:none;">{money(total)}원</div></div>')
+        st.markdown(f'<div class="kb-card" style="padding:6px 18px 12px;">{rows_html}</div>', unsafe_allow_html=True)
+
     # 일자별 상세 표 (정렬 가능)
     st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 일자별 상세</div>', unsafe_allow_html=True)
     ad_by = {pd.Timestamp(r["date"]).date(): r for _, r in adp.iterrows()} if not adp.empty else {}
