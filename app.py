@@ -1174,17 +1174,11 @@ def render_summary():
     cmask0 = (con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)
     catall = con[cmask0 & con["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=False)
     top_cat = f"{catall.index[0]}({catall.iloc[0]/1e8:.1f}억)" if not catall.empty else "-"
-    # 문의당 비용(CPI) 미리 계산 (당월/당해 · 연간요약 기준)
-    _ann = load_annual(); cpi_v = 0.0; inq_v = 0
-    if not _ann.empty:
-        _i, _cn, _ct, _ad = ann_sum_range(_ann, start, end)
-        if _i > 0:
-            inq_v = _i; cpi_v = _ad / _i
     summary = (f"기간:{plabel}({cmp_label}). 모든 매출 측정은 신건 기준이다. "
                f"광고비 {money(ad)}원(비교 {ad_c or '데이터없음'}), "
-               f"신건매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), 파생매출(참고) {money(deriv)}원, "
-               f"ROAS {roas:.0f}%, 신건계약 {n_con}건, "
-               f"문의당비용(CPI) {money(cpi_v)}원, 사건분류 매출1위 {top_cat}.")
+               f"신건매출 {money(revenue)}원(비교 {rev_c or '데이터없음'}), 파생매출(참고) {money(deriv)}원, ROAS {roas:.0f}%. "
+               f"문의 {n_inq}건, 상담 {n_sang}건, 수임 {n_suim}건, 수임전환율 {conv:.1f}%, "
+               f"문의당비용(CPI) {money(cpi_kpi)}원, 신건계약 {n_con}건, 사건분류 매출1위 {top_cat}.")
     is_admin = st.session_state.get("auth_user") == "admin"
     focus = (f"이 리포트는 이번 달({plabel}) 누적 실적이며 전월 동기간과 비교한다. "
              "광고비·매출·문의·ROAS의 기간 대비 변화를 차분히 평가하고, "
@@ -1211,6 +1205,26 @@ def render_summary():
       <span style="font-size:14px;">{body}</span></div>""",
       unsafe_allow_html=True)
 
+    # ═══ HERO: 이번 달 목표 달성 (매출·ROAS·달성률·잔여) ═══
+    pct = min(revenue / MONTHLY_GOAL * 100, 100)
+    roas_t, roas_dir = delta_str(roas, roas_p, "pct")
+    rcolor = GOLD_B if roas >= 150 else CORAL
+    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(210,170,80,.35);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
+        <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
+        <div style="display:flex;align-items:baseline;gap:10px;">
+        <span class="serif" style="font-size:38px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
+        <span style="font-size:14px;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+        <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">{rev_label}</div>
+        <div class="serif" style="font-size:22px;font-weight:600;color:{GOLD_B};">{money(revenue)}<small style="font-size:12px;">원</small></div>
+        <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
+        <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">ROAS</div>
+        <div class="serif" style="font-size:22px;font-weight:600;color:{rcolor};">{roas:.0f}<small style="font-size:12px;">%</small></div>
+        <div style="font-size:11px;color:{MUTED};">{('전월동기 '+roas_t) if roas_t else '—'}</div></div>
+        <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
+        <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
+      </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
+
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
                 f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {cmp_label} 증감</div>', unsafe_allow_html=True)
     c = st.columns(6)
@@ -1223,53 +1237,14 @@ def render_summary():
     kpi(c[4], "fa-file-signature", "수임", f"{n_suim}", "건", *delta_str(n_suim, n_suim_p, "cnt"))
     kpi(c[5], "fa-percent", "수임전환율", f"{conv:.1f}", "%", *delta_str(conv, conv_p, "pct"))
 
-    # ── 퍼널 (문의→상담→수임) + CPI/CPA · 전부 비교!!! ──
-    ann = load_annual()
-    if not ann.empty:
-        flabel = plabel
-        inq, cons, cont, adc = ann_sum_range(ann, start, end)
-        p_inq, p_cons, p_cont, p_adc = ann_sum_range(ann, ps, pe)
-        if inq > 0:
-            cpi = adc / inq if inq else 0
-            cpa = adc / cont if cont else 0
-            p_cpi = p_adc / p_inq if p_inq else 0
-            p_cpa = p_adc / p_cont if p_cont else 0
-            cpi_c, _ = delta_str(cpi, p_cpi, "won")
-            # CPI는 낮을수록 좋음 → 내려가면 초록, 오르면 코랄
-            cpi_color = "#7FB87F" if (p_cpi and cpi <= p_cpi) else (CORAL if p_cpi else MUTED)
-            cpi_badge = (f'<span style="font-size:14px;margin-left:12px;color:{cpi_color};font-weight:600;">{cpi_c}</span>'
-                         if cpi_c else "")
-            # CPI 강조 배너 (글자 28px로 축소 + 전기간 비교 배지!!!)
-            st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
-              display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin-top:24px;margin-bottom:16px;">
-              <div>
-                <div style="font-size:12px;color:{MUTED};letter-spacing:1px;">
-                  <i class="fa-solid fa-coins" style="color:{GOLD};margin-right:7px;"></i>문의당 비용 (CPI) · {flabel}</div>
-                <div style="margin-top:5px;line-height:1;">
-                  <span style="font-family:'Noto Serif KR',serif;font-size:28px;font-weight:600;color:{GOLD_B};">{money(cpi)}<span style="font-size:14px;color:{MUTED};margin-left:1px;">원</span></span>{cpi_badge}</div>
-                <div style="font-size:11px;color:{MUTED};margin-top:6px;">광고비를 문의 1건당 비용으로 환산 · 낮을수록 효율적 · {cmp_label}</div>
-              </div>
-              <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
-                문의 <b style="color:#E8E6DE;">{inq:.0f}</b>건<br>
-                광고비 <b style="color:#E8E6DE;">{money(adc)}</b>원<br>
-                수임당(CPA) <b style="color:{CORAL};">{money(cpa)}</b>원</div>
-            </div>""", unsafe_allow_html=True)
-            # 문의·상담·수임·CPI·CPA 전부 전기간 대비 비교!!! (핵심은 비교!!!)
-            cmp_caption(cmp_label)
-            kc = st.columns(5)
-            kpi(kc[0], "fa-phone", "문의", f"{inq:.0f}", "건", *delta_str(inq, p_inq, "cnt"))
-            kpi(kc[1], "fa-comments", "상담", f"{cons:.0f}", "건", *delta_str(cons, p_cons, "cnt"))
-            kpi(kc[2], "fa-handshake", "수임", f"{cont:.0f}", "건", *delta_str(cont, p_cont, "cnt"))
-            kpi(kc[3], "fa-coins", "CPI", money(cpi), "", *delta_str(cpi, p_cpi, "won"))
-            kpi(kc[4], "fa-sack-dollar", "CPA", money(cpa), "", *delta_str(cpa, p_cpa, "won"))
-            # 전환 퍼널
-            st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {flabel} (문의 시트 기준)</div>', unsafe_allow_html=True)
-            ff = go.Figure(go.Funnel(y=["문의", "상담", "수임"], x=[inq, cons, cont],
-                textinfo="value+percent initial", marker=dict(color=[TEAL, GOLD, CORAL])))
-            st.plotly_chart(fig_theme(ff, 240), use_container_width=True, config={"displayModeBar": False})
-            if inq:
-                st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-top:-6px;">문의→수임 전환율 '
-                            f'<b style="color:{GOLD_B};">{cont/inq*100:.1f}%</b></div>', unsafe_allow_html=True)
+    # ── 전환 퍼널 (문의→상담→수임) · 문의 시트 기준 (6KPI와 동일 소스!!) ──
+    if n_inq > 0:
+        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {plabel} (문의 시트 기준)</div>', unsafe_allow_html=True)
+        ff = go.Figure(go.Funnel(y=["문의", "상담", "수임"], x=[n_inq, n_sang, n_suim],
+            textinfo="value+percent initial", marker=dict(color=[TEAL, GOLD, CORAL])))
+        st.plotly_chart(fig_theme(ff, 240), use_container_width=True, config={"displayModeBar": False})
+        st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-top:-6px;">문의→수임 전환율 '
+                    f'<b style="color:{GOLD_B};">{conv:.1f}%</b></div>', unsafe_allow_html=True)
 
     # 매체별 광고비 비중
     try:
@@ -1283,28 +1258,6 @@ def render_summary():
     else:
         me = pd.DataFrame(columns=["media", "cost"])
     mix = pd.concat([mk, me], ignore_index=True)
-
-    # 단일 월(같은 연·월) 조회 시에만: 월 목표 달성바 (+ 매출·ROAS 보존)
-    is_single_month = (start.year == end.year and start.month == end.month)
-    if is_single_month:
-        pct = min(revenue / MONTHLY_GOAL * 100, 100)
-        roas_t, roas_dir = delta_str(roas, roas_p, "pct")
-        rcolor = GOLD_B if roas >= 150 else CORAL
-        st.markdown(f"""<div class="kb-card" style="margin-top:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
-            <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
-            <div style="display:flex;align-items:baseline;gap:10px;">
-            <span class="serif" style="font-size:32px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
-            <span style="font-size:14px;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
-            <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">{rev_label}</div>
-            <div class="serif" style="font-size:22px;font-weight:600;color:{GOLD_B};">{money(revenue)}<small style="font-size:12px;">원</small></div>
-            <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 데이터 없음'}</div></div>
-            <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">ROAS</div>
-            <div class="serif" style="font-size:22px;font-weight:600;color:{rcolor};">{roas:.0f}<small style="font-size:12px;">%</small></div>
-            <div style="font-size:11px;color:{MUTED};">{('전월동기 '+roas_t) if roas_t else '—'}</div></div>
-            <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
-            <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
-          </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
 
     cc = st.columns([3, 2])
     with cc[0]:
@@ -2050,27 +2003,77 @@ def render_contracts():
         cmin = df["_date"].min().date()
         cmax = date.today()   # 달력 기준 통일: 기준일=오늘
         cs, ce = period_selector("con", cmin, cmax, default="올해")
+        include_deriv = deriv_toggle("deriv_con")
+
+        # 선택 기간 (신건 중심)
         cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
         cf_new = cf[cf["_is_new"]]
-        cfn_sum = cf_new["_amt"].sum(); cfd_sum = cf["_amt"].sum() - cfn_sum
-        include_deriv = deriv_toggle("deriv_con")
-        main_sum = (cfn_sum + cfd_sum) if include_deriv else cfn_sum
-        main_cnt = len(cf) if include_deriv else len(cf_new)
-        main_lbl = "기간 전체매출(신건+파생)" if include_deriv else "기간 신건매출"
-        cnt_lbl  = "기간 전체계약" if include_deriv else "기간 신건계약"
+        new_sum = cf_new["_amt"].sum()
+        deriv_sum = cf["_amt"].sum() - new_sum
+        new_cnt = len(cf_new)
+        avg_amt = new_sum / new_cnt if new_cnt else 0
+        new_ratio = new_sum / (new_sum + deriv_sum) * 100 if (new_sum + deriv_sum) else 0
+        hero_sum = (new_sum + deriv_sum) if include_deriv else new_sum
+        hero_cnt = len(cf) if include_deriv else new_cnt
+        hero_lbl = "전체 매출(신건+파생)" if include_deriv else "신건 매출"
+
+        # 전년 동기(같은 기간 1년 전) — 신건 기준
+        def _yshift(d, n):
+            try:
+                return d.replace(year=d.year + n)
+            except ValueError:
+                return d.replace(year=d.year + n, day=28)
+        ly_new = df[(df["_date"].dt.date >= _yshift(cs, -1)) & (df["_date"].dt.date <= _yshift(ce, -1)) & df["_is_new"]]
+        ly_sum = ly_new["_amt"].sum()
+        yoy = (new_sum - ly_sum) / ly_sum * 100 if ly_sum else 0
+
+        # 이번 달 신건 (목표바 — 항상 이번 달 기준)
+        mstart = cmax.replace(day=1)
+        month_new = df[(df["_date"].dt.date >= mstart) & (df["_date"].dt.date <= cmax) & df["_is_new"]]["_amt"].sum()
+        goal_pct = min(month_new / MONTHLY_GOAL * 100, 100) if MONTHLY_GOAL else 0
+
+        # AI 배너
         byt = cf_new.groupby("_type")["_amt"].sum().sort_values(ascending=False)
         type_str = ", ".join(f"{t} {v:,.0f}원" for t, v in byt.head(6).items())
         ai_banner(
-            f"계약 매출 분석. 기간 {cs}~{ce}. 신건매출 {cfn_sum:,.0f}원({len(cf_new)}건), "
-            f"파생매출 {cfd_sum:,.0f}원. 신건 사건유형별: {type_str}. "
-            f"신건 건당 평균 {(cfn_sum/len(cf_new) if len(cf_new) else 0):,.0f}원.",
+            f"계약 매출 분석. 기간 {cs}~{ce}. 신건매출 {new_sum:,.0f}원({new_cnt}건), "
+            f"전년 동기 대비 {yoy:+.1f}%, 파생매출 {deriv_sum:,.0f}원. 신건 사건유형별: {type_str}. "
+            f"신건 건당 평균 {avg_amt:,.0f}원. 이번 달 신건 {month_new:,.0f}원(월목표 2.5억 대비 {goal_pct:.0f}%).",
             "계약", f"{cs}~{ce}",
-            focus="신건 매출 구성과 사건유형별 비중을 차분히 평가하고, 매출 확대를 위한 제안을 1가지 제시하라.")
-        pc = st.columns(4)
-        kpi(pc[0], "fa-sack-dollar", main_lbl, won(main_sum))
-        kpi(pc[1], "fa-file-signature", cnt_lbl, f"{main_cnt:,}", "건")
-        kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum))
-        kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(main_sum/main_cnt/1e4 if main_cnt else 0):.0f}", "만")
+            focus="신건 매출 추이와 전년 대비, 사건유형 비중을 평가하고 매출 확대 제안을 1가지 제시하라.")
+
+        # ═══ HERO: 신건 매출 + 전년대비 + 이번달 목표바 ═══
+        is_year = (cs.month == 1 and cs.day == 1 and cs.year == ce.year)
+        hero_period = f"{cs.year}년 누적" if is_year else f"{cs.strftime('%Y.%m.%d')} ~ {ce.strftime('%Y.%m.%d')}"
+        up = yoy >= 0
+        yc = GOLD_B if up else CORAL
+        yrgb = "210,170,80" if up else "199,123,107"
+        st.markdown(f"""<div class="kb-card" style="margin-bottom:14px;border:1px solid rgba(210,170,80,.35);
+            display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;">
+          <div>
+            <div style="font-size:13px;color:{MUTED};margin-bottom:6px;">{hero_lbl} · {hero_period}</div>
+            <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
+              <span class="serif" style="font-size:44px;font-weight:600;color:{GOLD_B};line-height:1;">{won(hero_sum)}</span>
+              <span style="font-size:14px;padding:5px 12px;border-radius:8px;background:rgba({yrgb},.16);color:{yc};white-space:nowrap;">
+                {'▲' if up else '▼'} {abs(yoy):.1f}% <span style="color:{MUTED};">전년 동기</span></span>
+            </div>
+            <div style="font-size:12px;color:{MUTED};margin-top:8px;">{hero_cnt:,}건 · 신건 비중 {new_ratio:.0f}%</div>
+          </div>
+          <div style="min-width:240px;flex:1;">
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:{MUTED};margin-bottom:6px;">
+              <span>이번 달 신건 <b style="color:{GOLD};">{won(month_new)}</b></span>
+              <span>월 목표 2.5억 · <b style="color:{GOLD_B};">{goal_pct:.0f}%</b></span>
+            </div>
+            <div class="goalbar"><div style="width:{goal_pct}%;"></div></div>
+          </div>
+        </div>""", unsafe_allow_html=True)
+
+        # ═══ 보조 4칸 (균일) ═══
+        c = st.columns(4)
+        kpi(c[0], "fa-file-signature", "신건 계약", f"{new_cnt:,}", "건")
+        kpi(c[1], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만")
+        kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum))
+        kpi(c[3], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%")
         if len(cf):
             with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
                 rows = "".join(
@@ -2082,36 +2085,6 @@ def render_contracts():
                             f'<th>구분</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
         else:
             st.caption("이 기간 계약이 없습니다.")
-
-        # ════ 대단락: 연간 누적 분석 ════
-        st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 연간 누적 분석</div>', unsafe_allow_html=True)
-        this_y = datetime.now().year
-        this_ym = datetime.now().strftime("%Y-%m")
-        cur = df[df["_y"] == this_y]
-        prev = df[df["_y"] == this_y - 1]
-
-        cur_new = cur[cur["_is_new"]]
-        new_sum = cur_new["_amt"].sum()                 # 신건 누적 (메인 기준!!!)
-        deriv_sum = cur["_amt"].sum() - new_sum          # 파생(참고용)
-        cur_cnt, new_cnt = len(cur), len(cur_new)
-        # 전년 동기(같은 월까지) — 신건 기준 비교
-        max_m = cur["_m"].max() if len(cur) else 0
-        prev_new_same = prev[(prev["_m"] <= max_m) & prev["_is_new"]]
-        yoy = ((new_sum - prev_new_same["_amt"].sum()) / prev_new_same["_amt"].sum() * 100
-               if prev_new_same["_amt"].sum() else 0)
-        new_ratio = new_sum / (new_sum + deriv_sum) * 100 if (new_sum + deriv_sum) else 0
-        avg_amt = new_sum / new_cnt if new_cnt else 0    # 신건 평균
-        month_new = df[(df["_ym"] == this_ym) & df["_is_new"]]["_amt"].sum()  # 신건 이번달
-
-        c = st.columns(6)
-        kpi(c[0], "fa-sack-dollar", f"{this_y} 신건 누적", won(new_sum),
-            chg=f"{'▲' if yoy>=0 else '▼'} {abs(yoy):.1f}%", chg_dir="up" if yoy>=0 else "down", desc="전년 동기 대비(신건)")
-        kpi(c[1], "fa-file-signature", "신건 계약", f"{new_cnt:,}", "건")
-        kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum))
-        kpi(c[3], "fa-won-sign", "신건 평균단가", f"{avg_amt/1e4:.0f}", "만")
-        kpi(c[4], "fa-calendar-check", "이번 달 신건", won(month_new),
-            chg=f"{month_new/MONTHLY_GOAL*100:.0f}%", desc="목표 2.5억 대비")
-        kpi(c[5], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%")
 
         # ── 입금 현황 + 미수금 (전체 기간) ──
         st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
