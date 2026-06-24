@@ -810,41 +810,118 @@ def preset_range(name, dmin, dmax):
     else:                            s, e = dmin, dmax
     return max(s, dmin), min(e, dmax)
 
-def period_selector(key, dmin, dmax, default="지난 7일", title="기간별 조회"):
-    """모든 탭 공통 기간 선택기. 헤더 + 빠른버튼7 + 달력 + 구분선. (start, end) 반환."""
+def period_selector(key, dmin, dmax, default="이번달", title="기간별 조회"):
+    """기간 선택기: 어제·지난주·지난달·이번달·올해 프리셋 + ◀▶ 동기간 이동 + 한글 표시.
+       단위(day/week/month/year) 기준으로 화살표가 동일 단위 앞뒤로 이동. (start, end) 반환."""
     today = dmax
-    def preset(name):
-        if name == "오늘":     return today, today
-        if name == "어제":
-            d = today - timedelta(days=1); return d, d
-        if name == "지난 7일":  return today - timedelta(days=7), today - timedelta(days=1)
-        if name == "지난 30일": return today - timedelta(days=30), today - timedelta(days=1)
-        if name == "지난달":
-            e = today.replace(day=1) - timedelta(days=1); return e.replace(day=1), e
-        if name == "올해":     return today.replace(month=1, day=1), today
-        return today, today
+    WD = ["월", "화", "수", "목", "금", "토", "일"]
+    presets = ["어제", "지난주", "지난달", "이번달", "올해"]
+    if default not in presets:
+        default = "이번달"
+    ukey, akey = f"{key}_unit", f"{key}_anchor"
     skey, ekey = f"{key}_s", f"{key}_e"
-    if skey not in st.session_state:
-        ds, de = preset(default)
-        st.session_state[skey] = max(ds, dmin)
-        st.session_state[ekey] = min(de, dmax)
+
+    def mbounds(d):
+        first = d.replace(day=1)
+        return first, (first + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+
+    def derive(unit, anchor):
+        if unit == "day":
+            return anchor, anchor
+        if unit == "week":
+            mon = anchor - timedelta(days=anchor.weekday())
+            return mon, mon + timedelta(days=6)
+        if unit == "month":
+            first, last = mbounds(anchor)
+            return first, (today if (first.year, first.month) == (today.year, today.month) else last)
+        if unit == "year":
+            first = anchor.replace(month=1, day=1)
+            return first, (today if anchor.year == today.year else anchor.replace(month=12, day=31))
+        return anchor, anchor
+
+    def apply(unit, anchor):
+        st.session_state[ukey] = unit
+        st.session_state[akey] = anchor
+        ds, de = derive(unit, anchor)
+        st.session_state[skey] = min(max(ds, dmin), dmax)
+        st.session_state[ekey] = min(max(de, dmin), dmax)
+
+    def preset_cb(name):
+        if name == "어제":     apply("day", today - timedelta(days=1))
+        elif name == "지난주":  apply("week", today - timedelta(days=7))
+        elif name == "지난달":  apply("month", mbounds(today)[0] - timedelta(days=1))
+        elif name == "이번달":  apply("month", today)
+        elif name == "올해":    apply("year", today)
+
+    def shift_cb(delta):
+        unit = st.session_state.get(ukey, "month")
+        anchor = st.session_state.get(akey, today)
+        if unit == "custom":
+            s0, e0 = st.session_state[skey], st.session_state[ekey]
+            span = (e0 - s0).days + 1
+            st.session_state[skey] = min(max(s0 + timedelta(days=span * delta), dmin), dmax)
+            st.session_state[ekey] = min(max(e0 + timedelta(days=span * delta), dmin), dmax)
+            return
+        if unit == "day":
+            anchor += timedelta(days=delta)
+        elif unit == "week":
+            anchor += timedelta(days=7 * delta)
+        elif unit == "month":
+            y, m = anchor.year, anchor.month + delta
+            while m > 12: m -= 12; y += 1
+            while m < 1:  m += 12; y -= 1
+            anchor = date(y, m, 1)
+        elif unit == "year":
+            anchor = date(anchor.year + delta, 1, 1)
+        apply(unit, anchor)
+
+    if ukey not in st.session_state:
+        preset_cb(default)
+
     if title:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> {title}</div>',
                     unsafe_allow_html=True)
-    names = ["오늘", "어제", "지난 7일", "지난 30일", "지난달", "올해"]
-    bcols = st.columns(len(names))
-    for i, name in enumerate(names):
-        if bcols[i].button(name, key=f"{key}_qb{i}", use_container_width=True):
-            ds, de = preset(name)
-            st.session_state[skey] = max(ds, dmin)
-            st.session_state[ekey] = min(de, dmax)
-            st.rerun()   # 깨끗한 새 실행에서 date_input이 새 값을 잡도록 (한 클릭 늦음 방지)
-    c1, c2 = st.columns(2)
-    start = c1.date_input("시작일 (달력 클릭)", min_value=dmin, max_value=dmax, key=skey)
-    end   = c2.date_input("종료일 (달력 클릭)", min_value=dmin, max_value=dmax, key=ekey)
+    # 프리셋 버튼
+    bcols = st.columns(len(presets))
+    for i, name in enumerate(presets):
+        bcols[i].button(name, key=f"{key}_qb{i}", use_container_width=True,
+                        on_click=preset_cb, args=(name,))
+
+    # ◀  시작일  종료일  ▶ (화살표 = 동기간 앞뒤 이동)
+    ac = st.columns([0.7, 5, 5, 0.7])
+    ac[0].button("◀", key=f"{key}_prev", use_container_width=True,
+                 help="이전 동기간", on_click=shift_cb, args=(-1,))
+    ac[1].date_input("시작일 (달력)", min_value=dmin, max_value=dmax, key=skey, format="YYYY.MM.DD")
+    ac[2].date_input("종료일 (달력)", min_value=dmin, max_value=dmax, key=ekey, format="YYYY.MM.DD")
+    ac[3].button("▶", key=f"{key}_next", use_container_width=True,
+                 help="다음 동기간", disabled=(st.session_state[ekey] >= dmax),
+                 on_click=shift_cb, args=(1,))
+
+    # 수동으로 달력 바꾸면 → 사용자지정 모드 (화살표는 같은 길이만큼 이동)
+    if st.session_state.get(ukey) != "custom":
+        ds, de = derive(st.session_state[ukey], st.session_state.get(akey, today))
+        if (st.session_state[skey], st.session_state[ekey]) != (min(max(ds, dmin), dmax), min(max(de, dmin), dmax)):
+            st.session_state[ukey] = "custom"
+
+    start, end = st.session_state[skey], st.session_state[ekey]
     if start > end:
         start, end = end, start
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.25);margin:18px 0 22px;">',
+
+    # 한글 기간 라벨
+    unit = st.session_state.get(ukey, "custom")
+    kday = lambda d: f"{d.month}월 {d.day}일({WD[d.weekday()]})"
+    if unit == "day":
+        lab = f"{start.year}년 {kday(start)}"
+    elif unit == "week":
+        lab = f"주간 · {kday(start)} ~ {kday(end)}"
+    elif unit == "month":
+        lab = f"월간 · {start.year}년 {start.month}월" + (" (진행중)" if end == today and end != mbounds(end)[1] else "")
+    elif unit == "year":
+        lab = f"연간 · {start.year}년" + (f" (~{end.month}/{end.day})" if end == today else "")
+    else:
+        lab = f"{start.year}년 {kday(start)} ~ {end.year}년 {kday(end)}"
+    st.caption(f"📅 {lab}")
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.25);margin:14px 0 20px;">',
                 unsafe_allow_html=True)
     return start, end
 
@@ -876,16 +953,20 @@ def tab_header(icon_fa, title, sub, color="#D2AA50", rgb="210,170,80"):
         unsafe_allow_html=True)
 
 def render_summary():
+    tab_header("fa-chart-pie", "통합요약", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
     con = load_contracts()
     today = date.today()
-    dmin = date(today.year - 1, 1, 1)
-    start, end = period_selector("sum", dmin, today, default="올해")
-    # 직전 동일 길이 기간 (광고·실적 탭과 동일 비교 방식)
+    # 통합요약: 기간설정 없이 '이번 달' 고정 · 전월 동기간과 비교
+    start = today.replace(day=1)
+    end = today
     span = (end - start).days + 1
-    ps, pe = start - timedelta(days=span), start - timedelta(days=1)
-    cmp_label = f"직전 {span}일 대비"
-    plabel = f"{start} ~ {end}"
-    st.caption(f"📅 {start} ~ {end} · {cmp_label}")
+    pl_last = start - timedelta(days=1)                       # 전월 말일
+    pl_first = pl_last.replace(day=1)                         # 전월 1일
+    ps = pl_first
+    pe = pl_first.replace(day=min(today.day, pl_last.day))    # 전월 동기(같은 일자까지)
+    cmp_label = "전월 동기 대비"
+    plabel = f"{start.year}년 {start.month}월"
+    st.caption(f"📅 이번 달 ({start.month}월 1일 ~ {today.month}월 {today.day}일) · 🔄 {cmp_label}")
 
     # ── 기간(start~end)이 걸친 (연,월) 집합 → 연간요약 시트 합산 헬퍼 ──
     #    period_selector(start~end) 방식으로 통일하면서, 연간요약(월 단위)도
@@ -962,7 +1043,7 @@ def render_summary():
                f"ROAS {roas:.0f}%, 신건계약 {n_con}건, "
                f"문의당비용(CPI) {money(cpi_v)}원, 사건분류 매출1위 {top_cat}.")
     is_admin = st.session_state.get("auth_user") == "admin"
-    focus = (f"이 리포트의 기간은 {plabel}이며 직전 동일 길이 기간과 비교한다. "
+    focus = (f"이 리포트는 이번 달({plabel}) 누적 실적이며 전월 동기간과 비교한다. "
              "광고비·매출·문의·ROAS의 기간 대비 변화를 차분히 평가하고, "
              "월 목표 2.5억 달성 페이스와 사건분류 의존도(다각화) 관점을 함께 짚어라.")
     llm = ai_insight(summary, focus, tab="SUMMARY", period=plabel)
@@ -1111,7 +1192,7 @@ def render_daily():
     con = load_contracts()
     dmin = con["_date"].min().date()
     dmax = date.today()
-    s, e = period_selector("daily", dmin, dmax, default="지난 7일")
+    s, e = period_selector("daily", dmin, dmax, default="지난주")
     span = (e - s).days + 1
     ps, pe = s - timedelta(days=span), s - timedelta(days=1)
 
@@ -1325,7 +1406,7 @@ def render_ad_tab(media, full):
     raw["date"] = pd.to_datetime(raw["date"])
     dmin = raw["date"].min().date()
     dmax = date.today()   # 달력 기준 통일: 기준일=오늘 (어제=달력상 어제). 하한만 데이터 최소일.
-    start, end = period_selector(media, dmin, dmax, default="지난 7일")
+    start, end = period_selector(media, dmin, dmax, default="이번달")
     d = raw[(raw["date"].dt.date >= start) & (raw["date"].dt.date <= end)]
     sd, ed = str(start), str(end)
     # 직전 동일 길이 기간 (비교용)
@@ -1419,7 +1500,7 @@ def render_etc():
     etc_all = load_etc()   # 기타매체 시트 직독 (BigQuery 아님)
     dmin = etc_all["date"].dt.date.min() if not etc_all.empty else date(2024, 1, 1)
     dmax = today   # 달력 기준 통일: 기준일=오늘
-    s, e = period_selector("etc", dmin, dmax, default="지난 7일")
+    s, e = period_selector("etc", dmin, dmax, default="지난주")
 
     df = (etc_all[(etc_all["date"].dt.date >= s) & (etc_all["date"].dt.date <= e)].copy()
           if not etc_all.empty else pd.DataFrame())
