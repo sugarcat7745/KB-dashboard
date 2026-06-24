@@ -222,7 +222,6 @@ def log_ai_usage(user, tab, period, insight, usage, model="haiku"):
 def build_data_context():
     """AI 질의용 데이터 요약 컨텍스트 (전체 연도 집계 — 연도 비교 가능, 로우데이터 미노출)."""
     con = load_contracts()
-    ann = load_annual()
     today = date.today()
     P = [f"기준일: {today} (오늘까지 발생한 실데이터 기준)"]
     if not con.empty:
@@ -238,15 +237,40 @@ def build_data_context():
             P.append(f"{today.year}년 신건 사건유형별 매출: " + "; ".join(f"{t} {v:,.0f}원" for t, v in bt.head(12).items()))
             mm = cy[cy["_is_new"]].groupby("_m")["_amt"].sum()
             P.append(f"{today.year}년 월별 신건매출: " + "; ".join(f"{int(m)}월 {v:,.0f}원" for m, v in mm.items()))
-    if not ann.empty:
-        # 전체 연도 월별 광고비·문의·상담·수임 (연도 비교용)
-        for yr in sorted([y for y in ann["연도"].unique() if str(y) not in ("nan", "")]):
-            ay = ann[ann["연도"] == yr]
-            if ay.empty:
-                continue
-            P.append(f"[{yr}년 광고·문의 월별] " + "; ".join(
-                f"{r['월']} 광고비{int(r['총광고비']):,}원/문의{int(r['문의'])}건/상담{int(r['상담'])}건/수임{int(r['수임'])}건"
-                for _, r in ay.iterrows()))
+    # ── 월별 문의·상담·수임 (문의시트에서 직접 계산 — 연간요약 손입력 불필요!!) ──
+    try:
+        _inq = load_inquiries()
+        if _inq is not None and not _inq.empty:
+            _t = _inq.copy()
+            _t["_ym"] = pd.to_datetime(_t["date"], errors="coerce").dt.to_period("M").astype(str)
+            _t = _t[_t["_ym"] != "NaT"]
+            _g = _t.groupby("_ym").agg(q=("name", "size"), s=("consulted", "sum"),
+                                       w=("contracted", "sum")).reset_index()
+            _by = {}
+            for _, r in _g.iterrows():
+                _by.setdefault(r["_ym"][:4], []).append(r)
+            for yr in sorted(_by):
+                P.append(f"[{yr}년 문의·상담·수임 월별] " + "; ".join(
+                    f"{r['_ym'][5:7]}월 문의{int(r['q'])}/상담{int(r['s'])}/수임{int(r['w'])}건" for r in _by[yr]))
+    except Exception:
+        pass
+    # ── 월별 광고비 (BigQuery + 기타시트 직접 계산 — 연간요약 불필요!!) ──
+    try:
+        _aq = bq(f"SELECT SUBSTR(date,1,7) ym, SUM(cost) cost "
+                 f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` GROUP BY ym ORDER BY ym")
+        _adm = {r["ym"]: float(r["cost"] or 0) for _, r in _aq.iterrows()}
+        _etc = load_etc()
+        if _etc is not None and not _etc.empty:
+            _te = _etc.copy(); _te["ym"] = pd.to_datetime(_te["date"]).dt.to_period("M").astype(str)
+            for _ym, _c in _te.groupby("ym")["cost"].sum().items():
+                _adm[_ym] = _adm.get(_ym, 0) + float(_c)
+        _byy = {}
+        for _ym, _c in sorted(_adm.items()):
+            _byy.setdefault(_ym[:4], []).append((_ym[5:7], _c))
+        for yr, items in _byy.items():
+            P.append(f"[{yr}년 광고비 월별(실데이터 계산)] " + "; ".join(f"{m}월 {int(c):,}원" for m, c in items))
+    except Exception:
+        pass
     # 매체별(네이버/구글) 광고 실적 — BigQuery (date는 STRING이라 SUBSTR로 연도 추출!!)
     try:
         mq = bq(f"SELECT SUBSTR(date,1,4) yr, media, SUM(cost) cost, SUM(impressions) imp, "
@@ -291,7 +315,9 @@ def build_data_context():
              "사건유형(형사·민사·이혼 등)은 '계약' 분류이고, 광고 카테고리(교통·성범죄 등)와는 별개 체계임. "
              "광고 전환수는 부정확하여 제외함(광고비·노출·클릭·CTR·CPC만 신뢰). "
              "[데이터 적재 범위] 네이버 키워드 일별 데이터는 2024년 7월부터 존재(2024년 4~6월은 월 총비용만, keyword='(월 합계)'). "
-             "구글은 2025년 2월(중순)부터 일별 데이터 존재. 총광고비·문의·매출은 연간요약 기준 그 이전부터 있음. "
+             "구글은 2025년 2월(중순)부터 일별 데이터 존재. "
+             "문의·상담·수임은 문의 시트에서, 광고비는 BigQuery+기타시트에서 직접 계산한 실데이터다(연간요약 수기입력 아님). "
+             "매출은 계약 시트 실데이터다. 따라서 이번 달도 실시간 반영된다. "
              "더 구체적인 키워드·기간 조회가 필요하면 query_ad_keyword 도구로 직접 BigQuery를 조회할 것. "
              "데이터에 없는 기간은 '데이터에 없다'고 안내할 것.")
     return "\n".join(P)
@@ -1715,7 +1741,6 @@ def render_inquiries():
     if inq.empty:
         st.info("문의 데이터를 읽지 못했습니다. 시트 공유·탭 구조를 확인해주세요."); return
     con = load_contracts()
-    ann = load_annual()
 
     # ── 기간 선택 (달력 기준 통일: 기준일=오늘, 하한만 데이터 최소일) ──
     imin = inq["date"].min().date()
