@@ -4,7 +4,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
-import base64, urllib.request, time, random, hmac, hashlib
+import base64, urllib.request, time, random, hmac, hashlib, json, re
 from datetime import datetime, date, timedelta
 
 try:
@@ -24,6 +24,10 @@ AD_SHEET_ID = "1GTrBYugFEUgx4guZNhtIDApR_-GZLhu_TmRldeLT0pY"  # 연간요약(문
 INQ_SHEET_ID = "1jvOGtJrkOQSV6qLFmbR72ueB8ebDnmk9C7Z_mNEOeNA"  # 문의 월별탭
 MONTHLY_GOAL = 250_000_000  # 월 목표 2.5억
 BQ_PROJECT, BQ_DATASET = "kb-dashboard-499704", "kb_ads"
+# AI 모델 — 배너(짧고 잦음·캐시)는 저렴한 Haiku, 채팅(추론·DB조회)은 똑똑한 Sonnet
+MODEL_INSIGHT = "claude-haiku-4-5-20251001"
+MODEL_CHAT    = "claude-sonnet-4-5-20250929"
+#   ⚠️ Sonnet 문자열이 SDK에서 에러나면 이 줄만 교체 (대안: "claude-sonnet-4-6")
 
 GOLD   = "#D2AA50"; GOLD_B = "#F0C86E"; GOLD_D = "#BE963C"
 TEAL   = "#5BB4C4"; CORAL  = "#C77B6B"; GRAY   = "#6E6E66"
@@ -182,7 +186,7 @@ def log_login(user, ip):
         pass
 
 
-def log_ai_usage(user, tab, period, insight, usage):
+def log_ai_usage(user, tab, period, insight, usage, model="haiku"):
     """AI 실제 호출(토큰 소모) 시 BigQuery에 사용 로그 적재. 캐시 히트는 호출 안 되므로 자동 제외."""
     try:
         from google.cloud import bigquery
@@ -201,8 +205,9 @@ def log_ai_usage(user, tab, period, insight, usage):
         client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
         it = int(getattr(usage, "input_tokens", 0) or 0)
         ot = int(getattr(usage, "output_tokens", 0) or 0)
-        # Haiku 추정 단가(입력 $1 / 출력 $5 per 1M) × 환율 1,400 — 어디까지나 추정치
-        cost = round((it * 1.0 + ot * 5.0) / 1_000_000 * 1400, 2)
+        # 모델별 추정 단가(per 1M, USD) × 환율 1,400 — 어디까지나 추정치
+        in_r, out_r = {"sonnet": (3.0, 15.0), "haiku": (1.0, 5.0)}.get(model, (1.0, 5.0))
+        cost = round((it * in_r + ot * out_r) / 1_000_000 * 1400, 2)
         client.insert_rows_json(tid, [{
             "ts": datetime.now().isoformat(timespec="seconds"),
             "user": user, "tab": tab, "period": period,
@@ -242,50 +247,163 @@ def build_data_context():
             P.append(f"[{yr}년 광고·문의 월별] " + "; ".join(
                 f"{r['월']} 광고비{int(r['총광고비']):,}원/문의{int(r['문의'])}건/상담{int(r['상담'])}건/수임{int(r['수임'])}건"
                 for _, r in ay.iterrows()))
-    # 매체별(네이버/구글) 광고 실적 — BigQuery (구글 성과 분석 가능하게)
+    # 매체별(네이버/구글) 광고 실적 — BigQuery (date는 STRING이라 SUBSTR로 연도 추출!!)
     try:
-        mq = bq(f"SELECT EXTRACT(YEAR FROM date) yr, media, SUM(cost) cost, SUM(impressions) imp, "
+        mq = bq(f"SELECT SUBSTR(date,1,4) yr, media, SUM(cost) cost, SUM(impressions) imp, "
                 f"SUM(clicks) clk FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
                 f"GROUP BY yr, media ORDER BY yr, media")
         if not mq.empty:
             P.append("[매체별 연도별 광고실적] " + "; ".join(
-                f"{int(r.yr)}년 {r.media}: 광고비{int(r.cost):,}원/노출{int(r.imp):,}/클릭{int(r.clk):,}"
+                f"{r.yr}년 {r.media}: 광고비{int(r.cost):,}원/노출{int(r.imp):,}/클릭{int(r.clk):,}"
                 f"/CTR{(r.clk/r.imp*100 if r.imp else 0):.2f}%/CPC{(r.cost/r.clk if r.clk else 0):,.0f}원"
                 for _, r in mq.iterrows()))
+    except Exception:
+        pass
+    # 키워드 TOP (매체별·최근 2년) — '작년 vs 올해 키워드 분석' 가능하게!!
+    try:
+        ty = today.year
+        for md in ["네이버", "구글"]:
+            for yr in (ty - 1, ty):
+                kq = bq(f"SELECT keyword, SUM(cost) cost, SUM(clicks) clk, SUM(impressions) imp "
+                        f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                        f"WHERE media='{md}' AND date LIKE '{yr}%' AND keyword!='(월 합계)' "
+                        f"GROUP BY keyword ORDER BY cost DESC LIMIT 25")
+                if not kq.empty:
+                    P.append(f"[{yr}년 {md} 키워드TOP25·광고비순] " + "; ".join(
+                        f"{r.keyword}(광고비{int(r.cost):,}·클릭{int(r.clk)}·CTR{(r.clk/r.imp*100 if r.imp else 0):.1f}%·CPC{(r.cost/r.clk if r.clk else 0):,.0f})"
+                        for _, r in kq.iterrows()))
+    except Exception:
+        pass
+    # 캠페인(사건유형)별 연도별 광고비 (매체 합산)
+    try:
+        cq = bq(f"SELECT SUBSTR(date,1,4) yr, campaign, SUM(cost) cost, SUM(clicks) clk "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                f"WHERE campaign NOT LIKE '%월 합계%' GROUP BY yr, campaign HAVING cost>0 "
+                f"ORDER BY yr, cost DESC")
+        if not cq.empty:
+            for yr in sorted(cq["yr"].dropna().unique()):
+                sub = cq[cq["yr"] == yr].head(12)
+                P.append(f"[{yr}년 캠페인별 광고비] " + "; ".join(
+                    f"{r.campaign} {int(r.cost):,}원(클릭{int(r.clk)})" for _, r in sub.iterrows()))
     except Exception:
         pass
     P.append("[정의] 신건=온라인 광고로 유입된 신규 고객 / 파생=기존 고객의 재의뢰. 매출 기준은 기본보수액. "
              "사건유형(형사·민사·이혼 등)은 '계약' 분류이고, 광고 카테고리(교통·성범죄 등)와는 별개 체계임. "
              "광고 전환수는 부정확하여 제외함(광고비·노출·클릭·CTR·CPC만 신뢰). "
-             "⚠️ 네이버 광고 상세데이터(노출/클릭)는 2026년 6월부터 적재되어 그 이전은 제한적이며, "
-             "구글은 2025년 2월부터 데이터가 있음. 총광고비·문의·매출은 연간요약 시트 기준으로 과거부터 존재함. "
-             "데이터가 특정 연·월까지만 있으면 그 범위만 답하고, 없는 기간은 '데이터에 없다'고 안내할 것.")
+             "[데이터 적재 범위] 네이버 키워드 일별 데이터는 2024년 7월부터 존재(2024년 4~6월은 월 총비용만, keyword='(월 합계)'). "
+             "구글은 2025년 2월(중순)부터 일별 데이터 존재. 총광고비·문의·매출은 연간요약 기준 그 이전부터 있음. "
+             "더 구체적인 키워드·기간 조회가 필요하면 query_ad_keyword 도구로 직접 BigQuery를 조회할 것. "
+             "데이터에 없는 기간은 '데이터에 없다'고 안내할 것.")
     return "\n".join(P)
 
 
+def run_safe_sql(sql):
+    """AI가 생성한 SELECT를 안전하게 실행 — 읽기전용·ad_keyword 화이트리스트·행수/바이트 제한."""
+    from google.cloud import bigquery
+    if not sql or not isinstance(sql, str):
+        return {"error": "빈 쿼리입니다."}
+    s = sql.strip().rstrip(";").strip()
+    low = s.lower()
+    if not (low.startswith("select") or low.startswith("with")):
+        return {"error": "SELECT(또는 WITH) 쿼리만 허용됩니다."}
+    banned = ["insert", "update ", "delete", "drop", "create", "alter", "truncate",
+              "merge", "grant", "revoke", " call ", ";", "--", "/*"]
+    if any(b in low for b in banned):
+        return {"error": "읽기 전용 SELECT만 허용됩니다 (변경·주석·다중문 금지)."}
+    other = ["login_log", "ai_usage_log", "ad_budget", "users", "naver_kw_master", "ad_etc"]
+    if any(t in low for t in other):
+        return {"error": "이 도구는 ad_keyword 테이블만 조회할 수 있습니다."}
+    if "ad_keyword" not in low:
+        return {"error": "FROM 절에 ad_keyword 테이블을 사용해야 합니다."}
+    if " limit " not in (" " + low + " "):
+        s += " LIMIT 200"
+    full = f"`{BQ_PROJECT}.{BQ_DATASET}.ad_keyword`"
+    s2 = re.sub(r"`?ad_keyword`?", full, s, flags=re.IGNORECASE)
+    try:
+        cfg = bigquery.QueryJobConfig(maximum_bytes_billed=500 * 1024 * 1024)  # 500MB 상한
+        df = get_bq().query(s2, job_config=cfg).result().to_dataframe()
+    except Exception as e:
+        return {"error": f"쿼리 실행 오류: {str(e)[:200]}"}
+    truncated = len(df) > 100
+    return {"row_count": int(len(df)), "truncated": truncated,
+            "rows": df.head(100).to_dict(orient="records")}
+
+
+SQL_TOOL = {
+    "name": "query_ad_keyword",
+    "description": (
+        "법무법인 KB 광고 상세 데이터를 BigQuery에서 직접 조회한다(읽기 전용 SELECT만). "
+        "요약에 없는 키워드별·캠페인별·특정기간 등 구체 수치가 필요할 때 사용하라. "
+        "테이블명은 반드시 ad_keyword 하나만 쓴다(프로젝트/데이터셋 접두어 불필요). 스키마: "
+        "date(STRING 'YYYY-MM-DD'), media(STRING '네이버'|'구글'), campaign(STRING·사건유형명), "
+        "adgroup(STRING), keyword(STRING·키워드명), impressions(INT), clicks(INT), cost(FLOAT 원), "
+        "cpc(FLOAT), ctr(FLOAT %), conversions(INT), avg_rank(FLOAT). "
+        "연도필터는 date LIKE '2025%' 또는 date BETWEEN '2025-01-01' AND '2025-12-31'. "
+        "참고: 2024-04~06 네이버는 keyword='(월 합계)'로 총비용만 존재(키워드 분해 불가). 결과 최대 100행."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "sql": {"type": "string",
+                    "description": "실행할 SELECT. 예) SELECT keyword, SUM(cost) c, SUM(clicks) clk "
+                                   "FROM ad_keyword WHERE media='네이버' AND date LIKE '2025%' "
+                                   "GROUP BY keyword ORDER BY c DESC LIMIT 20"}
+        },
+        "required": ["sql"],
+    },
+}
+
+
 def ai_chat_answer(question, context):
-    """대표님 자유 질문 → Claude가 데이터 컨텍스트 기반 답변 + 토큰 로그."""
+    """대표님 자유 질문 → Claude(Sonnet)가 요약 컨텍스트 + 필요시 BigQuery 직접 조회로 답변."""
     if not HAS_ANTHROPIC:
         return "AI 기능이 현재 비활성화 상태입니다."
     try:
         key = st.secrets["anthropic_api_key"]
     except Exception:
         return "AI 키가 설정되지 않았습니다. (관리자에게 문의)"
+    sys_prompt = (
+        "너는 법무법인 KB 광고·매출 대시보드의 데이터 분석 도우미다. 대화 상대는 'KB 담당자님'이다. "
+        "항상 'KB 담당자님'이라 정중히 호칭하고 깍듯한 존댓말로 응대하라. "
+        "아래 [데이터 요약]을 우선 근거로 삼되, 키워드별·캠페인별·특정 기간 등 요약에 없는 "
+        "구체 수치가 필요하면 query_ad_keyword 도구로 BigQuery를 직접 조회해 정확히 답하라. "
+        "여러 번 조회해도 되고, 조회 결과의 숫자를 정확히 인용하라. 데이터에 없으면 "
+        "'KB 담당자님, 해당 정보는 데이터에 없습니다'라고 솔직히 밝혀라. "
+        "광고비 해석 시 네이버는 브랜드검색(월정액)이 키워드 데이터에 없고, 시트 기준 구글은 VAT 포함인 점을 참고하라. "
+        "한국어로 친절하고 간결하게 답하고, 가능하면 실행 가능한 개선 제안을 1~2가지 덧붙여라."
+    )
     try:
         client = anthropic.Anthropic(api_key=key)
-        m = client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=700,
-            messages=[{"role": "user", "content":
-                "너는 법무법인 KB 광고·매출 대시보드의 데이터 분석 도우미다. "
-                "대화 상대는 'KB 담당자님'이다. 항상 'KB 담당자님'이라고 정중히 호칭하고, "
-                "시종일관 깍듯하고 공손한 존댓말로 응대하라. "
-                "아래 [데이터]만을 근거로 질문에 한국어로 친절하고 간결하게 답하라. "
-                "데이터에 없는 내용은 'KB 담당자님, 해당 정보는 제공된 데이터에 없습니다'처럼 솔직히 밝히고, "
-                "추정이 필요하면 추정임을 명시하라. 숫자는 데이터 기준으로 정확히 인용하라.\n\n"
-                f"[데이터]\n{context}\n\n[질문]\n{question}"}])
-        ans = m.content[0].text.strip()
+        messages = [{"role": "user", "content": f"[데이터 요약]\n{context}\n\n[질문]\n{question}"}]
+        tin = tout = 0
+        last = None
+        for _ in range(5):   # BigQuery 도구 호출 최대 5회까지 허용
+            m = client.messages.create(
+                model=MODEL_CHAT, max_tokens=1500,
+                system=sys_prompt, tools=[SQL_TOOL], messages=messages)
+            tin += int(getattr(m.usage, "input_tokens", 0) or 0)
+            tout += int(getattr(m.usage, "output_tokens", 0) or 0)
+            last = m
+            if m.stop_reason == "tool_use":
+                messages.append({"role": "assistant", "content": m.content})
+                results = []
+                for blk in m.content:
+                    if getattr(blk, "type", "") == "tool_use":
+                        q = blk.input.get("sql", "") if isinstance(blk.input, dict) else ""
+                        out = run_safe_sql(q)
+                        results.append({"type": "tool_result", "tool_use_id": blk.id,
+                                        "content": json.dumps(out, ensure_ascii=False, default=str)[:7000]})
+                messages.append({"role": "user", "content": results})
+                continue
+            break
+        ans = "".join(b.text for b in last.content if getattr(b, "type", "") == "text").strip() if last else ""
+        if not ans:
+            ans = "죄송합니다 KB 담당자님, 답변을 생성하지 못했습니다. 질문을 조금 더 구체적으로 주시겠어요?"
         try:
-            log_ai_usage(st.session_state.get("auth_user", "익명"), "AI질의", question[:60], ans, m.usage)
+            class _U:
+                input_tokens = tin
+                output_tokens = tout
+            log_ai_usage(st.session_state.get("auth_user", "익명"), "AI질의", question[:60], ans, _U(), model="sonnet")
         except Exception:
             pass
         return ans
@@ -305,7 +423,7 @@ def ai_insight(summary, focus="", tab="", period=""):
     try:
         client = anthropic.Anthropic(api_key=key)
         m = client.messages.create(
-            model="claude-haiku-4-5-20251001",
+            model=MODEL_INSIGHT,
             max_tokens=320,
             messages=[{"role": "user", "content":
                 "너는 법무법인 광고·매출 대시보드의 전문 분석가다. 보고 대상은 법무법인 대표다. "
@@ -330,7 +448,7 @@ def ai_insight(summary, focus="", tab="", period=""):
         )
         text = m.content[0].text.strip()
         try:
-            log_ai_usage(st.session_state.get("auth_user", "익명"), tab, period, text, m.usage)
+            log_ai_usage(st.session_state.get("auth_user", "익명"), tab, period, text, m.usage, model="haiku")
         except Exception:
             pass
         return text
