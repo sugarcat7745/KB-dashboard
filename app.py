@@ -952,6 +952,18 @@ def tab_header(icon_fa, title, sub, color="#D2AA50", rgb="210,170,80"):
         f'<div style="font-size:12px;color:#999;margin-top:2px;">{sub}</div></div></div>',
         unsafe_allow_html=True)
 
+def deriv_toggle(wkey):
+    """파생사건 포함 매출 토글 — 매출 관련 모든 화면 공통.
+       session_state['incl_deriv']로 전 화면 동기화. 반환: include_deriv (True=신건+파생)."""
+    shared = st.session_state.get("incl_deriv", False)
+    st.session_state[wkey] = shared          # 위젯 생성 전 공유값 동기화 (탭 전체 일관)
+    def _cb():
+        st.session_state["incl_deriv"] = st.session_state[wkey]
+    st.toggle("파생사건 포함 매출 보기", key=wkey, on_change=_cb,
+              help="끄면 순수 온라인 신건 매출만(기본), 켜면 신건+파생 합산 매출 — 모든 매출 화면 공통 적용")
+    return st.session_state[wkey]
+
+
 def render_summary():
     tab_header("fa-chart-pie", "통합요약", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
     con = load_contracts()
@@ -1012,10 +1024,8 @@ def render_summary():
         return f"{'▲' if d>=0 else '▼'} {abs(d):.1f}%", ("up" if d >= 0 else "down")
 
     ad, ad_p = spend(start, end), spend(ps, pe)
-    # 📊 대표님 요청: 매출에 파생사건 포함/제외 토글 (기본=순수 신건만)
-    include_deriv = st.toggle("파생사건 포함 매출 보기", value=False,
-                              key="deriv_sum",
-                              help="끄면 순수 온라인 신건 매출만(기본), 켜면 신건+파생 합산 매출")
+    # 📊 매출 파생 포함 토글 (전 화면 공통 동기화)
+    include_deriv = deriv_toggle("deriv_sum")
     new_only = not include_deriv
     revenue, rev_p = rev(start, end, new_only), rev(ps, pe, new_only)
     deriv = rev(start, end, False) - rev(start, end, True)      # 파생 금액(항상 참고)
@@ -1026,6 +1036,21 @@ def render_summary():
     n_con_p = int(((con["_date"].dt.date >= ps) & (con["_date"].dt.date <= pe) & con["_is_new"]).sum())
     ad_c, ad_d = delta_str(ad, ad_p, "money")
     rev_c, rev_d = delta_str(revenue, rev_p, "money")
+
+    # ── 6 KPI용 문의·상담·수임 (일별 문의시트 기준 — 부분월도 정확) ──
+    inq_all = load_inquiries()
+    def inq_slice(s, e):
+        if inq_all is None or inq_all.empty:
+            return 0, 0, 0
+        t = inq_all.copy(); t["_d"] = pd.to_datetime(t["date"]).dt.date
+        sl = t[(t["_d"] >= s) & (t["_d"] <= e)]
+        return len(sl), int(sl["consulted"].sum()), int(sl["contracted"].sum())
+    n_inq, n_sang, n_suim = inq_slice(start, end)
+    n_inq_p, n_sang_p, n_suim_p = inq_slice(ps, pe)
+    cpi_kpi   = (ad / n_inq) if n_inq else 0
+    cpi_kpi_p = (ad_p / n_inq_p) if n_inq_p else 0
+    conv      = (n_suim / n_inq * 100) if n_inq else 0          # 수임전환율 = 수임/문의
+    conv_p    = (n_suim_p / n_inq_p * 100) if n_inq_p else 0
 
     # ── AI 인사이트 한 줄 (Claude API, 실패 시 규칙기반 폴백) ──
     cmask0 = (con["_date"].dt.date >= start) & (con["_date"].dt.date <= end)
@@ -1070,11 +1095,15 @@ def render_summary():
 
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
                 f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {cmp_label} 증감</div>', unsafe_allow_html=True)
-    c = st.columns(4)
+    c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d)
-    kpi(c[1], "fa-sack-dollar", rev_label, money(revenue), "원", chg=rev_c, chg_dir=rev_d)
-    kpi(c[2], "fa-file-signature", "신건 계약", f"{n_con}", "건", *delta_str(n_con, n_con_p, "cnt"))
-    kpi(c[3], "fa-arrow-trend-up", "ROAS", f"{roas:.0f}", "%", *delta_str(roas, roas_p, "pct"))
+    kpi(c[1], "fa-comment-dots", "문의", f"{n_inq}", "건", *delta_str(n_inq, n_inq_p, "cnt"))
+    cpi_t, cpi_dir = delta_str(cpi_kpi, cpi_kpi_p, "money")
+    cpi_dir = "down" if cpi_dir == "up" else "up"   # CPI는 낮을수록 좋음(색 반전)
+    kpi(c[2], "fa-coins", "문의당비용(CPI)", money(cpi_kpi), "원", chg=cpi_t, chg_dir=cpi_dir)
+    kpi(c[3], "fa-headset", "상담", f"{n_sang}", "건", *delta_str(n_sang, n_sang_p, "cnt"))
+    kpi(c[4], "fa-file-signature", "수임", f"{n_suim}", "건", *delta_str(n_suim, n_suim_p, "cnt"))
+    kpi(c[5], "fa-percent", "수임전환율", f"{conv:.1f}", "%", *delta_str(conv, conv_p, "pct"))
 
     # ── 퍼널 (문의→상담→수임) + CPI/CPA · 전부 비교!!! ──
     ann = load_annual()
@@ -1137,16 +1166,24 @@ def render_summary():
         me = pd.DataFrame(columns=["media", "cost"])
     mix = pd.concat([mk, me], ignore_index=True)
 
-    # 단일 월(같은 연·월) 조회 시에만: 월 목표 달성바
+    # 단일 월(같은 연·월) 조회 시에만: 월 목표 달성바 (+ 매출·ROAS 보존)
     is_single_month = (start.year == end.year and start.month == end.month)
     if is_single_month:
         pct = min(revenue / MONTHLY_GOAL * 100, 100)
+        roas_t, roas_dir = delta_str(roas, roas_p, "pct")
+        rcolor = GOLD_B if roas >= 150 else CORAL
         st.markdown(f"""<div class="kb-card" style="margin-top:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
             <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
             <div style="display:flex;align-items:baseline;gap:10px;">
             <span class="serif" style="font-size:32px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
             <span style="font-size:14px;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+            <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">{rev_label}</div>
+            <div class="serif" style="font-size:22px;font-weight:600;color:{GOLD_B};">{money(revenue)}<small style="font-size:12px;">원</small></div>
+            <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 데이터 없음'}</div></div>
+            <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">ROAS</div>
+            <div class="serif" style="font-size:22px;font-weight:600;color:{rcolor};">{roas:.0f}<small style="font-size:12px;">%</small></div>
+            <div style="font-size:11px;color:{MUTED};">{('전월동기 '+roas_t) if roas_t else '—'}</div></div>
             <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
             <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
           </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
@@ -1240,8 +1277,13 @@ def render_daily():
     # 계약 (기간)
     cf = con[(con["_date"].dt.date >= s) & (con["_date"].dt.date <= e)]
     cp = con[(con["_date"].dt.date >= ps) & (con["_date"].dt.date <= pe)]
+    include_deriv = deriv_toggle("deriv_daily")
+    if not include_deriv:
+        cf = cf[cf["_is_new"]]; cp = cp[cp["_is_new"]]
     n_con, con_amt = len(cf), cf["_amt"].sum()
     p_con, p_camt = len(cp), cp["_amt"].sum()
+    con_lbl = "계약" if include_deriv else "신건계약"
+    amt_lbl = "계약금액(신건+파생)" if include_deriv else "신건 계약금액"
 
     # KPI (직전 동일기간 대비 · 비교!!!)
     cmp_caption(f"직전 {span}일 대비")
@@ -1250,8 +1292,8 @@ def render_daily():
     kpi(c[1], "fa-phone", "문의", f"{n_inq}", "건", *delta_str(n_inq, p_inq, "cnt"))
     kpi(c[2], "fa-coins", "문의당 비용", money(cpi), "원", *delta_str(cpi, p_cpi, "won"))
     kpi(c[3], "fa-comments", "상담", f"{n_sang}", "건", *delta_str(n_sang, p_sang, "cnt"))
-    kpi(c[4], "fa-file-signature", "계약", f"{n_con}", "건", *delta_str(n_con, p_con, "cnt"))
-    kpi(c[5], "fa-sack-dollar", "계약금액", money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
+    kpi(c[4], "fa-file-signature", con_lbl, f"{n_con}", "건", *delta_str(n_con, p_con, "cnt"))
+    kpi(c[5], "fa-sack-dollar", amt_lbl, money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
 
     # ── 어제 매체별 광고비 (네이버·구글=ad_keyword / 카카오·모비온·메타=시트) ──
     def media_spend_day(day):
@@ -1893,6 +1935,11 @@ def render_contracts():
         cf = df[(df["_date"].dt.date >= cs) & (df["_date"].dt.date <= ce)]
         cf_new = cf[cf["_is_new"]]
         cfn_sum = cf_new["_amt"].sum(); cfd_sum = cf["_amt"].sum() - cfn_sum
+        include_deriv = deriv_toggle("deriv_con")
+        main_sum = (cfn_sum + cfd_sum) if include_deriv else cfn_sum
+        main_cnt = len(cf) if include_deriv else len(cf_new)
+        main_lbl = "기간 전체매출(신건+파생)" if include_deriv else "기간 신건매출"
+        cnt_lbl  = "기간 전체계약" if include_deriv else "기간 신건계약"
         byt = cf_new.groupby("_type")["_amt"].sum().sort_values(ascending=False)
         type_str = ", ".join(f"{t} {v:,.0f}원" for t, v in byt.head(6).items())
         ai_banner(
@@ -1902,10 +1949,10 @@ def render_contracts():
             "계약", f"{cs}~{ce}",
             focus="신건 매출 구성과 사건유형별 비중을 차분히 평가하고, 매출 확대를 위한 제안을 1가지 제시하라.")
         pc = st.columns(4)
-        kpi(pc[0], "fa-sack-dollar", "기간 신건매출", won(cfn_sum), desc=f"{cs} ~ {ce}")
-        kpi(pc[1], "fa-file-signature", "기간 신건계약", f"{len(cf_new):,}", "건", desc=f"전체 {len(cf):,}건")
+        kpi(pc[0], "fa-sack-dollar", main_lbl, won(main_sum), desc=f"{cs} ~ {ce}")
+        kpi(pc[1], "fa-file-signature", cnt_lbl, f"{main_cnt:,}", "건", desc=f"전체 {len(cf):,}건")
         kpi(pc[2], "fa-rotate", "기간 파생", won(cfd_sum), desc="참고용")
-        kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(cfn_sum/len(cf_new)/1e4 if len(cf_new) else 0):.0f}", "만", desc="신건 건당")
+        kpi(pc[3], "fa-won-sign", "기간 평균단가", f"{(main_sum/main_cnt/1e4 if main_cnt else 0):.0f}", "만", desc="건당")
         if len(cf):
             with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
                 rows = "".join(
