@@ -1145,6 +1145,113 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True):
     </div>""", unsafe_allow_html=True)
 
 
+def render_brief():
+    """요약(랜딩 = 일간보고): 어제 성과 + 이번 달 목표 + 효율. 한 화면 요약."""
+    tab_header("fa-gauge-high", "요약", "일간 보고 — 어제 성과 · 이번 달 목표 · 효율")
+    con = load_contracts()
+    today = date.today()
+    yday, dby = today - timedelta(days=1), today - timedelta(days=2)
+    mstart = today.replace(day=1)
+    pl_last = mstart - timedelta(days=1); pl_first = pl_last.replace(day=1)
+    ps, pe = pl_first, pl_first.replace(day=min(today.day, pl_last.day))
+    st.caption(f"📅 어제 {yday:%m월 %d일} · 이번 달 {mstart.month}월 1일~{today.day}일 · 🔄 전월 동기 대비")
+
+    def spend(s, e):
+        try:
+            a = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date BETWEEN '{s}' AND '{e}'")["c"].iloc[0]
+        except Exception:
+            a = 0
+        etc = load_etc()
+        b = etc[(etc["date"].dt.date >= s) & (etc["date"].dt.date <= e)]["cost"].sum() if not etc.empty else 0
+        return float(a or 0) + float(b or 0)
+
+    inq_all = load_inquiries()
+    def inq_day(d0):
+        if inq_all is None or inq_all.empty:
+            return 0, 0, 0
+        t = inq_all.copy(); t["_d"] = pd.to_datetime(t["date"]).dt.date
+        sl = t[t["_d"] == d0]
+        return len(sl), int(sl["consulted"].sum()), int(sl["contracted"].sum())
+
+    ad_y, ad_d = spend(yday, yday), spend(dby, dby)
+    q_y, s_y, w_y = inq_day(yday)
+    q_d, s_d, w_d = inq_day(dby)
+
+    include_deriv = deriv_toggle("deriv_brief")
+    new_only = not include_deriv
+    def rev(s, e):
+        m = (con["_date"].dt.date >= s) & (con["_date"].dt.date <= e)
+        if new_only: m &= con["_is_new"]
+        return con[m]["_amt"].sum()
+    revenue, rev_p = rev(mstart, today), rev(ps, pe)
+    ad_m, ad_mp = spend(mstart, today), spend(ps, pe)
+    rev_label = "전체 매출(신건+파생)" if include_deriv else "신건 매출"
+    rev_c, _ = delta_str(revenue, rev_p, "money")
+    roas_m = revenue / ad_m * 100 if ad_m else 0
+
+    # ── AI 인사이트 한 줄 ──
+    summary = (f"어제({yday}) 광고비 {money(ad_y)}원·문의 {q_y}건·상담 {s_y}건·수임 {w_y}건. "
+               f"이번 달 누적 {rev_label} {money(revenue)}원(전월동기 {rev_c or '데이터없음'}), "
+               f"광고비 {money(ad_m)}원, ROAS {roas_m:.0f}%, 월 목표 2.5억 대비 {revenue/MONTHLY_GOAL*100:.1f}%.")
+    focus = ("이 리포트는 매일 아침 보는 일간 보고다. 어제 성과와 이번 달 목표 달성 페이스를 "
+             "차분하고 건설적으로 한 줄로 요약하라.")
+    llm = ai_insight(summary, focus, tab="BRIEF", period=f"{yday}")
+    if llm:
+        body, icol = llm, GOLD_B
+    else:
+        grade = "효율 우수" if roas_m >= 300 else ("효율 양호" if roas_m >= 150 else "효율 점검 필요")
+        body = f"어제 문의 {q_y}건·수임 {w_y}건 · 이번 달 목표 {revenue/MONTHLY_GOAL*100:.0f}% 달성 · ROAS {roas_m:.0f}% ({grade})"
+        icol = GOLD_B if roas_m >= 150 else CORAL
+    tag = "AI 분석" if llm else "요약"
+    st.markdown(f"""<div class="kb-card" style="border-left:3px solid {icol};padding:14px 18px;margin-bottom:14px;">
+      <i class="fa-solid fa-robot" style="color:{icol};margin-right:8px;"></i>
+      <span style="font-size:11px;color:{MUTED};margin-right:6px;">[{tag}]</span>
+      <span style="font-size:14px;">{body}</span></div>""", unsafe_allow_html=True)
+
+    # ── 어제 성과 (전일 대비) ──
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 어제({yday:%m/%d}) 성과 · 전일 대비</div>', unsafe_allow_html=True)
+    c = st.columns(4)
+    kpi(c[0], "fa-won-sign", "광고비", money(ad_y), "원", *delta_str(ad_y, ad_d, "money"))
+    kpi(c[1], "fa-comment-dots", "문의", f"{q_y}", "건", *delta_str(q_y, q_d, "cnt"))
+    kpi(c[2], "fa-headset", "상담", f"{s_y}", "건", *delta_str(s_y, s_d, "cnt"))
+    kpi(c[3], "fa-file-signature", "수임", f"{w_y}", "건", *delta_str(w_y, w_d, "cnt"))
+
+    # ── 어제 매체별 광고비 한 줄 ──
+    parts = []
+    try:
+        mq = bq(f"SELECT media, SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE date='{yday}' GROUP BY media")
+        for _, r in mq.iterrows():
+            parts.append((str(r["media"]), float(r["c"] or 0)))
+    except Exception:
+        pass
+    etc = load_etc()
+    if not etc.empty:
+        em = etc[etc["date"].dt.date == yday]
+        for med, cst in em.groupby("media")["cost"].sum().items():
+            parts.append((str(med), float(cst)))
+    if parts:
+        seg = " · ".join(f'{m} <b style="color:#E8E6DE;">{money(cst)}</b>원' for m, cst in sorted(parts, key=lambda x: -x[1]))
+        st.markdown(f'<div style="font-size:12px;color:{MUTED};margin:-4px 0 16px;">매체별 어제 광고비 — {seg}</div>', unsafe_allow_html=True)
+
+    # ═══ HERO: 이번 달 목표 달성 ═══
+    pct = min(revenue / MONTHLY_GOAL * 100, 100)
+    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(210,170,80,.35);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
+        <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
+        <div style="display:flex;align-items:baseline;gap:10px;">
+        <span class="serif" style="font-size:38px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
+        <span style="font-size:14px;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+        <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">{rev_label}</div>
+        <div class="serif" style="font-size:22px;font-weight:600;color:{GOLD_B};">{money(revenue)}<small style="font-size:12px;">원</small></div>
+        <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
+        <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
+        <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
+      </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
+
+    # ── ROAS + 영업이익 (이번 달) ──
+    roas_card(revenue, ad_m, rev_p, ad_mp, f"{today.month}월")
+
+
 def render_summary():
     tab_header("fa-chart-pie", "통합요약", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
     con = load_contracts()
@@ -2298,11 +2405,13 @@ def main():
     top = st.tabs(top_labels)
 
     with top[0]:
-        v = st.radio("보기", ["통합 요약", "일자별 요약"], horizontal=True,
+        v = st.radio("보기", ["요약", "상세요약"], horizontal=True,
                      label_visibility="collapsed", key="nav_sum")
-        if v == "통합 요약":
-            render_summary()
+        if v == "요약":
+            render_brief()
         else:
+            render_summary()
+            st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.2);margin:28px 0;">', unsafe_allow_html=True)
             render_daily()
 
     with top[1]:
