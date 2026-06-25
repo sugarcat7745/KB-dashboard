@@ -717,57 +717,59 @@ def load_inq_for_date(day):
 
 @st.cache_data(ttl=300)
 def load_inquiries():
-    """문의 시트 전 탭 통합 (통합본 + 월별, 헤더 위치/컬럼 자동 탐지)."""
-    def fidx(hdr, *keys, exclude=()):
-        return next((j for j, v in enumerate(hdr)
-                     if any(k in str(v) for k in keys) and not any(e in str(v) for e in exclude)), None)
+    """통합문의 마스터 시트 '단일 소스'에서 직접 집계.
+       · 문의 = 내용(이름/검색키워드) 있는 줄
+       · 상담 = M(상담)열에 텍스트 있으면 1건   · 수임 = N(수임완료및입금)열에 텍스트 있으면 1건
+       · 캠페인 = K(카테고리)열  · 날짜 = B(문의일자, 캐리포워드)
+       ※ 캠페인 성과(축1) 전용 — 사건 매출(축2)은 계약시트(load_contracts) 별도."""
     def pdate(s):
         s = "".join(ch for ch in str(s) if ch.isdigit())
         return pd.to_datetime(s, format="%y%m%d", errors="coerce") if len(s) == 6 else pd.NaT
     try:
-        sh = get_gc().open_by_key(INQ_SHEET_ID)
+        ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet("통합문의")
+        vals = ws.get_all_values()
     except Exception:
         return pd.DataFrame()
-    frames = []
-    for ws in sh.worksheets():
-        if ws.title == "주간문의량":
-            continue
-        vals = ws.get_all_values()
-        if not vals:
-            continue
-        raw = pd.DataFrame(vals)
-        hr = next((i for i in range(min(10, len(raw)))
-                   if any("문의일자" in str(v) for v in raw.iloc[i])), None)
-        if hr is None:
-            continue
-        hdr = [str(v).strip() for v in raw.iloc[hr].tolist()]
-        di, ni, ti = fidx(hdr, "문의일자"), fidx(hdr, "이름"), fidx(hdr, "카테고리")
-        # 형님 기준: '상담' 컬럼 / '수임(완료및입금)' 컬럼에서 텍스트 정확 매칭
-        si = fidx(hdr, "상담", exclude=("상담사무소", "상담시간", "상담료"))
-        wi = fidx(hdr, "수임", exclude=("전환", "수임당"))
-        body = raw.iloc[hr+1:].reset_index(drop=True)
-        def col(i):
-            return body[i].astype(str).str.strip() if (i is not None and i in body.columns) else pd.Series([""] * len(body))
-        def has_col(idx, txt):  # 지정 컬럼에서 정확히 txt 텍스트인 행
-            if idx is None or idx not in body.columns:
-                return pd.Series([False] * len(body))
-            return body[idx].astype(str).str.strip() == txt
-        d = pd.DataFrame({
-            "date": body[di].apply(pdate) if (di is not None and di in body.columns) else pd.NaT,
-            "name": col(ni),
-            "category": col(ti) if (ti is not None and ti in body.columns) else "(미분류)",
-            "consulted": has_col(si, "상담"),
-            "contracted": has_col(wi, "수임"),
-        })
-        d["date"] = d["date"].ffill()
-        d = d.dropna(subset=["date"])
-        frames.append(d)
-    if not frames:
+    if not vals:
         return pd.DataFrame()
-    inq = pd.concat(frames, ignore_index=True)
-    inq["_ym"] = inq["date"].dt.to_period("M").astype(str)
-    inq["name"] = inq["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
-    return inq
+    raw = pd.DataFrame(vals)
+    hr = next((i for i in range(min(10, len(raw)))
+               if any("문의일자" in str(v) for v in raw.iloc[i])), None)
+    if hr is None:
+        return pd.DataFrame()
+    hdr = [str(v).strip() for v in raw.iloc[hr].tolist()]
+    def fidx(*keys, exclude=()):
+        return next((j for j, v in enumerate(hdr)
+                     if any(k in str(v) for k in keys) and not any(e in str(v) for e in exclude)), None)
+    di = fidx("문의일자")
+    ni = fidx("이름")
+    ki = fidx("검색키워드", "키워드")
+    ti = fidx("카테고리")
+    si = fidx("상담", exclude=("상담사무소", "상담시간", "상담료"))
+    wi = fidx("수임", exclude=("전환", "수임당"))
+    body = raw.iloc[hr+1:].reset_index(drop=True)
+    def col(i):
+        return body[i].astype(str).str.strip() if (i is not None and i in body.columns) else pd.Series([""] * len(body))
+    def nonempty(i):  # 지정 컬럼에 텍스트가 있으면 True (형님 기준: M·N열 텍스트 = 1건)
+        if i is None or i not in body.columns:
+            return pd.Series([False] * len(body))
+        s = body[i].astype(str).str.strip()
+        return (s != "") & (s.str.lower() != "nan")
+    d = pd.DataFrame({
+        "date": body[di].apply(pdate) if (di is not None and di in body.columns) else pd.NaT,
+        "name": col(ni),
+        "keyword": col(ki),
+        "category": col(ti) if (ti is not None and ti in body.columns) else "",
+        "consulted": nonempty(si),
+        "contracted": nonempty(wi),
+    })
+    d["date"] = d["date"].ffill()
+    has_content = (d["name"].str.strip() != "") | (d["keyword"].str.strip() != "")
+    d = d[d["date"].notna() & has_content].reset_index(drop=True)
+    d["category"] = d["category"].replace({"": "(미분류)", "nan": "(미분류)"})
+    d["_ym"] = d["date"].dt.to_period("M").astype(str)
+    d["name"] = d["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
+    return d
 
 @st.cache_data(ttl=300)
 def load_contracts():
