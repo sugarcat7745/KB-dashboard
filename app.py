@@ -140,7 +140,7 @@ def get_bq():
     creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/bigquery"])
     return bigquery.Client(project=sa["project_id"], credentials=creds)
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def bq(sql):
     return get_bq().query(sql).to_dataframe()
 
@@ -218,7 +218,7 @@ def log_ai_usage(user, tab, period, insight, usage, model="haiku"):
         pass
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def build_data_context():
     """AI 질의용 데이터 요약 컨텍스트 (전체 연도 집계 — 연도 비교 가능, 로우데이터 미노출)."""
     con = load_contracts()
@@ -512,7 +512,7 @@ def clean_num(s):
     try: return float(str(s).replace(",", "").replace("원", "").replace("%", "").strip() or 0)
     except: return 0.0
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 @st.cache_data(ttl=120)
 def load_budget(day=None):
     """캠페인 예산/소진 — 해당 날짜(없으면 최신 날짜)의 캠페인별 '최대 소진'.
@@ -568,7 +568,7 @@ def load_annual():
     except Exception:
         return pd.DataFrame()
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_etc():
     """기타매체(카카오모먼트·모비온·메타) 비용 시트를 직접 읽어 세로형 DataFrame 반환.
        BigQuery 적재 없이 '기타매체' 시트가 곧 소스 — 비정기 업데이트가 즉시 반영됨.
@@ -648,7 +648,7 @@ def _nv_report_df(tab, key_col):
     return df
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_nv_age():
     """네이버 연령별 광고비 — 시트 '네이버연령' 직독."""
     df = _nv_report_df("네이버연령", "연령대")
@@ -659,7 +659,7 @@ def load_nv_age():
                          "impressions": df.get("노출수", 0), "clicks": df.get("클릭수", 0)})
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_nv_gender():
     """네이버 성별 광고비 — 시트 '네이버성별' 직독."""
     df = _nv_report_df("네이버성별", "성별")
@@ -670,7 +670,7 @@ def load_nv_gender():
                          "impressions": df.get("노출수", 0), "clicks": df.get("클릭수", 0)})
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_nv_seg():
     """네이버 노출매체/디바이스/지역 광고비 — 시트 '네이버매체디바이스' 직독."""
     df = _nv_report_df("네이버매체디바이스", "매체이름")
@@ -683,7 +683,7 @@ def load_nv_seg():
                          "impressions": df.get("노출수", 0), "clicks": df.get("클릭수", 0)})
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_inq_tab(tab_name):
     try:
         ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet(tab_name)
@@ -715,7 +715,7 @@ def load_inq_for_date(day):
     if df.empty or "_dt" not in df.columns: return pd.DataFrame()
     return df[df["_dt"].dt.date == day]
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_inquiries():
     """통합문의 마스터 시트 '단일 소스'에서 직접 집계.
        · 문의 = 내용(이름/검색키워드) 있는 줄
@@ -771,7 +771,7 @@ def load_inquiries():
     d["name"] = d["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
     return d
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def load_contracts():
     ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
     df = pd.DataFrame(ws.get_all_records())
@@ -1253,18 +1253,31 @@ def render_brief():
     # ── ROAS + 영업이익 (이번 달) ──
     roas_card(revenue, ad_m, rev_p, ad_mp, f"{today.month}월")
 
-    # ════════ 어제 캠페인 예산 대비 소진률 ════════
+    # ════════ 어제 네이버 캠페인 예산 대비 소진률 (소진=실제 광고비 ad_keyword 기준) ════════
     bud = load_budget(str(yday))
     if bud is None or bud.empty:
         bud = load_budget()
     if bud is not None and not bud.empty and "daily_budget" in bud.columns:
-        tb = float(bud["daily_budget"].sum() or 0)
-        ts = float(bud["total_charge_cost"].sum() or 0)
+        # 실제 소진 = ad_keyword(네이버) 어제 캠페인별 광고비 — 예산 스냅샷보다 정확
+        actual = {}
+        try:
+            ak = bq(f"SELECT campaign, SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                    f"WHERE date='{yday}' AND media='네이버' GROUP BY campaign")
+            for _, r in ak.iterrows():
+                actual[str(r["campaign"]).strip()] = float(r["c"] or 0)
+        except Exception:
+            pass
+        bb = bud.copy()
+        # 캠페인별 소진 = 실제광고비(매칭) 우선, 없으면 스냅샷
+        bb["spent"] = bb.apply(lambda r: actual.get(str(r["campaign_name"]).strip(), float(r["total_charge_cost"] or 0)), axis=1)
+        tb = float(bb["daily_budget"].sum() or 0)
+        ts_actual = sum(actual.values())                       # 실제 네이버 총광고비
+        ts = ts_actual if ts_actual > 0 else float(bb["spent"].sum() or 0)
         rate = ts / tb * 100 if tb else 0
         rc = CORAL if rate >= 100 else (GOLD_B if rate >= 70 else GOLD)
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 어제({yday:%m/%d}) 캠페인 예산 대비 소진률</div>', unsafe_allow_html=True)
-        bb = bud.copy()
-        bb["rate"] = bb.apply(lambda r: (float(r["total_charge_cost"]) / float(r["daily_budget"]) * 100) if r["daily_budget"] else 0, axis=1)
+        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 어제({yday:%m/%d}) 네이버 캠페인 예산 대비 소진률</div>', unsafe_allow_html=True)
+        st.caption("※ 소진 = 실제 광고비(ad_keyword) 기준 · 네이버 캠페인 한정 (구글·기타매체 제외)")
+        bb["rate"] = bb.apply(lambda r: (float(r["spent"]) / float(r["daily_budget"]) * 100) if r["daily_budget"] else 0, axis=1)
         bb = bb.sort_values("rate", ascending=False).head(7)
         rows = ""
         for _, r in bb.iterrows():
@@ -2503,6 +2516,10 @@ def main():
     # 사이드바: 계정 정보 + 로그아웃
     with st.sidebar:
         st.markdown(f"**👤 {user}**" + ("  ·  🛡️ 관리자" if user == "admin" else ""))
+        if st.button("🔄 데이터 새로고침", use_container_width=True,
+                     help="시트·BigQuery에서 최신 데이터를 즉시 다시 불러옵니다 (평소엔 1시간마다 자동 갱신)"):
+            st.cache_data.clear()
+            st.rerun()
         if st.button("로그아웃", use_container_width=True):
             for k in ("auth_user", "login_id", "login_pw"):
                 st.session_state.pop(k, None)
