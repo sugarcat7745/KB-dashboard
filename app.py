@@ -1251,6 +1251,143 @@ def render_brief():
     # ── ROAS + 영업이익 (이번 달) ──
     roas_card(revenue, ad_m, rev_p, ad_mp, f"{today.month}월")
 
+    # ════════ 어제 캠페인 예산 대비 소진률 ════════
+    bud = load_budget(str(yday))
+    if bud is None or bud.empty:
+        bud = load_budget()
+    if bud is not None and not bud.empty and "daily_budget" in bud.columns:
+        tb = float(bud["daily_budget"].sum() or 0)
+        ts = float(bud["total_charge_cost"].sum() or 0)
+        rate = ts / tb * 100 if tb else 0
+        rc = CORAL if rate >= 100 else (GOLD_B if rate >= 70 else GOLD)
+        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 어제({yday:%m/%d}) 캠페인 예산 대비 소진률</div>', unsafe_allow_html=True)
+        bb = bud.copy()
+        bb["rate"] = bb.apply(lambda r: (float(r["total_charge_cost"]) / float(r["daily_budget"]) * 100) if r["daily_budget"] else 0, axis=1)
+        bb = bb.sort_values("rate", ascending=False).head(7)
+        rows = ""
+        for _, r in bb.iterrows():
+            rr = float(r["rate"]); cc = CORAL if rr >= 100 else (GOLD_B if rr >= 70 else MUTED)
+            rows += (f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">'
+                     f'<span style="width:150px;color:#E8E6DE;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["campaign_name"]}</span>'
+                     f'<div style="flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden;">'
+                     f'<div style="width:{min(rr,100):.0f}%;height:100%;background:{cc};"></div></div>'
+                     f'<span style="width:46px;text-align:right;color:{cc};font-weight:600;">{rr:.0f}%</span></div>')
+        st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.07);">
+            <div><span style="font-size:12px;color:{MUTED};">전체 소진률</span>
+            <span class="serif" style="font-size:28px;font-weight:600;color:{rc};margin-left:10px;">{rate:.0f}<small style="font-size:14px;">%</small></span></div>
+            <span style="font-size:12px;color:{MUTED};">소진 {money(ts)} / 예산 {money(tb)}원</span></div>
+          {rows}</div>""", unsafe_allow_html=True)
+
+    # ════════ 이번 달 일별 집계 (그래프 + 월 전체 표 공용) ════════
+    end_day = yday if (yday.year == today.year and yday.month == today.month) else today
+    days = [today.replace(day=d) for d in range(1, end_day.day + 1)]
+    order = ["네이버", "구글", "카카오모먼트", "모비온", "메타"]
+    daily = {d: {} for d in days}; seen = set()
+    try:
+        kq = bq(f"SELECT date, media, SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                f"WHERE date BETWEEN '{days[0]}' AND '{days[-1]}' GROUP BY date, media")
+        for _, r in kq.iterrows():
+            d0 = pd.to_datetime(str(r["date"])).date(); med = str(r["media"])
+            if d0 in daily:
+                daily[d0][med] = daily[d0].get(med, 0) + float(r["c"] or 0); seen.add(med)
+    except Exception:
+        pass
+    etc = load_etc()
+    if etc is not None and not etc.empty:
+        em = etc[(etc["date"].dt.date >= days[0]) & (etc["date"].dt.date <= days[-1])]
+        for _, r in em.iterrows():
+            d0 = r["date"].date(); med = str(r["media"])
+            if d0 in daily:
+                daily[d0][med] = daily[d0].get(med, 0) + float(r["cost"] or 0); seen.add(med)
+    iq = {d: (0, 0, 0) for d in days}
+    if inq_all is not None and not inq_all.empty:
+        t2 = inq_all.copy(); t2["_d"] = pd.to_datetime(t2["date"]).dt.date
+        g2 = t2[(t2["_d"] >= days[0]) & (t2["_d"] <= days[-1])].groupby("_d").agg(
+            q=("name", "size"), s=("consulted", "sum"), w=("contracted", "sum"))
+        for d0, r in g2.iterrows():
+            if d0 in iq: iq[d0] = (int(r["q"]), int(r["s"]), int(r["w"]))
+    cols_m = [m for m in order if m in seen] + [m for m in sorted(seen) if m not in order]
+
+    # ── 일별 추세 그래프 (총광고비 막대 + 문의 선) ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 이번 달 일별 추세 (광고비 · 문의)</div>', unsafe_allow_html=True)
+    xs = [d.day for d in days]
+    tot_series = [sum(daily[d].values()) for d in days]
+    q_series = [iq[d][0] for d in days]
+    fig = go.Figure()
+    fig.add_bar(x=xs, y=tot_series, name="총광고비", marker_color=GOLD, opacity=.85)
+    fig.add_trace(go.Scatter(x=xs, y=q_series, name="문의", yaxis="y2", mode="lines+markers",
+                             line=dict(color=TEAL, width=2), marker=dict(size=5)))
+    fig_theme(fig, 260)
+    fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, color=TEAL),
+                      legend=dict(orientation="h", y=1.16, x=0),
+                      xaxis=dict(title="일", dtick=1, gridcolor="rgba(255,255,255,0.05)"))
+    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    # ── 월 전체 일별 표 (매체별 · 주차 소계 · 전주대비) ──
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-table"></i> {today.month}월 일자별 전체</div>', unsafe_allow_html=True)
+    mcolor = {"네이버": "#4A7FE0", "구글": "#C77B6B", "카카오모먼트": "#C9A227", "모비온": "#6E9E5E", "메타": "#5B6FC4"}
+    def fmt(v): return f"{int(round(v)):,}" if v else "0"
+    def cell(v, c="#C9C7BF", bold=False):
+        return f'<td style="padding:5px 8px;text-align:right;color:{c};{"font-weight:700;" if bold else ""}">{v}</td>'
+    def wk_delta(cur, prev):
+        if not prev: return ""
+        d = (cur - prev) / prev * 100
+        col = "#7FB87F" if d >= 0 else CORAL
+        return f'<span style="color:{col};font-size:10px;">{"▲" if d>=0 else "▼"} {abs(d):.1f}%</span>'
+    heads = (f'<th style="padding:7px 8px;text-align:center;background:#2a2a26;color:{MUTED};position:sticky;left:0;">날짜</th>'
+             + "".join(f'<th style="padding:7px 8px;text-align:center;background:{mcolor.get(m, "#555")};color:#1a1a17;font-weight:700;">{m}</th>' for m in cols_m)
+             + f'<th style="padding:7px 8px;text-align:center;background:{GOLD_D};color:#1a1a17;font-weight:700;">총광고비</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#3a6b73;color:#E8E6DE;">문의</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#3a6b73;color:#E8E6DE;">CPI</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#7a5a4e;color:#E8E6DE;">상담</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#7a5a4e;color:#E8E6DE;">수임</th>')
+    # 월합계
+    msum = {m: sum(daily[d].get(m, 0) for d in days) for m in cols_m}
+    mtot = sum(msum.values()); mq = sum(iq[d][0] for d in days); ms = sum(iq[d][1] for d in days); mw = sum(iq[d][2] for d in days)
+    mcpi = mtot / mq if mq else 0
+    total_row = (f'<tr style="background:rgba(210,170,80,.16);">'
+                 f'<td style="padding:6px 8px;text-align:center;color:{GOLD_B};font-weight:700;position:sticky;left:0;background:#33301f;">{today.month}월 합계</td>'
+                 + "".join(cell(fmt(msum[m]), GOLD_B, True) for m in cols_m)
+                 + cell(fmt(mtot), GOLD_B, True) + cell(mq, GOLD_B, True) + cell(fmt(mcpi), GOLD_B, True)
+                 + cell(ms, GOLD_B, True) + cell(mw, GOLD_B, True) + '</tr>')
+    weeks = {}
+    for d in days:
+        weeks.setdefault((d.day - 1) // 7, []).append(d)
+    body = ""; prev_w = None
+    for wi in sorted(weeks):
+        wd = weeks[wi]
+        for d in wd:
+            dow = "월화수목금토일"[d.weekday()]
+            dcol = "#E0524E" if d.weekday() == 6 else ("#5B8DEF" if d.weekday() == 5 else "#C9C7BF")
+            tt = sum(daily[d].values()); qd, sd, wdd = iq[d]; cpi = tt / qd if qd else 0
+            body += (f'<tr>'
+                     f'<td style="padding:5px 8px;text-align:center;color:{dcol};position:sticky;left:0;background:#1f1e1b;">{d.month:02d}/{d.day:02d}({dow})</td>'
+                     + "".join(cell(fmt(daily[d].get(m, 0))) for m in cols_m)
+                     + cell(fmt(tt), "#E8E6DE") + cell(qd) + cell(fmt(cpi)) + cell(sd) + cell(wdd) + '</tr>')
+        wsum = {m: sum(daily[d].get(m, 0) for d in wd) for m in cols_m}
+        wtot = sum(wsum.values()); wq = sum(iq[d][0] for d in wd); ws = sum(iq[d][1] for d in wd); ww = sum(iq[d][2] for d in wd)
+        wcpi = wtot / wq if wq else 0
+        body += (f'<tr style="background:rgba(91,180,196,.10);">'
+                 f'<td style="padding:5px 8px;text-align:center;color:{TEAL};font-weight:700;position:sticky;left:0;background:#1c2a2c;">{wi+1}주차</td>'
+                 + "".join(cell(fmt(wsum[m]), "#E8E6DE", True) for m in cols_m)
+                 + cell(fmt(wtot), "#E8E6DE", True) + cell(wq, "#E8E6DE", True) + cell(fmt(wcpi), "#E8E6DE", True)
+                 + cell(ws, "#E8E6DE", True) + cell(ww, "#E8E6DE", True) + '</tr>')
+        if prev_w is not None:
+            body += (f'<tr style="background:rgba(255,255,255,.02);">'
+                     f'<td style="padding:3px 8px;text-align:center;color:{MUTED};font-size:10px;position:sticky;left:0;background:#1a1a17;">전주대비</td>'
+                     + "".join(f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wsum[m], prev_w["m"].get(m, 0))}</td>' for m in cols_m)
+                     + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wtot, prev_w["tot"])}</td>'
+                     + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wq, prev_w["q"])}</td>'
+                     + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wcpi, prev_w["cpi"])}</td>'
+                     + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(ws, prev_w["s"])}</td>'
+                     + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(ww, prev_w["w"])}</td></tr>')
+        prev_w = {"m": wsum, "tot": wtot, "q": wq, "s": ws, "w": ww, "cpi": wcpi}
+    st.markdown(f"""<div style="overflow-x:auto;" class="kb-card">
+      <table style="width:100%;border-collapse:collapse;font-size:12px;min-width:780px;">
+        <thead><tr>{heads}</tr></thead><tbody>{total_row}{body}</tbody>
+      </table></div>""", unsafe_allow_html=True)
+
 
 def render_summary():
     tab_header("fa-chart-pie", "통합요약", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
