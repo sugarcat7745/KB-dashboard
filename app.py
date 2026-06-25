@@ -1241,13 +1241,12 @@ def render_brief():
       <span style="font-size:11px;color:{MUTED};margin-right:6px;">[{tag}]</span>
       <span style="font-size:14px;">{body}</span></div>""", unsafe_allow_html=True)
 
-    # ── 어제 성과 (전일 대비) ──
+    # ── 어제 성과 (전일 대비) ── ※ 수임은 보통 당일에 안 됨 → 제외
     st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 어제({yday:%m/%d}) 성과 · 전일 대비</div>', unsafe_allow_html=True)
-    c = st.columns(4)
+    c = st.columns(3)
     kpi(c[0], "fa-won-sign", "광고비", money(ad_y), "원", *delta_str(ad_y, ad_d, "money"))
     kpi(c[1], "fa-comment-dots", "문의", f"{q_y}", "건", *delta_str(q_y, q_d, "cnt"))
     kpi(c[2], "fa-headset", "상담", f"{s_y}", "건", *delta_str(s_y, s_d, "cnt"))
-    kpi(c[3], "fa-file-signature", "수임", f"{w_y}", "건", *delta_str(w_y, w_d, "cnt"))
 
     # ── 어제 매체별 광고비 한 줄 ──
     parts = []
@@ -1325,7 +1324,32 @@ def render_brief():
             <span style="font-size:12px;color:{MUTED};">소진 {money(ts)} / 예산 {money(tb)}원</span></div>
           {rows}</div>""", unsafe_allow_html=True)
 
-    # ════════ 이번 달 일별 집계 (그래프 + 월 전체 표 공용) ════════
+    # ════════ 이번 달 캠페인별 문의 수 (축1 = 광고 캠페인 성과) ════════
+    inq_camp = load_inquiries()
+    if inq_camp is not None and not inq_camp.empty:
+        _cur_ym = f"{today:%Y-%m}"
+        im = inq_camp[inq_camp["_ym"] == _cur_ym]
+        im = im[im["category"].astype(str).str.strip() != ""]
+        if not im.empty:
+            g = (im.groupby("category")
+                   .agg(문의=("category", "size"),
+                        상담=("consulted", "sum"),
+                        수임=("contracted", "sum"))
+                   .reset_index()
+                   .sort_values("문의", ascending=False)).head(10)
+            mx = float(g["문의"].max() or 1)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-bullhorn"></i> 이번 달 캠페인별 문의 수</div>', unsafe_allow_html=True)
+            st.caption("※ 광고 캠페인(카테고리) 기준 유입 — 문의·상담·수임 건수 (사건 매출과 별개 축)")
+            rows2 = ""
+            for _, r in g.iterrows():
+                q = int(r["문의"]); s = int(r["상담"]); w = int(r["수임"])
+                wpct = q / mx * 100
+                rows2 += (f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">'
+                          f'<span style="width:150px;color:#E8E6DE;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["category"]}</span>'
+                          f'<div style="flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden;">'
+                          f'<div style="width:{wpct:.0f}%;height:100%;background:{TEAL};"></div></div>'
+                          f'<span style="width:140px;text-align:right;color:{MUTED};">문의 <b style="color:#E8E6DE;">{q}</b> · 상담 {s} · 수임 {w}</span></div>')
+            st.markdown(f'<div class="kb-card" style="margin-bottom:16px;">{rows2}</div>', unsafe_allow_html=True)
     end_day = yday if (yday.year == today.year and yday.month == today.month) else today
     days = [today.replace(day=d) for d in range(1, end_day.day + 1)]
     order = ["네이버", "구글", "카카오모먼트", "모비온", "메타"]
