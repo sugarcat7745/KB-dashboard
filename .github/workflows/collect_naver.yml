@@ -2,7 +2,7 @@ name: collect-naver-daily
 
 on:
   schedule:
-    - cron: "30 21 * * *"   # UTC 21:30 = KST 06:30 (구글 06:00과 30분 차이로 분산)
+    - cron: "47 21 * * *"   # UTC 21:30 = KST 06:30 (구글 06:00과 30분 차이로 분산)
   workflow_dispatch: {}
 
 jobs:
