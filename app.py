@@ -570,8 +570,10 @@ def load_annual():
 
 @st.cache_data(ttl=3600)
 def load_etc():
-    """기타매체(카카오모먼트·모비온·메타) 비용 시트를 직접 읽어 세로형 DataFrame 반환.
-       BigQuery 적재 없이 '기타매체' 시트가 곧 소스 — 비정기 업데이트가 즉시 반영됨.
+    """기타매체(카카오모먼트·모비온·메타) 일별 비용 — 과거분(BigQuery ad_etc) + 최신분(시트) 통합.
+       · 과거분: ad_etc 테이블(CSV 적재, 모비온·카카오모먼트)
+       · 최신분: '기타매체' 시트(6/22~ 직접입력, 모먼트·모비온·메타)
+       · 시트 시작일 기준 분기로 중복 제거(6/22 모비온 양쪽 중복 → 시트 우선)
        반환 컬럼: date(datetime)·media·cost·impressions·clicks·conversions"""
     cols = ["date", "media", "cost", "impressions", "clicks", "conversions"]
     try:
@@ -613,7 +615,36 @@ def load_etc():
                 continue
             rows.append({"date": d, "media": m, "cost": cost,
                          "impressions": int(imp), "clicks": int(clk), "conversions": 0})
-    return pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+    sheet_df = pd.DataFrame(rows, columns=cols) if rows else pd.DataFrame(columns=cols)
+
+    # ── BigQuery ad_etc(과거분) 합치기 ───────────────────────────────────
+    #   · ad_etc = CSV로 적재된 과거분 (모비온·카카오모먼트, 메타 없음)
+    #   · 시트 = 6/22~ 형님 직접입력 (모먼트·모비온·메타)
+    #   · 규칙: '시트 시작일' 기준 분기 → 그 전은 ad_etc, 그 이후는 시트
+    #     (6/22 모비온이 양쪽에 다 있어 값까지 다름 → 시트 우선으로 중복 제거)
+    try:
+        past = bq(f"SELECT date, media, cost, impressions, clicks, conversions "
+                  f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_etc`")
+    except Exception:
+        past = pd.DataFrame(columns=cols)
+    if past is not None and not past.empty:
+        past["date"] = pd.to_datetime(past["date"], errors="coerce")
+        past = past.dropna(subset=["date"])
+        for c in ("cost", "impressions", "clicks", "conversions"):
+            past[c] = pd.to_numeric(past[c], errors="coerce").fillna(0)
+        past["media"] = past["media"].astype(str).str.strip()
+        if not sheet_df.empty:
+            cutoff = sheet_df["date"].min()          # 시트 시작일(=6/22)
+            past = past[past["date"] < cutoff]        # 그 전만 BigQuery에서
+        merged = pd.concat([past[cols], sheet_df[cols]], ignore_index=True)
+    else:
+        merged = sheet_df
+    if merged is None or merged.empty:
+        return pd.DataFrame(columns=cols)
+    # 안전망: (날짜·매체) 중복이면 시트(뒤쪽) 우선, 날짜순 정렬
+    merged = (merged.drop_duplicates(subset=["date", "media"], keep="last")
+                    .sort_values("date").reset_index(drop=True))
+    return merged
 
 
 def _nv_report_df(tab, key_col):
