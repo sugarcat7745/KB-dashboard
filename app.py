@@ -875,6 +875,105 @@ def load_contracts():
     df = pd.DataFrame(_rows).reset_index(drop=True)
     return df
 
+@st.cache_data(ttl=3600)
+def build_export_zip():
+    """AI 분석용 데이터 패키지(ZIP) 생성. README(맥락) + long-format CSV들.
+       의존성 없는 zipfile+csv 기반 — Cowork 등 AI에 그대로 올려 분석 가능."""
+    import io, zipfile
+    today = date.today()
+    start = (today.replace(day=1) - timedelta(days=370)).replace(day=1)  # 약 13개월 전 1일
+    start_s = start.strftime("%Y-%m-%d")
+    csvstr = lambda d: "\ufeff" + d.to_csv(index=False)   # BOM: 엑셀에서도 한글 안 깨짐
+
+    # 1) 일별·매체별 광고성과 (ad_keyword + 기타매체)
+    try:
+        kq = bq(f"SELECT date AS 날짜, media AS 매체, SUM(cost) AS 광고비, "
+                f"SUM(impressions) AS 노출, SUM(clicks) AS 클릭 "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                f"WHERE date >= '{start_s}' GROUP BY date, media ORDER BY date, media")
+    except Exception:
+        kq = pd.DataFrame(columns=["날짜", "매체", "광고비", "노출", "클릭"])
+    etc = load_etc()
+    if etc is not None and not etc.empty:
+        e2 = etc[etc["date"].dt.date >= start][["date", "media", "cost", "impressions", "clicks"]].copy()
+        e2.columns = ["날짜", "매체", "광고비", "노출", "클릭"]
+        e2["날짜"] = pd.to_datetime(e2["날짜"]).dt.strftime("%Y-%m-%d")
+        daily_ad = pd.concat([kq, e2], ignore_index=True)
+    else:
+        daily_ad = kq
+
+    # 2) 일별 문의·상담·수임  +  3) 캠페인별 성과(축1)
+    inq = load_inquiries()
+    if inq is not None and not inq.empty:
+        i2 = inq[inq["date"].dt.date >= start].copy()
+        i2["날짜"] = i2["date"].dt.strftime("%Y-%m-%d")
+        daily_inq = (i2.groupby("날짜")
+                       .agg(문의=("날짜", "size"), 상담=("consulted", "sum"), 수임=("contracted", "sum"))
+                       .reset_index())
+        camp = (i2[i2["category"].astype(str).str.strip() != ""]
+                  .groupby("category")
+                  .agg(문의=("category", "size"), 상담=("consulted", "sum"), 수임=("contracted", "sum"))
+                  .reset_index().rename(columns={"category": "캠페인"}))
+        camp["수임전환율(%)"] = (camp["수임"] / camp["문의"].replace(0, pd.NA) * 100).round(1)
+        camp = camp.sort_values("문의", ascending=False)
+    else:
+        daily_inq = pd.DataFrame(columns=["날짜", "문의", "상담", "수임"])
+        camp = pd.DataFrame(columns=["캠페인", "문의", "상담", "수임", "수임전환율(%)"])
+
+    # 4) 사건유형별 매출(축2)  +  5) 계약 원본
+    con = load_contracts()
+    if con is not None and not con.empty and "_type" in con.columns:
+        c2 = con.copy()
+        case = (c2.groupby("_type")
+                  .agg(계약건수=("_type", "size"), 계약금액=("_amt", "sum"),
+                       입금=("_paid", "sum"), 미수=("_unpaid", "sum"))
+                  .reset_index().rename(columns={"_type": "사건유형"})
+                  .sort_values("계약금액", ascending=False))
+        craw = c2[["_date", "_name", "_type", "_is_new", "_amt", "_paid", "_unpaid"]].copy()
+        craw["_date"] = pd.to_datetime(craw["_date"]).dt.strftime("%Y-%m-%d")
+        craw["_is_new"] = craw["_is_new"].map({True: "신건", False: "파생"})
+        craw.columns = ["계약일", "위임인", "사건유형", "신건/파생", "기본보수액", "입금", "미수"]
+    else:
+        case = pd.DataFrame(columns=["사건유형", "계약건수", "계약금액", "입금", "미수"])
+        craw = pd.DataFrame(columns=["계약일", "위임인", "사건유형", "신건/파생", "기본보수액", "입금", "미수"])
+
+    readme = f"""# 법무법인 KB — AI 분석용 데이터 패키지
+
+생성일: {today:%Y-%m-%d}
+기간: {start_s} ~ {today:%Y-%m-%d} (약 13개월)
+
+## 반드시 이해할 '두 개의 축' (절대 섞지 말 것)
+- 축1 = 광고 캠페인 성과 (파일 02·03): "어느 광고 캠페인으로 문의/상담/수임이 몇 건 들어왔나". 단위 '건'.
+  카테고리 = 광고 캠페인(메인/구글성범죄/부동산 등 = 유입 경로).
+- 축2 = 사건 매출 (파일 04·05): "어떤 사건유형(형사/민사/이혼 등)으로 계약금 얼마를 벌었나". 단위 '원'.
+
+[중요] 같은 '형사'라도 축1 '형사 캠페인 유입' != 축2 '형사 사건 매출'.
+캠페인(유입 경로) != 사건유형(실제 수임 사건). 두 축은 전체 합계·ROAS에서만 만난다.
+
+## 파일 구성
+- 01_일별_매체별_광고성과.csv : 날짜·매체별 광고비/노출/클릭 (네이버·구글·카카오모먼트·모비온·메타)
+- 02_일별_문의상담수임.csv     : 날짜별 문의·상담·수임 건수
+- 03_캠페인별_성과_축1.csv     : 광고 캠페인별 문의·상담·수임·수임전환율
+- 04_사건유형별_매출_축2.csv   : 사건유형별 계약건수·계약금액·입금·미수
+- 05_계약_원본_축2.csv         : 계약 1건당 원본 (계약일·위임인·사건유형·신건파생·금액)
+
+## 주의사항
+- 수임은 보통 문의 당일에 발생하지 않음(시차). 일별 수임=0 흔함.
+- 복수 사건유형 계약("형사,민사")은 유형별로 행을 나누고 금액을 균등 배분함(04·05).
+- 광고비·금액 단위: 원. 월 목표 매출: 2.5억원.
+- 기타매체(모먼트/모비온/메타)는 데이터 시작일이 다를 수 있음(메타는 최근 시작).
+"""
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("README.md", readme)
+        z.writestr("01_일별_매체별_광고성과.csv", csvstr(daily_ad))
+        z.writestr("02_일별_문의상담수임.csv", csvstr(daily_inq))
+        z.writestr("03_캠페인별_성과_축1.csv", csvstr(camp))
+        z.writestr("04_사건유형별_매출_축2.csv", csvstr(case))
+        z.writestr("05_계약_원본_축2.csv", csvstr(craw))
+    return buf.getvalue()
+
 def fig_theme(fig, h=240):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -1204,7 +1303,6 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True):
         <div style="margin-top:5px;line-height:1;">
           <span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>
           <span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(210,170,80,.14);color:{gc};">{grade}</span>{chg_html}</div>
-        <div style="font-size:11px;color:{MUTED};margin-top:6px;">{desc}</div>
       </div>
       <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
         매출 <b style="color:#E8E6DE;">{money(rev)}</b>원<br>
@@ -1295,9 +1393,25 @@ def render_brief():
         em = etc[etc["date"].dt.date == yday]
         for med, cst in em.groupby("media")["cost"].sum().items():
             parts.append((str(med), float(cst)))
+    parts = [(m, c) for m, c in parts if c and c > 0]
     if parts:
-        seg = " · ".join(f'{m} <b style="color:#E8E6DE;">{money(cst)}</b>원' for m, cst in sorted(parts, key=lambda x: -x[1]))
-        st.markdown(f'<div style="font-size:12px;color:{MUTED};margin:-4px 0 16px;">매체별 어제 광고비 — {seg}</div>', unsafe_allow_html=True)
+        parts.sort(key=lambda x: -x[1])
+        _mlabels = [m for m, _ in parts]
+        _mvals = [c for _, c in parts]
+        _mcolor = {"네이버": "#4A7FE0", "구글": "#C77B6B", "카카오모먼트": GOLD,
+                   "모비온": TEAL, "메타": "#5B6FC4"}
+        _cols = [_mcolor.get(m, MUTED) for m in _mlabels]
+        _tot = sum(_mvals)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 매체별 어제 광고비</div>', unsafe_allow_html=True)
+        pie = go.Figure(go.Pie(labels=_mlabels, values=_mvals, hole=0.62, sort=False,
+                               marker=dict(colors=_cols, line=dict(color="#1a1a17", width=2)),
+                               textinfo="label+percent", textfont=dict(size=12, color="#E8E6DE"),
+                               hovertemplate="%{label}: %{value:,.0f}원 (%{percent})<extra></extra>"))
+        pie.update_layout(showlegend=False, margin=dict(t=14, b=14, l=14, r=14),
+                          annotations=[dict(text=f"어제 합계<br><b>{money(_tot)}원</b>",
+                                            x=0.5, y=0.5, showarrow=False,
+                                            font=dict(size=14, color="#E8E6DE"))])
+        st.plotly_chart(fig_theme(pie, 260), use_container_width=True, config={"displayModeBar": False})
 
     # ═══ HERO: 이번 달 목표 달성 ═══
     pct = min(revenue / MONTHLY_GOAL * 100, 100)
@@ -1340,7 +1454,7 @@ def render_brief():
         rate = ts / tb * 100 if tb else 0
         rc = CORAL if rate >= 100 else (GOLD_B if rate >= 70 else GOLD)
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 어제({yday:%m/%d}) 네이버 캠페인 예산 대비 소진률</div>', unsafe_allow_html=True)
-        st.caption("※ 소진 = 실제 광고비(ad_keyword) 기준 · 네이버 캠페인 한정 (구글·기타매체 제외)")
+        st.caption("네이버 캠페인 한정")
         bb["rate"] = bb.apply(lambda r: (float(r["spent"]) / float(r["daily_budget"]) * 100) if r["daily_budget"] else 0, axis=1)
         bb = bb.sort_values("rate", ascending=False).head(7)
         rows = ""
