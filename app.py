@@ -2752,11 +2752,15 @@ def main():
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div>{live}</div></div>""", unsafe_allow_html=True)
 
-    # 메인 우측 상단 로그아웃 (사이드바가 접혀도 항상 보이게)
-    lo = st.columns([4, 1, 1])
+    # 메인 우측 상단 — 새로고침 + 로그아웃 (사이드바가 접혀도 항상 보이게)
+    lo = st.columns([3, 1.4, 1, 1])
     lo[1].markdown(f'<div style="text-align:right;padding-top:7px;font-size:13px;color:#9a9a90;">'
                    f'👤 {user}{"  🛡️" if user == "admin" else ""}</div>', unsafe_allow_html=True)
-    if lo[2].button("🚪 로그아웃", use_container_width=True, key="logout_main"):
+    if lo[2].button("🔄 새로고침", use_container_width=True, key="refresh_main",
+                    help="시트·BigQuery 최신 데이터를 즉시 다시 불러옵니다"):
+        st.cache_data.clear()
+        st.rerun()
+    if lo[3].button("🚪 로그아웃", use_container_width=True, key="logout_main"):
         for k in ("auth_user", "login_id", "login_pw"):
             st.session_state.pop(k, None)
         _clear_login_url()
