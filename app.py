@@ -1312,7 +1312,7 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True):
 
 def render_brief():
     """요약(랜딩 = 일간보고): 어제 성과 + 이번 달 목표 + 효율. 한 화면 요약."""
-    tab_header("fa-gauge-high", "요약", "일간 보고 — 어제 성과 · 이번 달 목표 · 효율")
+    tab_header("fa-gauge-high", "일간 보고", "어제 성과 · 이번 달 목표 · 효율")
     con = load_contracts()
     today = date.today()
     yday, dby = today - timedelta(days=1), today - timedelta(days=2)
@@ -1609,10 +1609,10 @@ def render_brief():
 
 
 def render_summary():
-    tab_header("fa-chart-pie", "통합요약", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
+    tab_header("fa-chart-pie", "월간 종합", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
     con = load_contracts()
     today = date.today()
-    # 통합요약: 기간설정 없이 '이번 달' 고정 · 전월 동기간과 비교
+    # 월간 종합: 기간설정 없이 '이번 달' 고정 · 전월 동기간과 비교
     start = today.replace(day=1)
     end = today
     span = (end - start).days + 1
@@ -2779,9 +2779,9 @@ def main():
     top = st.tabs(top_labels)
 
     with top[0]:
-        v = st.radio("보기", ["요약", "상세요약"], horizontal=True,
+        v = st.radio("보기", ["일간 보고", "월간 종합"], horizontal=True,
                      label_visibility="collapsed", key="nav_sum")
-        if v == "요약":
+        if v == "일간 보고":
             render_brief()
         else:
             render_summary()
