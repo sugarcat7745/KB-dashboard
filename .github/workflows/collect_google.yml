@@ -2,7 +2,12 @@ name: collect-google-daily
 
 on:
   schedule:
-    - cron: "23 21 * * *"
+    # ⚠️ GitHub cron은 UTC 기준 + 정시(:00)는 혼잡해 잘 밀림 → :00 피하고 아침에 3번 분산
+    # 구글 Ads는 '어제' 데이터 확정이 느려서, 시간 두고 여러 번 돌려 출근 전 완성시킴
+    # (수집 코드가 같은 날짜를 덮어쓰는 구조라 여러 번 실행해도 안전 = idempotent)
+    - cron: "23 21 * * *"   # UTC 21:23 = KST 06:23  (1차 시도)
+    - cron: "13 23 * * *"   # UTC 23:13 = KST 08:13  (구글 데이터 더 확정된 뒤 재수집)
+    - cron: "43 23 * * *"   # UTC 23:43 = KST 08:43  (출근 전 최종 보정)
   workflow_dispatch: {}
 
 jobs:
