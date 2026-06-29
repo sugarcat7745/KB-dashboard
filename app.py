@@ -2733,18 +2733,6 @@ def main():
                      help="시트·BigQuery에서 최신 데이터를 즉시 다시 불러옵니다 (평소엔 1시간마다 자동 갱신)"):
             st.cache_data.clear()
             st.rerun()
-        if user == "admin":
-            st.divider()
-            st.markdown('<div style="font-size:12px;color:#9a9a90;margin-bottom:4px;">🛡️ 관리자 전용</div>', unsafe_allow_html=True)
-            try:
-                _zip = build_export_zip()
-                st.download_button(
-                    "📊 AI 분석용 데이터 내보내기", data=_zip,
-                    file_name=f"KB_분석데이터_{date.today():%Y%m%d}.zip",
-                    mime="application/zip", use_container_width=True,
-                    help="README + long-format CSV 묶음(광고·문의·캠페인·계약). Cowork 등 AI에 그대로 올려 분석")
-            except Exception as _e:
-                st.caption(f"내보내기 준비 중 오류 — 새로고침 후 다시 시도해주세요")
         if st.button("로그아웃", use_container_width=True):
             for k in ("auth_user", "login_id", "login_pw"):
                 st.session_state.pop(k, None)
@@ -2771,15 +2759,28 @@ def main():
       <div class="kb-date"><div class="d serif">광고·매출 통합 대시보드</div>
       <div class="w">{today} 기준</div>{live}</div></div>""", unsafe_allow_html=True)
 
-    # 메인 우측 상단 — 새로고침 + 로그아웃 (사이드바가 접혀도 항상 보이게)
-    lo = st.columns([3, 1.4, 1, 1])
-    lo[1].markdown(f'<div style="text-align:right;padding-top:7px;font-size:13px;color:#9a9a90;">'
+    # 메인 우측 상단 — (admin)내보내기 + 새로고침 + 로그아웃 (사이드바 접혀도 항상 보이게)
+    if user == "admin":
+        lo = st.columns([2, 1.4, 1.5, 1, 1])
+        _ucol, _xcol, _rcol, _gcol = lo[1], lo[2], lo[3], lo[4]
+    else:
+        lo = st.columns([3, 1.4, 1, 1])
+        _ucol, _xcol, _rcol, _gcol = lo[1], None, lo[2], lo[3]
+    _ucol.markdown(f'<div style="text-align:right;padding-top:7px;font-size:13px;color:#9a9a90;">'
                    f'👤 {user}{"  🛡️" if user == "admin" else ""}</div>', unsafe_allow_html=True)
-    if lo[2].button("🔄 새로고침", use_container_width=True, key="refresh_main",
+    if _xcol is not None:
+        try:
+            _xcol.download_button("📊 내보내기", data=build_export_zip(),
+                file_name=f"KB_분석데이터_{date.today():%Y%m%d}.zip", mime="application/zip",
+                use_container_width=True, key="export_main",
+                help="AI 분석용 데이터 ZIP(README+CSV 5개) · 관리자 전용")
+        except Exception:
+            _xcol.button("📊 준비중", use_container_width=True, disabled=True, key="export_err")
+    if _rcol.button("🔄 새로고침", use_container_width=True, key="refresh_main",
                     help="시트·BigQuery 최신 데이터를 즉시 다시 불러옵니다"):
         st.cache_data.clear()
         st.rerun()
-    if lo[3].button("🚪 로그아웃", use_container_width=True, key="logout_main"):
+    if _gcol.button("🚪 로그아웃", use_container_width=True, key="logout_main"):
         for k in ("auth_user", "login_id", "login_pw"):
             st.session_state.pop(k, None)
         _clear_login_url()
