@@ -2733,6 +2733,18 @@ def main():
                      help="시트·BigQuery에서 최신 데이터를 즉시 다시 불러옵니다 (평소엔 1시간마다 자동 갱신)"):
             st.cache_data.clear()
             st.rerun()
+        if user == "admin":
+            st.divider()
+            st.markdown('<div style="font-size:12px;color:#9a9a90;margin-bottom:4px;">🛡️ 관리자 전용</div>', unsafe_allow_html=True)
+            try:
+                _zip = build_export_zip()
+                st.download_button(
+                    "📊 AI 분석용 데이터 내보내기", data=_zip,
+                    file_name=f"KB_분석데이터_{date.today():%Y%m%d}.zip",
+                    mime="application/zip", use_container_width=True,
+                    help="README + long-format CSV 묶음(광고·문의·캠페인·계약). Cowork 등 AI에 그대로 올려 분석")
+            except Exception as _e:
+                st.caption(f"내보내기 준비 중 오류 — 새로고침 후 다시 시도해주세요")
         if st.button("로그아웃", use_container_width=True):
             for k in ("auth_user", "login_id", "login_pw"):
                 st.session_state.pop(k, None)
