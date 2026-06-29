@@ -1429,8 +1429,7 @@ def render_brief():
         <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
       </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
 
-    # ── ROAS + 영업이익 (이번 달) ──
-    roas_card(revenue, ad_m, rev_p, ad_mp, f"{today.month}월")
+    # ── ROAS/효율은 '월간 종합'에서만 표시 (일간은 수임 시차로 효율 왜곡 → 제외) ──
 
     # ════════ 어제 네이버 캠페인 예산 대비 소진률 (소진=실제 광고비 ad_keyword 기준) ════════
     bud = load_budget(str(yday))
