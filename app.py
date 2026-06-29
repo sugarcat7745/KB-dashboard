@@ -568,7 +568,7 @@ def load_annual():
     except Exception:
         return pd.DataFrame()
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600)
 def load_etc():
     """기타매체(카카오모먼트·모비온·메타) 일별 비용 — 과거분(BigQuery ad_etc) + 최신분(시트) 통합.
        · 과거분: ad_etc 테이블(CSV 적재, 모비온·카카오모먼트)
@@ -714,7 +714,7 @@ def load_nv_seg():
                          "impressions": df.get("노출수", 0), "clicks": df.get("클릭수", 0)})
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600)
 def load_inq_tab(tab_name):
     try:
         ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet(tab_name)
@@ -746,7 +746,7 @@ def load_inq_for_date(day):
     if df.empty or "_dt" not in df.columns: return pd.DataFrame()
     return df[df["_dt"].dt.date == day]
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600)
 def load_inquiries():
     """통합문의 마스터 시트 '단일 소스'에서 직접 집계.
        · 문의 = 내용(이름/검색키워드) 있는 줄
@@ -802,7 +802,7 @@ def load_inquiries():
     d["name"] = d["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
     return d
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600)
 def load_contracts():
     ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
     df = pd.DataFrame(ws.get_all_records())
@@ -1320,6 +1320,7 @@ def render_brief():
     pl_last = mstart - timedelta(days=1); pl_first = pl_last.replace(day=1)
     ps, pe = pl_first, pl_first.replace(day=min(today.day, pl_last.day))
     st.caption(f"📅 어제 {yday:%m월 %d일} · 이번 달 {mstart.month}월 1일~{today.day}일 · 🔄 전월 동기 대비")
+    st.caption("※ 광고 금액은 충전 금액이 아닌 실제 광고비 소진 금액 기준입니다")
 
     def spend(s, e):
         try:
@@ -1763,8 +1764,15 @@ def render_summary():
     # ── 전환 퍼널 (문의→상담→수임) · 문의 시트 기준 (6KPI와 동일 소스!!) ──
     if n_inq > 0:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {plabel} (문의 시트 기준)</div>', unsafe_allow_html=True)
-        ff = go.Figure(go.Funnel(y=["문의", "상담", "수임"], x=[n_inq, n_sang, n_suim],
-            textinfo="value+percent initial", marker=dict(color=[TEAL, GOLD, CORAL])))
+        _pcts = [100.0, n_sang / n_inq * 100, n_suim / n_inq * 100]
+        ff = go.Figure(go.Bar(
+            y=["문의", "상담", "수임"], x=[n_inq, n_sang, n_suim], orientation="h",
+            marker=dict(color=[TEAL, GOLD, CORAL]),
+            text=[f"{v}  ·  {p:.0f}%" for v, p in zip([n_inq, n_sang, n_suim], _pcts)],
+            textposition="inside", insidetextanchor="start",
+            textfont=dict(color="#15140f", size=13), hoverinfo="skip", width=0.62))
+        ff.update_layout(yaxis=dict(autorange="reversed"), bargap=0.3)
+        ff.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
         st.plotly_chart(fig_theme(ff, 240), use_container_width=True, config={"displayModeBar": False})
         st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-top:-6px;">문의→수임 전환율 '
                     f'<b style="color:{GOLD_B};">{conv:.1f}%</b></div>', unsafe_allow_html=True)
