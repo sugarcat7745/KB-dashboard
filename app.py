@@ -2831,6 +2831,44 @@ GA4_CH_COLOR = {"mobon": TEAL, "google": CORAL, "naver": "#4A7FE0",
                 "kakao": GOLD_B, "meta": "#5B6FC4", "bing": "#7BB89A",
                 "(direct)": MUTED, "chatgpt.com": "#9A7BC4"}
 
+# 지역 영문 → 한글
+GA4_REGION_KR = {
+    "Seoul": "서울", "Gyeonggi-do": "경기", "Busan": "부산", "Incheon": "인천",
+    "Daegu": "대구", "Daejeon": "대전", "Gwangju": "광주", "Ulsan": "울산",
+    "Sejong": "세종", "Gangwon-do": "강원", "Gangwon State": "강원",
+    "Chungcheongbuk-do": "충북", "Chungcheongnam-do": "충남",
+    "Jeollabuk-do": "전북", "Jeonbuk State": "전북", "Jeollanam-do": "전남",
+    "Gyeongsangbuk-do": "경북", "Gyeongsangnam-do": "경남",
+    "Jeju-do": "제주", "Jeju": "제주", "(미상)": "(미상)",
+}
+def _kr_region(x):
+    return GA4_REGION_KR.get(str(x), str(x))
+
+# 전환 이벤트명 영문/혼합 → 한글 보기좋게
+GA4_EVENT_KR = {
+    "form_submit": "상담폼 제출", "form_start": "상담폼 시작",
+    "상담완료": "상담 완료", "click": "클릭",
+    "카카오톡오픈채팅클릭": "카카오톡 오픈채팅 클릭",
+}
+def _kr_event(x):
+    x = str(x)
+    if x in GA4_EVENT_KR:
+        return GA4_EVENT_KR[x]
+    return x.replace("_", " ")  # 형사센터_대표전화상담 → 형사센터 대표전화상담
+
+# 채널 소스/매체 한글 라벨
+GA4_SRC_KR = {"mobon": "모비온", "google": "구글", "naver": "네이버",
+              "kakao": "카카오", "meta": "메타", "bing": "빙",
+              "(direct)": "직접유입", "(미상)": "(미상)",
+              "m.search.naver.com": "네이버모바일검색", "chatgpt.com": "ChatGPT"}
+GA4_MED_KR = {"cpc": "검색광고", "da": "디스플레이", "organic": "자연검색",
+              "(none)": "없음", "referral": "추천", "ad": "광고",
+              "ai-assistant": "AI검색", "(미상)": "(미상)"}
+def _kr_channel(src, med):
+    s = GA4_SRC_KR.get(str(src), str(src))
+    m = GA4_MED_KR.get(str(med), str(med))
+    return f"{s} / {m}"
+
 def _ga4_int(df, col):
     try:
         return int(df[col].iloc[0] or 0)
@@ -2887,12 +2925,12 @@ def render_ga4():
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ② 채널별 유입 → 전환 (핵심) ──
-    st.markdown(f'<div class="big-section"><i class="fa-solid fa-diagram-project"></i> 채널별 유입 → 전환</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="big-section"><i class="fa-solid fa-diagram-project"></i> 획득 채널별 유입 → 전환</div>', unsafe_allow_html=True)
     try:
         ch = ga4_channels()
         if ch is not None and not ch.empty:
             ch = ch.copy()
-            ch["채널"] = ch["src"] + " / " + ch["med"]
+            ch["채널"] = ch.apply(lambda r: _kr_channel(r["src"], r["med"]), axis=1)
             ch["전환율"] = (ch["conversions"] / ch["sessions"].replace(0, pd.NA) * 100).round(1)
             colL, colR = st.columns([1.15, 1])
             # 좌: 세션 막대 (채널별, 색상매핑)
@@ -2910,8 +2948,14 @@ def render_ga4():
                 rows = ""
                 for _, r in ch.head(10).iterrows():
                     cvr_v = r["전환율"]
-                    cvr_txt = f"{cvr_v:.1f}%" if pd.notna(cvr_v) else "0%"
-                    cvr_col = GOLD_B if (pd.notna(cvr_v) and cvr_v >= 5) else MUTED
+                    if pd.isna(cvr_v):
+                        cvr_txt, cvr_col = "0%", MUTED
+                    elif cvr_v > 100:
+                        cvr_txt, cvr_col = f"{cvr_v:.0f}%*", MUTED   # 첫유입 기준 재방문 전환
+                    elif cvr_v >= 5:
+                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", GOLD_B
+                    else:
+                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", MUTED
                     rows += (f'<tr><td style="text-align:left;">{r["채널"]}</td>'
                              f'<td class="num">{int(r["sessions"]):,}</td>'
                              f'<td class="num">{int(r["conversions"])}</td>'
@@ -2919,7 +2963,8 @@ def render_ga4():
                 st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
                             f'<th style="text-align:left;">채널(소스/매체)</th><th>세션</th><th>전환</th><th>전환율</th>'
                             f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-            st.caption("※ 전환 = 전화상담·카카오톡·상담신청완료·상담완료·폼제출 합계")
+            st.caption("※ 전환 = 전화상담·카카오톡·상담신청완료·상담완료·폼제출 합계 · "
+                       "채널은 **사용자 첫 유입(획득)** 기준 → 재방문 후 전환 시 전환율이 100%를 넘을 수 있음(*표시, 주로 자연검색)")
         else:
             st.caption("채널 데이터가 아직 없습니다.")
     except Exception as e:
@@ -2949,7 +2994,7 @@ def render_ga4():
             if ce is not None and not ce.empty:
                 rows = ""
                 for _, r in ce.iterrows():
-                    rows += (f'<tr><td style="text-align:left;">{r["event_name"]}</td>'
+                    rows += (f'<tr><td style="text-align:left;">{_kr_event(r["event_name"])}</td>'
                              f'<td class="num">{int(r["cnt"])}</td></tr>')
                 st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
                             f'<th style="text-align:left;">전환 이벤트</th><th>건수</th>'
@@ -3012,7 +3057,9 @@ def render_ga4():
             if lp is not None and not lp.empty:
                 rows = ""
                 for _, r in lp.iterrows():
-                    page = str(r["page"]).replace("https://www.lawfirmkb.com", "") or "/"
+                    page = str(r["page"]).replace("https://www.lawfirmkb.com", "")
+                    page = page.replace("https://www.", "").replace("https://", "")
+                    page = page or "/"
                     if len(page) > 50:
                         page = page[:50] + "…"
                     rows += (f'<tr><td style="text-align:left;font-size:12px;">{page}</td>'
@@ -3032,7 +3079,7 @@ def render_ga4():
             if rg is not None and not rg.empty:
                 rows = ""
                 for _, r in rg.iterrows():
-                    rows += (f'<tr><td style="text-align:left;">{r["region"]}</td>'
+                    rows += (f'<tr><td style="text-align:left;">{_kr_region(r["region"])}</td>'
                              f'<td class="num">{int(r["users"]):,}</td></tr>')
                 st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
                             f'<th style="text-align:left;">지역</th><th>방문자</th>'
@@ -3050,14 +3097,25 @@ def render_ga4():
         dl = ga4_daily()
         if dl is not None and not dl.empty:
             dl = dl.copy()
-            dl["d"] = pd.to_datetime(dl["d"], format="%Y%m%d", errors="coerce")
+            # x축을 'M/D' 문자열(카테고리)로 → 1일치여도 시:분:초로 깨지지 않음
+            dl["라벨"] = pd.to_datetime(dl["d"], format="%Y%m%d", errors="coerce").dt.strftime("%-m/%-d")
             fd = go.Figure()
-            fd.add_trace(go.Scatter(x=dl["d"], y=dl["sessions"], name="세션",
-                                    mode="lines+markers", line=dict(color=GOLD, width=2.5)))
-            fd.add_trace(go.Scatter(x=dl["d"], y=dl["conversions"], name="전환",
-                                    mode="lines+markers", line=dict(color=TEAL, width=2.5), yaxis="y2"))
-            fd.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False),
-                             legend=dict(orientation="h", y=1.12))
+            if len(dl) == 1:
+                # 1일치: 선 대신 막대 2개(세션·전환)로 보여줌
+                fd.add_bar(x=["세션"], y=[int(dl["sessions"].iloc[0])], marker_color=GOLD,
+                           text=[int(dl["sessions"].iloc[0])], textposition="auto", name="세션")
+                fd.add_bar(x=["전환"], y=[int(dl["conversions"].iloc[0])], marker_color=TEAL,
+                           text=[int(dl["conversions"].iloc[0])], textposition="auto", name="전환")
+                fd.update_layout(showlegend=False, title_text=f"{dl['라벨'].iloc[0]} (1일치)",
+                                 title_font_size=12, title_font_color=MUTED)
+            else:
+                fd.add_trace(go.Scatter(x=dl["라벨"], y=dl["sessions"], name="세션",
+                                        mode="lines+markers", line=dict(color=GOLD, width=2.5)))
+                fd.add_trace(go.Scatter(x=dl["라벨"], y=dl["conversions"], name="전환",
+                                        mode="lines+markers", line=dict(color=TEAL, width=2.5), yaxis="y2"))
+                fd.update_layout(xaxis=dict(type="category"),
+                                 yaxis2=dict(overlaying="y", side="right", showgrid=False),
+                                 legend=dict(orientation="h", y=1.12))
             st.plotly_chart(fig_theme(fd, 280), use_container_width=True, config={"displayModeBar": False})
             if len(dl) < 7:
                 st.caption(f"※ 현재 {len(dl)}일치 — 매일 자동으로 점이 늘어나며 추세선이 완성됩니다.")
