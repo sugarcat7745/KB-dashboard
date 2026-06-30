@@ -904,11 +904,12 @@ def build_export_zip():
     else:
         daily_ad = kq
 
-    # 2) 일별 문의·상담·수임  +  3) 캠페인별 성과(축1)
+    # 2) 일별 문의·상담·수임  +  3) 캠페인별 성과(축1)  +  6) 월별×카테고리별
     inq = load_inquiries()
     if inq is not None and not inq.empty:
         i2 = inq[inq["date"].dt.date >= start].copy()
         i2["날짜"] = i2["date"].dt.strftime("%Y-%m-%d")
+        i2["월"] = i2["date"].dt.strftime("%Y-%m")
         daily_inq = (i2.groupby("날짜")
                        .agg(문의=("날짜", "size"), 상담=("consulted", "sum"), 수임=("contracted", "sum"))
                        .reset_index())
@@ -918,9 +919,17 @@ def build_export_zip():
                   .reset_index().rename(columns={"category": "캠페인"}))
         camp["수임전환율(%)"] = (camp["수임"] / camp["문의"].replace(0, pd.NA) * 100).round(1)
         camp = camp.sort_values("문의", ascending=False)
+        # 6) 월별 × 카테고리별 문의·상담·수임
+        mcat = (i2[i2["category"].astype(str).str.strip() != ""]
+                  .groupby(["월", "category"])
+                  .agg(문의=("category", "size"), 상담=("consulted", "sum"), 수임=("contracted", "sum"))
+                  .reset_index().rename(columns={"category": "카테고리"}))
+        mcat["수임전환율(%)"] = (mcat["수임"] / mcat["문의"].replace(0, pd.NA) * 100).round(1)
+        mcat = mcat.sort_values(["월", "문의"], ascending=[True, False])
     else:
         daily_inq = pd.DataFrame(columns=["날짜", "문의", "상담", "수임"])
         camp = pd.DataFrame(columns=["캠페인", "문의", "상담", "수임", "수임전환율(%)"])
+        mcat = pd.DataFrame(columns=["월", "카테고리", "문의", "상담", "수임", "수임전환율(%)"])
 
     # 4) 사건유형별 매출(축2)  +  5) 계약 원본
     con = load_contracts()
@@ -958,6 +967,7 @@ def build_export_zip():
 - 03_캠페인별_성과_축1.csv     : 광고 캠페인별 문의·상담·수임·수임전환율
 - 04_사건유형별_매출_축2.csv   : 사건유형별 계약건수·계약금액·입금·미수
 - 05_계약_원본_축2.csv         : 계약 1건당 원본 (계약일·위임인·사건유형·신건파생·금액)
+- 06_월별_카테고리별_문의상담수임_축1.csv : 월×카테고리별 문의·상담·수임 건수·수임전환율 (축1, 월별 추세 분석용)
 
 ## 주의사항
 - 수임은 보통 문의 당일에 발생하지 않음(시차). 일별 수임=0 흔함.
@@ -974,6 +984,7 @@ def build_export_zip():
         z.writestr("03_캠페인별_성과_축1.csv", csvstr(camp))
         z.writestr("04_사건유형별_매출_축2.csv", csvstr(case))
         z.writestr("05_계약_원본_축2.csv", csvstr(craw))
+        z.writestr("06_월별_카테고리별_문의상담수임_축1.csv", csvstr(mcat))
     return buf.getvalue()
 
 def fig_theme(fig, h=240):
