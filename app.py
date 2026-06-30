@@ -2826,6 +2826,24 @@ def ga4_region():
                   AND geo.country='South Korea'
                   GROUP BY region ORDER BY users DESC LIMIT 8""")
 
+@st.cache_data(ttl=1800)
+def ga4_page_conv():
+    """페이지별 조회수·전환수 — '전환을 일으킨 페이지' (전환 이벤트가 발생한 page_location 기준)."""
+    lo, hi = _ga4_suffix()
+    return bq(f"""SELECT page,
+                  COUNTIF(event_name='page_view') views,
+                  COUNTIF({GA4_CONV}) conversions
+                  FROM (
+                    SELECT event_name,
+                      REGEXP_REPLACE(
+                        (SELECT value.string_value FROM UNNEST(event_params) WHERE key='page_location'),
+                        r'\\?.*$','') AS page
+                    FROM {_ga4_from()} WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'
+                  )
+                  WHERE page IS NOT NULL
+                  GROUP BY page HAVING conversions > 0
+                  ORDER BY conversions DESC, views DESC LIMIT 12""")
+
 # 채널 색상 매핑
 GA4_CH_COLOR = {"mobon": TEAL, "google": CORAL, "naver": "#4A7FE0",
                 "kakao": GOLD_B, "meta": "#5B6FC4", "bing": "#7BB89A",
@@ -3088,6 +3106,57 @@ def render_ga4():
                 st.caption("지역 데이터 없음")
         except Exception as e:
             st.caption(f"지역 로딩 중: {e}")
+
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
+
+    # ── ⑧.5 랜딩페이지별 전환 (전환을 일으킨 페이지) ──
+    st.markdown(f'<div class="big-section"><i class="fa-solid fa-bullseye"></i> 페이지별 전환 (어느 페이지가 전화·카톡·상담신청을 일으키나)</div>', unsafe_allow_html=True)
+    try:
+        pc = ga4_page_conv()
+        if pc is not None and not pc.empty:
+            pc = pc.copy()
+            pc["전환율"] = (pc["conversions"] / pc["views"].replace(0, pd.NA) * 100).round(1)
+            pcol1, pcol2 = st.columns([1.5, 1])
+            with pcol1:
+                rows = ""
+                for _, r in pc.iterrows():
+                    page = str(r["page"]).replace("https://www.lawfirmkb.com", "")
+                    page = page.replace("https://www.", "").replace("https://", "") or "/"
+                    if len(page) > 46:
+                        page = page[:46] + "…"
+                    cvr_v = r["전환율"]
+                    if pd.isna(cvr_v):
+                        cvr_txt, cvr_col = "—", MUTED
+                    elif cvr_v > 100:
+                        cvr_txt, cvr_col = f"{cvr_v:.0f}%*", MUTED
+                    elif cvr_v >= 5:
+                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", GOLD_B
+                    else:
+                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", MUTED
+                    rows += (f'<tr><td style="text-align:left;font-size:12px;">{page}</td>'
+                             f'<td class="num">{int(r["views"]):,}</td>'
+                             f'<td class="num" style="color:{GOLD_B};">{int(r["conversions"])}</td>'
+                             f'<td style="color:{cvr_col};font-weight:600;">{cvr_txt}</td></tr>')
+                st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
+                            f'<th style="text-align:left;">페이지</th><th>조회수</th><th>전환</th><th>전환율</th>'
+                            f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+            with pcol2:
+                topc = pc.head(8).iloc[::-1].copy()
+                topc["lab"] = topc["page"].apply(
+                    lambda x: (str(x).replace("https://www.lawfirmkb.com", "")
+                               .replace("https://www.", "").replace("https://", "") or "/")[:24])
+                pbar = go.Figure(go.Bar(
+                    x=topc["conversions"], y=topc["lab"], orientation="h",
+                    marker_color=GOLD, text=topc["conversions"], textposition="auto"))
+                pbar.update_layout(title_text="전환 일으킨 페이지 TOP8", title_font_size=12,
+                                   title_font_color=MUTED)
+                st.plotly_chart(fig_theme(pbar, 300), use_container_width=True, config={"displayModeBar": False})
+            st.caption("※ 전환이 **발생한 페이지** 기준(전화/카톡/상담신청 버튼을 누른 그 페이지). "
+                       "전환율 = 전환 ÷ 조회수. 어느 콘텐츠가 상담을 끌어내는지 = 광고 랜딩·콘텐츠 개선 포인트.")
+        else:
+            st.caption("아직 전환이 발생한 페이지 데이터가 없습니다 (데이터 쌓이면 표시).")
+    except Exception as e:
+        st.caption(f"페이지별 전환 로딩 중: {e}")
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
