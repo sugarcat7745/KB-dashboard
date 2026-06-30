@@ -2735,7 +2735,7 @@ def ga4_available():
     try:
         lo, hi = _ga4_suffix(180)
         df = bq(f"SELECT MIN(event_date) lo, MAX(event_date) hi, "
-                f"COUNT(DISTINCT event_date) days, COUNT(*) rows "
+                f"COUNT(DISTINCT event_date) days, COUNT(*) total_rows "
                 f"FROM {_ga4_from()} WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'")
         if df.empty or int(df['days'].iloc[0] or 0) == 0:
             return None
