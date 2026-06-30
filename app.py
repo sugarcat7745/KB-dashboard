@@ -887,10 +887,12 @@ def build_export_zip():
 
     # 1) 일별·매체별 광고성과 (ad_keyword + 기타매체)
     try:
-        kq = bq(f"SELECT date AS 날짜, media AS 매체, SUM(cost) AS 광고비, "
-                f"SUM(impressions) AS 노출, SUM(clicks) AS 클릭 "
+        kq = bq(f"SELECT date, media, SUM(cost) AS cost, "
+                f"SUM(impressions) AS imp, SUM(clicks) AS clk "
                 f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
                 f"WHERE date >= '{start_s}' GROUP BY date, media ORDER BY date, media")
+        kq = kq.rename(columns={"date": "날짜", "media": "매체",
+                                "cost": "광고비", "imp": "노출", "clk": "클릭"})
     except Exception:
         kq = pd.DataFrame(columns=["날짜", "매체", "광고비", "노출", "클릭"])
     etc = load_etc()
