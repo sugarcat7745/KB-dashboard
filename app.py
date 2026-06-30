@@ -1473,10 +1473,12 @@ def render_brief():
         rows = ""
         for _, r in bb.iterrows():
             rr = float(r["rate"]); cc = CORAL if rr >= 100 else (GOLD_B if rr >= 70 else MUTED)
+            sp = float(r["spent"] or 0); bg = float(r["daily_budget"] or 0)
             rows += (f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">'
                      f'<span style="width:150px;color:#E8E6DE;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["campaign_name"]}</span>'
                      f'<div style="flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden;">'
                      f'<div style="width:{min(rr,100):.0f}%;height:100%;background:{cc};"></div></div>'
+                     f'<span style="width:120px;text-align:right;color:{MUTED};font-size:11px;">{money(sp)} / {money(bg)}원</span>'
                      f'<span style="width:46px;text-align:right;color:{cc};font-weight:600;">{rr:.0f}%</span></div>')
         st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.07);">
@@ -2760,8 +2762,7 @@ def ga4_available():
         return "error:" + str(e)[:120]
 
 @st.cache_data(ttl=1800)
-def ga4_kpi():
-    lo, hi = _ga4_suffix()
+def ga4_kpi(lo, hi):
     return bq(f"""SELECT COUNTIF(event_name='session_start') sessions,
                   COUNT(DISTINCT user_pseudo_id) users,
                   COUNTIF(event_name='page_view') pageviews,
@@ -2772,8 +2773,7 @@ def ga4_kpi():
                   FROM {_ga4_from()} WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'""")
 
 @st.cache_data(ttl=1800)
-def ga4_channels():
-    lo, hi = _ga4_suffix()
+def ga4_channels(lo, hi):
     return bq(f"""SELECT COALESCE(NULLIF(traffic_source.source,''),'(미상)') src,
                   COALESCE(NULLIF(traffic_source.medium,''),'(미상)') med,
                   COUNTIF(event_name='session_start') sessions,
@@ -2783,15 +2783,13 @@ def ga4_channels():
                   GROUP BY src, med HAVING sessions>0 ORDER BY sessions DESC LIMIT 18""")
 
 @st.cache_data(ttl=1800)
-def ga4_conv_events():
-    lo, hi = _ga4_suffix()
+def ga4_conv_events(lo, hi):
     return bq(f"""SELECT event_name, COUNT(*) cnt
                   FROM {_ga4_from()} WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'
                   AND {GA4_CONV} GROUP BY event_name ORDER BY cnt DESC LIMIT 20""")
 
 @st.cache_data(ttl=1800)
-def ga4_landing():
-    lo, hi = _ga4_suffix()
+def ga4_landing(lo, hi):
     return bq(f"""SELECT REGEXP_REPLACE(
                     (SELECT value.string_value FROM UNNEST(event_params) WHERE key='page_location'),
                     r'\\?.*$','') AS page, COUNT(*) views,
@@ -2800,8 +2798,7 @@ def ga4_landing():
                   AND event_name='page_view' GROUP BY page ORDER BY views DESC LIMIT 12""")
 
 @st.cache_data(ttl=1800)
-def ga4_device():
-    lo, hi = _ga4_suffix()
+def ga4_device(lo, hi):
     return bq(f"""SELECT COALESCE(NULLIF(device.category,''),'(미상)') cat,
                   COUNT(DISTINCT user_pseudo_id) users,
                   COUNTIF(event_name='session_start') sessions
@@ -2809,8 +2806,7 @@ def ga4_device():
                   GROUP BY cat ORDER BY sessions DESC""")
 
 @st.cache_data(ttl=1800)
-def ga4_hourly():
-    lo, hi = _ga4_suffix()
+def ga4_hourly(lo, hi):
     return bq(f"""SELECT EXTRACT(HOUR FROM TIMESTAMP_MICROS(event_timestamp) AT TIME ZONE 'Asia/Seoul') hr,
                   COUNTIF(event_name='session_start') sessions,
                   COUNTIF({GA4_CONV}) conversions
@@ -2818,8 +2814,7 @@ def ga4_hourly():
                   GROUP BY hr ORDER BY hr""")
 
 @st.cache_data(ttl=1800)
-def ga4_daily():
-    lo, hi = _ga4_suffix()
+def ga4_daily(lo, hi):
     return bq(f"""SELECT event_date d,
                   COUNTIF(event_name='session_start') sessions,
                   COUNT(DISTINCT user_pseudo_id) users,
@@ -2829,8 +2824,7 @@ def ga4_daily():
                   GROUP BY d ORDER BY d""")
 
 @st.cache_data(ttl=1800)
-def ga4_region():
-    lo, hi = _ga4_suffix()
+def ga4_region(lo, hi):
     return bq(f"""SELECT COALESCE(NULLIF(geo.region,''),'(미상)') region,
                   COUNT(DISTINCT user_pseudo_id) users
                   FROM {_ga4_from()} WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'
@@ -2838,9 +2832,8 @@ def ga4_region():
                   GROUP BY region ORDER BY users DESC LIMIT 8""")
 
 @st.cache_data(ttl=1800)
-def ga4_page_conv():
+def ga4_page_conv(lo, hi):
     """페이지별 조회수·전환수 — '전환을 일으킨 페이지' (전환 이벤트가 발생한 page_location 기준)."""
-    lo, hi = _ga4_suffix()
     return bq(f"""SELECT page,
                   COUNTIF(event_name='page_view') views,
                   COUNTIF({GA4_CONV}) conversions
@@ -2923,31 +2916,58 @@ def render_ga4():
                 "매일 1회 적재됩니다. 내일 다시 확인해주세요.")
         return
 
-    # ── 데이터 범위 안내 ──
+    # ── 데이터 수집 초기 안내 (전체 누적 기준) ──
     days = int(info.get("days", 0) or 0)
-    lo_d, hi_d = info.get("lo"), info.get("hi")
-    rng = f"{lo_d} ~ {hi_d} · {days}일치"
     if days < 7:
         st.markdown(f'<div style="background:rgba(91,180,196,.12);border:1px solid rgba(91,180,196,.3);'
                     f'border-radius:10px;padding:11px 16px;margin-bottom:16px;font-size:13px;color:{TEAL};">'
-                    f'<i class="fa-solid fa-hourglass-half"></i> 데이터 수집 초기 단계입니다 (현재 <b>{rng}</b>). '
-                    f'매일 자동으로 쌓이며, <b>1주일쯤 뒤</b> 추세·전환율이 의미있게 보입니다. '
-                    f'지금은 "어떤 데이터가 보일지" 미리보기로 봐주세요.</div>', unsafe_allow_html=True)
-    else:
-        st.caption(f"📅 분석 기간(최근 90일): {rng}")
+                    f'<i class="fa-solid fa-hourglass-half"></i> 데이터 수집 초기 단계입니다 (누적 <b>{days}일치</b>). '
+                    f'매일 자동으로 쌓이며, <b>1주일쯤 뒤</b> 추세·전환율이 의미있게 보입니다.</div>',
+                    unsafe_allow_html=True)
 
-    # ── ① 상단 KPI ──
+    # ── 기간 선택 (다른 탭과 동일: 프리셋 + 달력 + ◀▶ 동기간 이동) ──
     try:
-        k = ga4_kpi()
+        dmin = pd.to_datetime(str(info["lo"]), format="%Y%m%d").date()
+    except Exception:
+        dmin = date.today() - timedelta(days=1)
+    g_start, g_end = period_selector("ga4", dmin, date.today(), default="이번달")
+    lo, hi = g_start.strftime("%Y%m%d"), g_end.strftime("%Y%m%d")
+    # 전기 동기간(같은 길이, 직전) — 기간대비 계산용
+    span = (g_end - g_start).days + 1
+    p_end = g_start - timedelta(days=1)
+    p_start = p_end - timedelta(days=span - 1)
+    plo, phi = p_start.strftime("%Y%m%d"), p_end.strftime("%Y%m%d")
+
+    def _chg(cur, prev):
+        if prev is None or prev == 0:
+            return None, "up"
+        d = (cur - prev) / prev * 100
+        return f"{d:+.0f}%", ("up" if d >= 0 else "down")
+
+    # ── ① 상단 KPI (전기 동기간 대비) ──
+    sess = usr = pv = conv = phone = kakao = forms = 0
+    try:
+        k = ga4_kpi(lo, hi)
         sess = _ga4_int(k, "sessions"); usr = _ga4_int(k, "users")
         pv = _ga4_int(k, "pageviews"); conv = _ga4_int(k, "conversions")
         phone = _ga4_int(k, "phone"); kakao = _ga4_int(k, "kakao"); forms = _ga4_int(k, "forms")
         cvr = (conv / sess * 100) if sess else 0
+        try:
+            kp = ga4_kpi(plo, phi)
+            p_usr = _ga4_int(kp, "users"); p_pv = _ga4_int(kp, "pageviews")
+            p_conv = _ga4_int(kp, "conversions"); p_sess = _ga4_int(kp, "sessions")
+            p_cvr = (p_conv / p_sess * 100) if p_sess else 0
+        except Exception:
+            p_usr = p_pv = p_conv = 0; p_cvr = 0
+        u_c, u_d = _chg(usr, p_usr); v_c, v_d = _chg(pv, p_pv); cv_c, cv_d = _chg(conv, p_conv)
+        cr_c = (f"{cvr - p_cvr:+.1f}%p" if p_cvr else None)
+        cr_d = ("up" if cvr >= p_cvr else "down")
         c = st.columns(4)
-        kpi(c[0], "fa-users", "방문자", f"{usr:,}", desc=f"세션 {sess:,}")
-        kpi(c[1], "fa-eye", "페이지뷰", f"{pv:,}", desc=f"세션당 {pv/sess:.1f}p" if sess else "")
-        kpi(c[2], "fa-bullseye", "전환", f"{conv:,}", desc=f"전화{phone}·카톡{kakao}·폼{forms}")
-        kpi(c[3], "fa-percent", "전환율", f"{cvr:.1f}", unit="%", desc="전환 ÷ 세션")
+        kpi(c[0], "fa-users", "방문자", f"{usr:,}", chg=u_c, chg_dir=u_d)
+        kpi(c[1], "fa-eye", "페이지뷰", f"{pv:,}", chg=v_c, chg_dir=v_d)
+        kpi(c[2], "fa-bullseye", "전환", f"{conv:,}", chg=cv_c, chg_dir=cv_d)
+        kpi(c[3], "fa-percent", "전환율", f"{cvr:.1f}", unit="%", chg=cr_c, chg_dir=cr_d)
+        cmp_caption("전기 동기간")
     except Exception as e:
         st.caption(f"KPI 로딩 중: {e}")
 
@@ -2956,7 +2976,7 @@ def render_ga4():
     # ── ② 채널별 유입 → 전환 (핵심) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-diagram-project"></i> 획득 채널별 유입 → 전환</div>', unsafe_allow_html=True)
     try:
-        ch = ga4_channels()
+        ch = ga4_channels(lo, hi)
         if ch is not None and not ch.empty:
             ch = ch.copy()
             ch["채널"] = ch.apply(lambda r: _kr_channel(r["src"], r["med"]), axis=1)
@@ -2964,13 +2984,12 @@ def render_ga4():
             colL, colR = st.columns([1.15, 1])
             # 좌: 세션 막대 (채널별, 색상매핑)
             with colL:
+                st.markdown(f'<div style="font-size:13px;color:{MUTED};margin-bottom:2px;">채널별 세션 (TOP10)</div>', unsafe_allow_html=True)
                 top = ch.head(10).iloc[::-1]
                 colors = [GA4_CH_COLOR.get(s, GOLD) for s in top["src"]]
                 bar = go.Figure(go.Bar(
                     x=top["sessions"], y=top["채널"], orientation="h",
                     marker_color=colors, text=top["sessions"], textposition="auto"))
-                bar.update_layout(title_text="채널별 세션 (TOP10)", title_font_size=13,
-                                  title_font_color=MUTED)
                 st.plotly_chart(fig_theme(bar, 320), use_container_width=True, config={"displayModeBar": False})
             # 우: 전환율 표
             with colR:
@@ -2992,8 +3011,6 @@ def render_ga4():
                 st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
                             f'<th style="text-align:left;">채널(소스/매체)</th><th>세션</th><th>전환</th><th>전환율</th>'
                             f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-            st.caption("※ 전환 = 전화상담·카카오톡·상담신청완료·상담완료·폼제출 합계 · "
-                       "채널은 **사용자 첫 유입(획득)** 기준 → 재방문 후 전환 시 전환율이 100%를 넘을 수 있음(*표시, 주로 자연검색)")
         else:
             st.caption("채널 데이터가 아직 없습니다.")
     except Exception as e:
@@ -3019,7 +3036,7 @@ def render_ga4():
     with cf2:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-phone-volume"></i> 전환 이벤트 상세 (센터별)</div>', unsafe_allow_html=True)
         try:
-            ce = ga4_conv_events()
+            ce = ga4_conv_events(lo, hi)
             if ce is not None and not ce.empty:
                 rows = ""
                 for _, r in ce.iterrows():
@@ -3040,7 +3057,7 @@ def render_ga4():
     with cd1:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스</div>', unsafe_allow_html=True)
         try:
-            dv = ga4_device()
+            dv = ga4_device(lo, hi)
             if dv is not None and not dv.empty:
                 dmap = {"mobile": "모바일", "desktop": "PC", "tablet": "태블릿"}
                 labels = [dmap.get(x, x) for x in dv["cat"]]
@@ -3057,7 +3074,7 @@ def render_ga4():
     with cd2:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-clock"></i> 시간대별 유입·전환 (KST)</div>', unsafe_allow_html=True)
         try:
-            hh = ga4_hourly()
+            hh = ga4_hourly(lo, hi)
             if hh is not None and not hh.empty:
                 full = pd.DataFrame({"hr": range(24)}).merge(hh, on="hr", how="left").fillna(0)
                 fh = go.Figure()
@@ -3082,7 +3099,7 @@ def render_ga4():
     with cl1:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-file-lines"></i> 랜딩페이지 TOP (어느 페이지로 들어오나)</div>', unsafe_allow_html=True)
         try:
-            lp = ga4_landing()
+            lp = ga4_landing(lo, hi)
             if lp is not None and not lp.empty:
                 rows = ""
                 for _, r in lp.iterrows():
@@ -3104,7 +3121,7 @@ def render_ga4():
     with cl2:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-location-dot"></i> 지역별 방문자</div>', unsafe_allow_html=True)
         try:
-            rg = ga4_region()
+            rg = ga4_region(lo, hi)
             if rg is not None and not rg.empty:
                 rows = ""
                 for _, r in rg.iterrows():
@@ -3123,7 +3140,7 @@ def render_ga4():
     # ── ⑧.5 랜딩페이지별 전환 (전환을 일으킨 페이지) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-bullseye"></i> 페이지별 전환 (어느 페이지가 전화·카톡·상담신청을 일으키나)</div>', unsafe_allow_html=True)
     try:
-        pc = ga4_page_conv()
+        pc = ga4_page_conv(lo, hi)
         if pc is not None and not pc.empty:
             pc = pc.copy()
             pc["전환율"] = (pc["conversions"] / pc["views"].replace(0, pd.NA) * 100).round(1)
@@ -3152,6 +3169,7 @@ def render_ga4():
                             f'<th style="text-align:left;">페이지</th><th>조회수</th><th>전환</th><th>전환율</th>'
                             f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
             with pcol2:
+                st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-bottom:2px;">전환 일으킨 페이지 TOP8</div>', unsafe_allow_html=True)
                 topc = pc.head(8).iloc[::-1].copy()
                 topc["lab"] = topc["page"].apply(
                     lambda x: (str(x).replace("https://www.lawfirmkb.com", "")
@@ -3159,8 +3177,6 @@ def render_ga4():
                 pbar = go.Figure(go.Bar(
                     x=topc["conversions"], y=topc["lab"], orientation="h",
                     marker_color=GOLD, text=topc["conversions"], textposition="auto"))
-                pbar.update_layout(title_text="전환 일으킨 페이지 TOP8", title_font_size=12,
-                                   title_font_color=MUTED)
                 st.plotly_chart(fig_theme(pbar, 300), use_container_width=True, config={"displayModeBar": False})
             st.caption("※ 전환이 **발생한 페이지** 기준(전화/카톡/상담신청 버튼을 누른 그 페이지). "
                        "전환율 = 전환 ÷ 조회수. 어느 콘텐츠가 상담을 끌어내는지 = 광고 랜딩·콘텐츠 개선 포인트.")
@@ -3174,7 +3190,7 @@ def render_ga4():
     # ── ⑨ 일별 추세 (쌓일수록 풍성) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-chart-line"></i> 일별 추세 (세션·전환)</div>', unsafe_allow_html=True)
     try:
-        dl = ga4_daily()
+        dl = ga4_daily(lo, hi)
         if dl is not None and not dl.empty:
             dl = dl.copy()
             # x축을 'M/D' 문자열(카테고리)로 → 1일치여도 시:분:초로 깨지지 않음
@@ -3186,8 +3202,7 @@ def render_ga4():
                            text=[int(dl["sessions"].iloc[0])], textposition="auto", name="세션")
                 fd.add_bar(x=["전환"], y=[int(dl["conversions"].iloc[0])], marker_color=TEAL,
                            text=[int(dl["conversions"].iloc[0])], textposition="auto", name="전환")
-                fd.update_layout(showlegend=False, title_text=f"{dl['라벨'].iloc[0]} (1일치)",
-                                 title_font_size=12, title_font_color=MUTED)
+                fd.update_layout(showlegend=False)
             else:
                 fd.add_trace(go.Scatter(x=dl["라벨"], y=dl["sessions"], name="세션",
                                         mode="lines+markers", line=dict(color=GOLD, width=2.5)))
