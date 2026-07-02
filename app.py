@@ -3396,6 +3396,8 @@ def log_change(user, category, title, detail="", reason=""):
 def _rewrite_change_log(df):
     """change_log 전체를 덮어쓰기(WRITE_TRUNCATE) — 무료티어 DML 금지 대응 (수정·삭제용)."""
     from google.cloud import bigquery
+    if df is None or df.empty:
+        raise RuntimeError("빈 데이터로는 덮어쓰지 않습니다 (데이터 보호)")
     client = get_bq()
     tid = f"{BQ_PROJECT}.{BQ_DATASET}.change_log"
     d = df.copy()
@@ -3450,6 +3452,8 @@ def delete_change(row_id):
         keep = df[df["id"].astype(str) != str(row_id)]
         if len(keep) == len(df):
             return False, "대상 기록을 찾지 못했습니다."
+        if keep.empty:
+            return False, "마지막 남은 기록은 삭제 대신 내용 수정으로 정리해주세요 (데이터 보호)."
         _rewrite_change_log(keep)
         return True, ""
     except Exception as e:
@@ -3457,13 +3461,17 @@ def delete_change(row_id):
 
 
 def load_changes(category, limit=100):
-    """카테고리별 변경 이력 로드 (최신순)."""
+    """카테고리별 변경 이력 로드 (최신순). 옛 스키마(id 컬럼 없음)여도 안전하게 조회."""
     try:
         c = str(category).replace("'", "")[:20]
         df = bq_fresh(
-            f"SELECT id, ts, `user`, title, detail, reason "
-            f"FROM `{BQ_PROJECT}.{BQ_DATASET}.change_log` "
+            f"SELECT * FROM `{BQ_PROJECT}.{BQ_DATASET}.change_log` "
             f"WHERE category = '{c}' ORDER BY ts DESC LIMIT {int(limit)}")
+        if df is None or df.empty:
+            return df
+        for col in ["id", "user", "title", "detail", "reason"]:   # 없던 컬럼 보정
+            if col not in df.columns:
+                df[col] = ""
         return df
     except Exception:
         return None
