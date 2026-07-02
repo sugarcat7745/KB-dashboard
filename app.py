@@ -2632,6 +2632,41 @@ def render_admin_log():
         sortable_table(cols, rows, height=min(320, 70 + len(rows) * 38))
         st.caption("※ IP는 Streamlit Cloud 환경 특성상 'unknown'으로 표시될 수 있습니다.")
 
+    # ── AI 질문·답변 열람 (누가 · 뭘 묻고 · 무슨 답을 받았나) ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-comments"></i> AI 질문·답변 열람</div>', unsafe_allow_html=True)
+    try:
+        ch = bq_fresh(f"SELECT ts, `user`, question, answer "
+                      f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ai_chat_history` "
+                      f"ORDER BY ts DESC LIMIT 300")
+    except Exception:
+        ch = pd.DataFrame()
+    if ch is None or ch.empty:
+        st.caption("아직 저장된 질문·답변이 없습니다. (AI 질의를 사용하면 자동 기록됩니다)")
+    else:
+        _users = ["전체"] + sorted(ch["user"].astype(str).unique().tolist())
+        _fc = st.columns([1.2, 3])
+        _selu = _fc[0].selectbox("계정 필터", _users, key="qa_user_filter")
+        _view = ch if _selu == "전체" else ch[ch["user"].astype(str) == _selu]
+        _qn = int((_view["question"].astype(str) != "__CLEAR__").sum())
+        st.caption(f"질문 {_qn}건 · 최신순 (최근 300건 내 · 클릭하면 질문·답변 전문)")
+        for _, r in _view.head(80).iterrows():
+            try:
+                _tl = pd.to_datetime(r["ts"]).strftime("%m/%d %H:%M")
+            except Exception:
+                _tl = str(r["ts"])[:16]
+            _q = str(r["question"] or "")
+            if _q == "__CLEAR__":
+                st.markdown(f'<div style="font-size:12px;color:{MUTED};margin:4px 0;">'
+                            f'🧹 [{_tl}] {r["user"]} — 대화 초기화</div>', unsafe_allow_html=True)
+                continue
+            with st.expander(f"💬 [{_tl}] {r['user']} — {_q[:58]}"):
+                st.markdown(f'<div style="background:rgba(210,170,80,.10);border-radius:8px;'
+                            f'padding:9px 13px;font-size:13px;margin-bottom:8px;">'
+                            f'<b>❓ 질문</b><br>{_q}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="background:#1c1c19;border:1px solid #2a2a26;border-radius:8px;'
+                            f'padding:9px 13px;font-size:13px;line-height:1.6;">'
+                            f'<b>🤖 답변</b><br>{str(r["answer"] or "(답변 없음)")}</div>', unsafe_allow_html=True)
+
     # ── AI 사용 로그 ──
     st.markdown('<div class="sec-title"><i class="fa-solid fa-robot"></i> AI 사용 로그</div>', unsafe_allow_html=True)
     try:
