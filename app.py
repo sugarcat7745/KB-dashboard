@@ -219,7 +219,7 @@ def log_ai_usage(user, tab, period, insight, usage, model="haiku"):
 
 
 def log_ai_chat(user, question, answer):
-    """AI 질의 대화를 BigQuery에 영구 저장 — 로그인 ID별 이력 유지 (새로고침/재로그인해도 남음)."""
+    """AI 질의 대화를 BigQuery에 영구 저장 — 로그인 ID별 이력 유지 (load job — 무료티어 안전)."""
     try:
         from google.cloud import bigquery
         client = get_bq()
@@ -230,13 +230,19 @@ def log_ai_chat(user, question, answer):
             bigquery.SchemaField("question", "STRING"),
             bigquery.SchemaField("answer", "STRING"),
         ]
-        client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
-        client.insert_rows_json(tid, [{
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "user": str(user)[:50],
-            "question": (question or "")[:2000],
-            "answer": (answer or "")[:20000],
-        }])
+        job = client.load_table_from_json(
+            [{
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "user": str(user)[:50],
+                "question": (question or "")[:2000],
+                "answer": (answer or "")[:20000],
+            }],
+            tid,
+            job_config=bigquery.LoadJobConfig(
+                schema=schema, write_disposition="WRITE_APPEND",
+                create_disposition="CREATE_IF_NEEDED"),
+        )
+        job.result()
     except Exception:
         pass
 
@@ -3275,7 +3281,7 @@ CHANGE_CATS = ["대시보드", "광고", "전략"]
 CHANGE_CAT_COLOR = {"대시보드": TEAL, "광고": GOLD, "전략": CORAL}
 
 def log_change(user, category, title, detail="", reason=""):
-    """변경사항 1건을 BigQuery change_log에 영구 기록."""
+    """변경사항 1건을 BigQuery change_log에 영구 기록. (load job — 무료티어 안전·새 테이블 즉시 가능)"""
     try:
         from google.cloud import bigquery
         client = get_bq()
@@ -3288,16 +3294,22 @@ def log_change(user, category, title, detail="", reason=""):
             bigquery.SchemaField("detail", "STRING"),
             bigquery.SchemaField("reason", "STRING"),
         ]
-        client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
-        client.insert_rows_json(tid, [{
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "user": str(user)[:50], "category": str(category)[:20],
-            "title": (title or "")[:300], "detail": (detail or "")[:2000],
-            "reason": (reason or "")[:1000],
-        }])
-        return True
-    except Exception:
-        return False
+        job = client.load_table_from_json(
+            [{
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "user": str(user)[:50], "category": str(category)[:20],
+                "title": (title or "")[:300], "detail": (detail or "")[:2000],
+                "reason": (reason or "")[:1000],
+            }],
+            tid,
+            job_config=bigquery.LoadJobConfig(
+                schema=schema, write_disposition="WRITE_APPEND",
+                create_disposition="CREATE_IF_NEEDED"),
+        )
+        job.result()   # 완료 대기 — 실패 시 예외
+        return True, ""
+    except Exception as e:
+        return False, str(e)[:300]
 
 
 def load_changes(category, limit=100):
@@ -3336,12 +3348,12 @@ def render_changelog():
                                   placeholder="예: 수임전환율 3.2%로 최저 — 예산 누수 차단")
                 if st.form_submit_button("💾 기록 저장", use_container_width=True, type="primary"):
                     if t and t.strip():
-                        ok = log_change(user, cat, t.strip(), d.strip(), r.strip())
+                        ok, err = log_change(user, cat, t.strip(), d.strip(), r.strip())
                         if ok:
                             st.success("기록됐습니다!")
                             st.rerun()
                         else:
-                            st.error("저장 실패 — 잠시 후 다시 시도해주세요.")
+                            st.error(f"저장 실패 — {err}")
                     else:
                         st.warning("변경 내용(한 줄 요약)은 필수입니다.")
 
