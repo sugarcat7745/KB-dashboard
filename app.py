@@ -3553,6 +3553,17 @@ def render_changelog():
 
     # ── 수정·삭제 (admin 전용) ──
     if is_admin:
+        # id 없는 옛 기록이 있으면 자동으로 고유 id 부여 (1회 마이그레이션 → 이후 수정·삭제 정상)
+        _ids = df["id"] if "id" in df.columns else pd.Series([""] * len(df))
+        _blank = _ids.isna() | (_ids.astype(str).str.strip() == "") | (_ids.astype(str) == "None")
+        if _blank.any():
+            try:
+                _all = load_all_changes()          # 전체 로드 + 임시 id 부여
+                if _all is not None and not _all.empty:
+                    _rewrite_change_log(_all)      # id 영구 저장
+                    st.rerun()
+            except Exception:
+                pass
         with st.expander("🛠️ 기록 수정·삭제", expanded=False):
             if "id" not in df.columns:
                 st.caption("이 기능은 새로 저장된 기록부터 지원됩니다.")
@@ -3571,7 +3582,7 @@ def render_changelog():
                 sel = st.selectbox("수정/삭제할 기록 선택", list(opts.keys()), key=f"chg_sel_{cat}")
                 sid, s_t, s_d, s_r = opts[sel]
                 if not sid or sid == "None":
-                    st.warning("이 기록은 id가 없는 초기 기록입니다 — 아무 기록이나 한 번 수정/삭제하면 전체에 id가 부여되니, 다른 기록을 먼저 수정해보세요.")
+                    st.info("기록에 ID를 부여하는 중입니다 — 새로고침(F5) 한 번 해주세요.")
                 e_t = st.text_input("변경 내용", value=str(s_t or ""), key=f"chg_et_{cat}")
                 e_d = st.text_area("상세", value=str(s_d or "") if str(s_d) != "None" else "", height=70, key=f"chg_ed_{cat}")
                 e_r = st.text_input("이유", value=str(s_r or "") if str(s_r) != "None" else "", key=f"chg_er_{cat}")
