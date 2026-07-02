@@ -167,7 +167,7 @@ def get_client_ip():
 
 
 def log_login(user, ip):
-    """로그인 성공 이력을 BigQuery login_log에 적재."""
+    """로그인 성공 이력을 BigQuery login_log에 적재. (load job — 무료티어 안전)"""
     try:
         from google.cloud import bigquery
         client = get_bq()
@@ -177,11 +177,15 @@ def log_login(user, ip):
             bigquery.SchemaField("user", "STRING"),
             bigquery.SchemaField("ip", "STRING"),
         ]
-        client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
-        client.insert_rows_json(tid, [{
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "user": user, "ip": ip,
-        }])
+        job = client.load_table_from_json(
+            [{"ts": datetime.now().isoformat(timespec="seconds"),
+              "user": str(user)[:50], "ip": str(ip or "unknown")[:60]}],
+            tid,
+            job_config=bigquery.LoadJobConfig(
+                schema=schema, write_disposition="WRITE_APPEND",
+                create_disposition="CREATE_IF_NEEDED"),
+        )
+        job.result()
     except Exception:
         pass
 
@@ -208,12 +212,19 @@ def log_ai_usage(user, tab, period, insight, usage, model="haiku"):
         # 모델별 추정 단가(per 1M, USD) × 환율 1,400 — 어디까지나 추정치
         in_r, out_r = {"sonnet": (3.0, 15.0), "haiku": (1.0, 5.0)}.get(model, (1.0, 5.0))
         cost = round((it * in_r + ot * out_r) / 1_000_000 * 1400, 2)
-        client.insert_rows_json(tid, [{
-            "ts": datetime.now().isoformat(timespec="seconds"),
-            "user": user, "tab": tab, "period": period,
-            "insight": (insight or "")[:400],
-            "input_tokens": it, "output_tokens": ot, "est_cost_krw": cost,
-        }])
+        job = client.load_table_from_json(
+            [{
+                "ts": datetime.now().isoformat(timespec="seconds"),
+                "user": str(user)[:50], "tab": str(tab)[:50], "period": str(period)[:100],
+                "insight": (insight or "")[:400],
+                "input_tokens": it, "output_tokens": ot, "est_cost_krw": cost,
+            }],
+            tid,
+            job_config=bigquery.LoadJobConfig(
+                schema=schema, write_disposition="WRITE_APPEND",
+                create_disposition="CREATE_IF_NEEDED"),
+        )
+        job.result()
     except Exception:
         pass
 
@@ -926,6 +937,15 @@ def load_contracts():
     return df
 
 @st.cache_data(ttl=3600)
+def _campaign_to_category(name):
+    """캠페인명 → 카테고리 통합. 접두사(A. B. 등 정렬용) 제거 + 시간대 접미사(_1724·_1117·_항시 등) 제거.
+    예: 'A.메인_1724' → '메인', 'B.일반형사_항시' → '일반형사'"""
+    s = str(name or "").strip()
+    s = re.sub(r"^[A-Za-z]+\.", "", s)                    # 정렬용 접두사 제거
+    s = re.sub(r"_[0-9]{2,4}$|_항시$|_상시$", "", s)       # 시간대 접미사 제거
+    return s.strip() or "(미분류)"
+
+
 def build_export_zip():
     """AI 분석용 데이터 패키지(ZIP) 생성. README(맥락) + long-format CSV들.
        의존성 없는 zipfile+csv 기반 — Cowork 등 AI에 그대로 올려 분석 가능."""
@@ -953,6 +973,28 @@ def build_export_zip():
         daily_ad = pd.concat([kq, e2], ignore_index=True)
     else:
         daily_ad = kq
+
+    # 7)·8) 카테고리별 광고비 — 캠페인을 큰 이름으로 통합 (A.메인_1724+A.메인_1117 → 메인)
+    try:
+        cq = bq(f"SELECT SUBSTR(date,1,7) AS ym, media, campaign, "
+                f"SUM(cost) AS cost, SUM(impressions) AS imp, SUM(clicks) AS clk "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                f"WHERE date >= '{start_s}' AND media IN ('네이버','구글') "
+                f"GROUP BY ym, media, campaign")
+        cq = cq.rename(columns={"ym": "월", "media": "매체",
+                                "cost": "광고비", "imp": "노출", "clk": "클릭"})
+        cq["카테고리"] = cq["campaign"].map(_campaign_to_category)
+        cat_month = (cq.groupby(["월", "매체", "카테고리"], as_index=False)[["광고비", "노출", "클릭"]]
+                       .sum().sort_values(["월", "매체", "광고비"], ascending=[True, True, False]))
+        cat_month["광고비"] = cat_month["광고비"].round(0)
+        cat_total = (cq.groupby(["매체", "카테고리"], as_index=False)
+                       .agg(광고비=("광고비", "sum"), 노출=("노출", "sum"), 클릭=("클릭", "sum"),
+                            원본캠페인들=("campaign", lambda x: " | ".join(sorted(set(map(str, x)))))))
+        cat_total["광고비"] = cat_total["광고비"].round(0)
+        cat_total = cat_total.sort_values(["매체", "광고비"], ascending=[True, False])
+    except Exception:
+        cat_total = pd.DataFrame(columns=["매체", "카테고리", "광고비", "노출", "클릭", "원본캠페인들"])
+        cat_month = pd.DataFrame(columns=["월", "매체", "카테고리", "광고비", "노출", "클릭"])
 
     # 2) 일별 문의·상담·수임  +  3) 캠페인별 성과(축1)  +  6) 월별×카테고리별
     inq = load_inquiries()
@@ -1018,6 +1060,9 @@ def build_export_zip():
 - 04_사건유형별_매출_축2.csv   : 사건유형별 계약건수·계약금액·입금·미수
 - 05_계약_원본_축2.csv         : 계약 1건당 원본 (계약일·위임인·사건유형·신건파생·금액)
 - 06_월별_카테고리별_문의상담수임_축1.csv : 월×카테고리별 문의·상담·수임 건수·수임전환율 (축1, 월별 추세 분석용)
+- 07_카테고리별_광고비_축1.csv  : 카테고리별 광고비·노출·클릭 (네이버·구글, 전체기간). 캠페인의 정렬용 접두사(A. 등)와 시간대 접미사(_1724·_1117·_항시 등)를 제거해 큰 이름으로 통합. 원본캠페인들 컬럼으로 묶임 검증 가능
+- 08_월별_카테고리별_광고비_축1.csv : 월×매체×카테고리별 광고비 (07과 같은 통합 규칙)
+※ 07·08의 카테고리는 03·06의 캠페인(카테고리)과 이름으로 연결됨 → 카테고리별 CPI(광고비÷문의)·수임 건당 광고비 계산 가능. 단, 구글 유입 문의는 03에서 '구글메인'처럼 '구글' 접두가 붙고, 07·08에서는 매체=구글 행이 대응됨. 브랜드검색(월정액)은 키워드 데이터에 없어 메인 광고비가 과소계상될 수 있음
 
 ## 주의사항
 - 수임은 보통 문의 당일에 발생하지 않음(시차). 일별 수임=0 흔함.
@@ -1035,6 +1080,8 @@ def build_export_zip():
         z.writestr("04_사건유형별_매출_축2.csv", csvstr(case))
         z.writestr("05_계약_원본_축2.csv", csvstr(craw))
         z.writestr("06_월별_카테고리별_문의상담수임_축1.csv", csvstr(mcat))
+        z.writestr("07_카테고리별_광고비_축1.csv", csvstr(cat_total))
+        z.writestr("08_월별_카테고리별_광고비_축1.csv", csvstr(cat_month))
     return buf.getvalue()
 
 def fig_theme(fig, h=240):
