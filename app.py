@@ -1027,6 +1027,24 @@ def build_export_zip():
         cat_total = pd.DataFrame(columns=["매체", "카테고리", "광고비", "노출", "클릭", "원본캠페인들"])
         cat_month = pd.DataFrame(columns=["월", "매체", "카테고리", "광고비", "노출", "클릭"])
 
+    # 10) 월별 키워드별 매체 전환 (네이버·구글 계정이 측정한 전환 — 참고용, 정확도 낮음)
+    try:
+        kwc = bq(f"SELECT SUBSTR(date,1,7) AS ym, media, campaign, keyword, "
+                 f"SUM(cost) AS cost, SUM(clicks) AS clk, SUM(conversions) AS conv "
+                 f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                 f"WHERE date >= '{start_s}' AND media IN ('네이버','구글') "
+                 f"GROUP BY ym, media, campaign, keyword HAVING SUM(conversions) > 0")
+        kwc = kwc.rename(columns={"ym": "월", "media": "매체", "keyword": "키워드",
+                                  "cost": "광고비", "clk": "클릭", "conv": "매체전환"})
+        kwc["카테고리"] = kwc["campaign"].map(_campaign_to_category)
+        g2 = kwc["매체"] == "구글"
+        kwc.loc[g2, "카테고리"] = kwc.loc[g2, "카테고리"].map(lambda x: GOOGLE_CAT_MAP.get(x, "구글" + str(x)))
+        kwc["광고비"] = kwc["광고비"].round(0)
+        kwc = (kwc[["월", "매체", "카테고리", "키워드", "광고비", "클릭", "매체전환"]]
+               .sort_values(["월", "카테고리", "매체전환"], ascending=[True, True, False]))
+    except Exception:
+        kwc = pd.DataFrame(columns=["월", "매체", "카테고리", "키워드", "광고비", "클릭", "매체전환"])
+
     # 2) 일별 문의·상담·수임  +  3) 캠페인별 성과(축1)  +  6) 월별×카테고리별
     inq = load_inquiries()
     if inq is not None and not inq.empty:
@@ -1049,10 +1067,17 @@ def build_export_zip():
                   .reset_index().rename(columns={"category": "카테고리"}))
         mcat["수임전환율(%)"] = (mcat["수임"] / mcat["문의"].replace(0, pd.NA) * 100).round(1)
         mcat = mcat.sort_values(["월", "문의"], ascending=[True, False])
+        # 9) 월별 × 카테고리별 × 검색키워드 — 실제 문의로 이어진 키워드 (성과 키워드의 원천!!)
+        k2 = i2[i2["keyword"].astype(str).str.strip() != ""].copy()
+        kw_inq = (k2.groupby(["월", "category", "keyword"])
+                    .agg(문의=("keyword", "size"), 상담=("consulted", "sum"), 수임=("contracted", "sum"))
+                    .reset_index().rename(columns={"category": "카테고리", "keyword": "검색키워드"}))
+        kw_inq = kw_inq.sort_values(["월", "카테고리", "문의"], ascending=[True, True, False])
     else:
         daily_inq = pd.DataFrame(columns=["날짜", "문의", "상담", "수임"])
         camp = pd.DataFrame(columns=["캠페인", "문의", "상담", "수임", "수임전환율(%)"])
         mcat = pd.DataFrame(columns=["월", "카테고리", "문의", "상담", "수임", "수임전환율(%)"])
+        kw_inq = pd.DataFrame(columns=["월", "카테고리", "검색키워드", "문의", "상담", "수임"])
 
     # 4) 사건유형별 매출(축2)  +  5) 계약 원본
     con = load_contracts()
@@ -1093,6 +1118,8 @@ def build_export_zip():
 - 06_월별_카테고리별_문의상담수임_축1.csv : 월×카테고리별 문의·상담·수임 건수·수임전환율 (축1, 월별 추세 분석용)
 - 07_카테고리별_광고비_축1.csv  : 카테고리별 광고비·노출·클릭 (네이버·구글, 전체기간). 캠페인의 정렬용 접두사(A. 등)와 시간대 접미사(_1724·_1117·_항시 등)를 제거해 큰 이름으로 통합. 원본캠페인들 컬럼으로 묶임 검증 가능
 - 08_월별_카테고리별_광고비_축1.csv : 월×매체×카테고리별 광고비 (07과 같은 통합 규칙)
+- 09_월별_카테고리별_문의키워드_축1.csv : 월×카테고리별 실제 문의로 이어진 검색키워드와 문의·상담·수임 건수 (성과 키워드 분석의 1순위 근거)
+- 10_월별_키워드별_매체전환_축1.csv : 광고 계정(네이버·구글)이 측정한 키워드별 전환 (※정확도 낮아 참고용 — 09 문의키워드가 우선)
 ※ 07·08의 카테고리는 03·06의 캠페인(카테고리)과 이름으로 연결됨 → 카테고리별 CPI(광고비÷문의)·수임 건당 광고비 계산 가능. 단, 구글 유입 문의는 03에서 '구글메인'처럼 '구글' 접두가 붙고, 07·08에서는 매체=구글 행이 대응됨. 브랜드검색(월정액)은 키워드 데이터에 없어 메인 광고비가 과소계상될 수 있음
 
 ## 주의사항
@@ -1113,6 +1140,8 @@ def build_export_zip():
         z.writestr("06_월별_카테고리별_문의상담수임_축1.csv", csvstr(mcat))
         z.writestr("07_카테고리별_광고비_축1.csv", csvstr(cat_total))
         z.writestr("08_월별_카테고리별_광고비_축1.csv", csvstr(cat_month))
+        z.writestr("09_월별_카테고리별_문의키워드_축1.csv", csvstr(kw_inq))
+        z.writestr("10_월별_키워드별_매체전환_축1.csv", csvstr(kwc))
     return buf.getvalue()
 
 def fig_theme(fig, h=240):
