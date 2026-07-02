@@ -26,8 +26,8 @@ MONTHLY_GOAL = 250_000_000  # 월 목표 2.5억
 BQ_PROJECT, BQ_DATASET = "kb-dashboard-499704", "kb_ads"
 # AI 모델 — 배너(짧고 잦음·캐시)는 저렴한 Haiku, 채팅(추론·DB조회)은 똑똑한 Sonnet
 MODEL_INSIGHT = "claude-haiku-4-5-20251001"
-MODEL_CHAT    = "claude-sonnet-4-5-20250929"
-#   ⚠️ Sonnet 문자열이 SDK에서 에러나면 이 줄만 교체 (대안: "claude-sonnet-4-6")
+MODEL_CHAT    = "claude-sonnet-4-6"
+#   ⚠️ Sonnet 문자열이 SDK에서 에러나면 이 줄만 교체 (대안: "claude-sonnet-4-5-20250929")
 
 GOLD   = "#D2AA50"; GOLD_B = "#F0C86E"; GOLD_D = "#BE963C"
 TEAL   = "#5BB4C4"; CORAL  = "#C77B6B"; GRAY   = "#6E6E66"
@@ -216,6 +216,50 @@ def log_ai_usage(user, tab, period, insight, usage, model="haiku"):
         }])
     except Exception:
         pass
+
+
+def log_ai_chat(user, question, answer):
+    """AI 질의 대화를 BigQuery에 영구 저장 — 로그인 ID별 이력 유지 (새로고침/재로그인해도 남음)."""
+    try:
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.ai_chat_history"
+        schema = [
+            bigquery.SchemaField("ts", "TIMESTAMP"),
+            bigquery.SchemaField("user", "STRING"),
+            bigquery.SchemaField("question", "STRING"),
+            bigquery.SchemaField("answer", "STRING"),
+        ]
+        client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
+        client.insert_rows_json(tid, [{
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": str(user)[:50],
+            "question": (question or "")[:2000],
+            "answer": (answer or "")[:20000],
+        }])
+    except Exception:
+        pass
+
+
+def load_ai_chat(user, limit=30):
+    """로그인 ID의 저장된 대화 이력 복원 — 마지막 '초기화(__CLEAR__)' 이후 것만, 최신순 최대 30개."""
+    try:
+        u = str(user).replace("'", "")[:50]
+        df = bq_fresh(
+            f"SELECT question, answer FROM `{BQ_PROJECT}.{BQ_DATASET}.ai_chat_history` "
+            f"WHERE `user` = '{u}' ORDER BY ts DESC LIMIT 200")
+        if df is None or df.empty:
+            return []
+        hist = []
+        for _, r in df.iterrows():
+            if str(r["question"]) == "__CLEAR__":
+                break
+            hist.append((str(r["question"]), str(r["answer"])))
+            if len(hist) >= limit:
+                break
+        return hist
+    except Exception:
+        return []
 
 
 @st.cache_data(ttl=3600)
@@ -408,7 +452,7 @@ def ai_chat_answer(question, context):
         last = None
         for _ in range(5):   # BigQuery 도구 호출 최대 5회까지 허용
             m = client.messages.create(
-                model=MODEL_CHAT, max_tokens=1500,
+                model=MODEL_CHAT, max_tokens=4096,
                 system=sys_prompt, tools=[SQL_TOOL], messages=messages)
             tin += int(getattr(m.usage, "input_tokens", 0) or 0)
             tout += int(getattr(m.usage, "output_tokens", 0) or 0)
@@ -2447,8 +2491,10 @@ def render_login():
 def render_ai_chat():
     tab_header("fa-robot", "AI 데이터 질의", "데이터에 대해 궁금한 점을 자유롭게 물어보세요", color="#5BB4C4", rgb="91,180,196")
     st.caption("⚠️ AI 답변은 참고용입니다. 정확하지 않을 수 있으니 중요한 수치는 각 탭에서 확인하세요.")
+    user = st.session_state.get("auth_user", "익명")
     if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
+        with st.spinner("이전 대화를 불러오는 중…"):
+            st.session_state.chat_history = load_ai_chat(user)   # 저장된 이력 복원
     # 예시 질문 칩
     st.markdown('<div style="font-size:12px;color:#8a8a82;margin:4px 0;">💡 예시: '
                 '"올해 형사 사건 매출 얼마야?" · "광고비 제일 많이 쓴 달은?" · "수임 전환이 가장 좋은 달은?"</div>',
@@ -2458,6 +2504,7 @@ def render_ai_chat():
     cc = st.columns([1, 1, 4])
     ask = cc[0].button("질문하기", use_container_width=True, type="primary")
     if cc[1].button("대화 초기화", use_container_width=True):
+        log_ai_chat(user, "__CLEAR__", "")   # 초기화 지점 기록 (이후 접속 시 이 이전은 안 불러옴)
         st.session_state.chat_history = []
         st.rerun()
     if ask and q and q.strip():
@@ -2465,6 +2512,7 @@ def render_ai_chat():
             ctx = build_data_context()
             ans = ai_chat_answer(q.strip(), ctx)
         st.session_state.chat_history.insert(0, (q.strip(), ans))
+        log_ai_chat(user, q.strip(), ans)   # BigQuery 영구 저장
     # 대화 이력 (최신 먼저)
     for question, answer in st.session_state.chat_history:
         st.markdown(
@@ -3220,6 +3268,116 @@ def render_ga4():
         st.caption(f"추세 로딩 중: {e}")
 
 
+# ══════════════════════════════════════════════════════════════════
+#  변경사항 로그 — 대시보드/광고/전략 변경 이력 (BigQuery 영구 저장)
+# ══════════════════════════════════════════════════════════════════
+CHANGE_CATS = ["대시보드", "광고", "전략"]
+CHANGE_CAT_COLOR = {"대시보드": TEAL, "광고": GOLD, "전략": CORAL}
+
+def log_change(user, category, title, detail="", reason=""):
+    """변경사항 1건을 BigQuery change_log에 영구 기록."""
+    try:
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.change_log"
+        schema = [
+            bigquery.SchemaField("ts", "TIMESTAMP"),
+            bigquery.SchemaField("user", "STRING"),
+            bigquery.SchemaField("category", "STRING"),
+            bigquery.SchemaField("title", "STRING"),
+            bigquery.SchemaField("detail", "STRING"),
+            bigquery.SchemaField("reason", "STRING"),
+        ]
+        client.create_table(bigquery.Table(tid, schema=schema), exists_ok=True)
+        client.insert_rows_json(tid, [{
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": str(user)[:50], "category": str(category)[:20],
+            "title": (title or "")[:300], "detail": (detail or "")[:2000],
+            "reason": (reason or "")[:1000],
+        }])
+        return True
+    except Exception:
+        return False
+
+
+def load_changes(category, limit=100):
+    """카테고리별 변경 이력 로드 (최신순)."""
+    try:
+        c = str(category).replace("'", "")[:20]
+        df = bq_fresh(
+            f"SELECT ts, `user`, title, detail, reason "
+            f"FROM `{BQ_PROJECT}.{BQ_DATASET}.change_log` "
+            f"WHERE category = '{c}' ORDER BY ts DESC LIMIT {int(limit)}")
+        return df
+    except Exception:
+        return None
+
+
+def render_changelog():
+    tab_header("fa-clipboard-list", "변경사항",
+               "대시보드 · 광고 · 전략 — 무엇을 언제 왜 바꿨는지 기록")
+
+    user = st.session_state.get("auth_user", "익명")
+    is_admin = (user == "admin")
+
+    cat = st.radio("분류", CHANGE_CATS, horizontal=True,
+                   label_visibility="collapsed", key="nav_chg")
+    cc = CHANGE_CAT_COLOR.get(cat, GOLD)
+
+    # ── 기록 입력 (admin 전용) ──
+    if is_admin:
+        with st.expander(f"➕ {cat} 변경사항 기록하기", expanded=False):
+            with st.form(key=f"chg_form_{cat}", clear_on_submit=True):
+                t = st.text_input("변경 내용 (한 줄 요약) *",
+                                  placeholder="예: 메인 캠페인 입찰가 700→500원, 일예산 80만→56만")
+                d = st.text_area("상세 (선택)", height=70,
+                                 placeholder="바꾼 수치·대상 키워드 등 구체 내용")
+                r = st.text_input("이유 (선택)",
+                                  placeholder="예: 수임전환율 3.2%로 최저 — 예산 누수 차단")
+                if st.form_submit_button("💾 기록 저장", use_container_width=True, type="primary"):
+                    if t and t.strip():
+                        ok = log_change(user, cat, t.strip(), d.strip(), r.strip())
+                        if ok:
+                            st.success("기록됐습니다!")
+                            st.rerun()
+                        else:
+                            st.error("저장 실패 — 잠시 후 다시 시도해주세요.")
+                    else:
+                        st.warning("변경 내용(한 줄 요약)은 필수입니다.")
+
+    # ── 이력 목록 ──
+    df = load_changes(cat)
+    if df is None or df.empty:
+        st.caption(f"아직 기록된 {cat} 변경사항이 없습니다."
+                   + (" 위 '기록하기'로 첫 변경을 남겨보세요!" if is_admin else ""))
+        return
+    st.markdown(f'<div style="font-size:12px;color:{MUTED};margin:6px 0 10px;">'
+                f'총 {len(df)}건 · 최신순</div>', unsafe_allow_html=True)
+    for _, row in df.iterrows():
+        try:
+            ts = pd.to_datetime(row["ts"]).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            ts = str(row["ts"])[:16]
+        detail_html = ""
+        if str(row.get("detail") or "").strip():
+            detail_html = (f'<div style="font-size:13px;color:#C8C4BA;margin-top:6px;'
+                           f'line-height:1.55;">{row["detail"]}</div>')
+        reason_html = ""
+        if str(row.get("reason") or "").strip():
+            reason_html = (f'<div style="font-size:12px;color:{MUTED};margin-top:6px;">'
+                           f'<i class="fa-solid fa-lightbulb" style="color:{cc};margin-right:5px;"></i>'
+                           f'{row["reason"]}</div>')
+        st.markdown(
+            f'<div style="background:#171714;border:1px solid #26261f;border-left:3px solid {cc};'
+            f'border-radius:10px;padding:13px 16px;margin:8px 0;">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+            f'<span style="font-size:14px;font-weight:600;color:#E8E4DA;">{row["title"]}</span>'
+            f'<span style="font-size:11px;color:{MUTED};white-space:nowrap;margin-left:12px;">'
+            f'{ts} · {row["user"]}</span></div>'
+            f'{detail_html}{reason_html}</div>',
+            unsafe_allow_html=True)
+
+
 def main():
     # ── 로그인 게이트 ──
     if not st.session_state.get("auth_user"):
@@ -3299,7 +3457,7 @@ def main():
         st.rerun()
 
     is_admin = (user == "admin")
-    top_labels = ["📊 요약", "📈 광고", "💼 실적", "🌐 유입", "🤖 AI"]
+    top_labels = ["📊 요약", "📈 광고", "💼 실적", "🌐 유입", "📝 변경", "🤖 AI"]
     top = st.tabs(top_labels)
 
     with top[0]:
@@ -3340,6 +3498,12 @@ def main():
             st.warning(f"GA4 유입 분석 로딩 중: {e}")
 
     with top[4]:
+        try:
+            render_changelog()
+        except Exception as e:
+            st.warning(f"변경사항 로딩 중: {e}")
+
+    with top[5]:
         if is_admin:
             a = st.radio("AI", ["AI 질의", "AI 로그"], horizontal=True,
                          label_visibility="collapsed", key="nav_ai")
