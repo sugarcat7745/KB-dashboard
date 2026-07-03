@@ -57,33 +57,41 @@ def _hdr(method, uri):
 
 
 # ── 하루치 StatReport(AD) 생성 → 폴링 → 다운로드 → 행 파싱 ──
+#    반환: (rows, ok)
+#      ok=True  → 정상 수집 (rows가 0건이어도 '광고 안 한 날'로 신뢰 가능)
+#      ok=False → 명시적 에러(리포트 생성 실패/타임아웃/네트워크 예외) → 이 날짜는
+#                 삭제·덮어쓰기 대상에서 제외해 기존 데이터 유실 방지
 def fetch_day(day):
-    stat_dt = f"{day}T12:00:00.000Z"   # 확정 포맷
-    uri = "/stat-reports"
-    h = _hdr("POST", uri); h["Content-Type"] = "application/json; charset=UTF-8"
-    r = requests.post(BASE + uri, headers=h, json={"reportTp": "AD", "statDt": stat_dt})
-    r.raise_for_status()
-    job_id = r.json().get("reportJobId")
+    try:
+        stat_dt = f"{day}T12:00:00.000Z"   # 확정 포맷
+        uri = "/stat-reports"
+        h = _hdr("POST", uri); h["Content-Type"] = "application/json; charset=UTF-8"
+        r = requests.post(BASE + uri, headers=h, json={"reportTp": "AD", "statDt": stat_dt})
+        r.raise_for_status()
+        job_id = r.json().get("reportJobId")
 
-    download_url = None
-    for _ in range(40):
-        time.sleep(3)
-        u2 = f"/stat-reports/{job_id}"
-        pj = requests.get(BASE + u2, headers=_hdr("GET", u2)).json()
-        download_url = pj.get("downloadUrl")
-        if download_url:
-            break
-        if pj.get("status") in ("ERROR", "NONE"):
-            print(f"  [{day}] 리포트 생성 실패: {pj}")
-            return []
+        download_url = None
+        for _ in range(40):
+            time.sleep(3)
+            u2 = f"/stat-reports/{job_id}"
+            pj = requests.get(BASE + u2, headers=_hdr("GET", u2)).json()
+            download_url = pj.get("downloadUrl")
+            if download_url:
+                break
+            if pj.get("status") in ("ERROR", "NONE"):
+                print(f"  [{day}] 리포트 생성 실패: {pj}")
+                return [], False
 
-    if not download_url:
-        print(f"  [{day}] 다운로드 URL 시간초과")
-        return []
+        if not download_url:
+            print(f"  [{day}] 다운로드 URL 시간초과")
+            return [], False
 
-    dpath = urlparse(download_url).path
-    d = requests.get(download_url, headers=_hdr("GET", dpath))  # ★다운로드도 인증 헤더 필수
-    d.raise_for_status()
+        dpath = urlparse(download_url).path
+        d = requests.get(download_url, headers=_hdr("GET", dpath))  # ★다운로드도 인증 헤더 필수
+        d.raise_for_status()
+    except Exception as e:
+        print(f"  [{day}] 수집 예외 → 이 날짜는 유지(삭제 제외): {e}")
+        return [], False
 
     rows = []
     for line in d.text.strip().split("\n"):
@@ -97,7 +105,7 @@ def fetch_day(day):
             "cost": float(c[11] or 0), "rank_sum": float(c[12] or 0),
             "conversions": int(float(c[13] or 0)) if len(c) > 13 else 0,
         })
-    return rows
+    return rows, True
 
 
 # ── 디바이스 합산 + 파생지표 → ad_keyword 컬럼 구조로 ──
@@ -179,20 +187,34 @@ def main():
 
     print(f"[네이버 수집] {days[-1]} ~ {end} (KST)")
     all_rows = []
+    ok_dates = []          # fetch_day가 성공(ok=True)한 날짜만 → 삭제·덮어쓰기 대상
+    failed_dates = []
     for d in days:
-        rows = fetch_day(d)
-        print(f"  [{d}] {len(rows)}행 수집")
-        all_rows += rows
+        rows, ok = fetch_day(d)
+        print(f"  [{d}] {len(rows)}행 수집 ({'OK' if ok else '실패'})")
+        if ok:
+            all_rows += rows
+            ok_dates.append(str(d))
+        else:
+            failed_dates.append(str(d))
+
+    if failed_dates:
+        print(f"  ⚠️ 수집 실패 날짜 {failed_dates} → 기존 데이터 보존(삭제 제외)")
+
+    if not ok_dates:
+        print("성공적으로 수집된 날짜 없음 — 적재 건너뜀(기존 데이터 보존)"); return
 
     df = build_df(all_rows)
-    if df.empty:
-        print("수집 데이터 없음 — 적재 건너뜀"); return
-    print(f"  → 합산 후 {len(df)}행 · 총광고비 {df['cost'].sum():,.0f}원")
+    # 정상 수집됐지만 0건인 날(광고 안 한 날)은 df에 행이 없어도 ok_dates에 포함 →
+    # 해당 날짜의 기존 데이터는 덮어쓰기로 정상 제거(빈 상태로 갱신)됨.
+    print(f"  → 합산 후 {len(df)}행 · 총광고비 {df['cost'].sum():,.0f}원" if not df.empty
+          else "  → 합산 결과 0행(정상 수집된 날 광고비 없음) · 해당 날짜만 갱신")
 
     bq = bq_client()
-    df = attach_keyword_names(bq, df)        # 마스터로 키워드 이름 채우기
-    n_new, n_total = load_to_bq(bq, df, dates)
-    print(f"[적재 완료] 신규 {n_new}행 · ad_keyword 총 {n_total}행 (media='네이버' 갱신: {dates})")
+    if not df.empty:
+        df = attach_keyword_names(bq, df)    # 마스터로 키워드 이름 채우기
+    n_new, n_total = load_to_bq(bq, df, ok_dates)
+    print(f"[적재 완료] 신규 {n_new}행 · ad_keyword 총 {n_total}행 (media='네이버' 갱신: {ok_dates})")
 
 
 if __name__ == "__main__":

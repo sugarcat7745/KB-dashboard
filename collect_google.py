@@ -23,7 +23,7 @@ TABLE    = "ad_keyword"
 MEDIA    = "구글"
 CUSTOMER_ID      = os.environ["GOOGLE_CUSTOMER_ID"]        # 9365791419 (법무법인KB)
 LOGIN_CUSTOMER   = os.environ["GOOGLE_LOGIN_CUSTOMER_ID"]  # 4715694533 (MCC)
-LOOKBACK_DAYS    = 3   # 어제·오늘 + 하루 더 (재집계 보정용). 어제·오늘만 원하면 2
+LOOKBACK_DAYS    = 3   # 오늘 제외, 어제까지 3일치 (재집계 보정용). 딱 어제만 원하면 1
 
 # ⚠️ 기존 ad_keyword 컬럼명에 맞춰 이 매핑만 고치면 됨 (셀2 스키마 확인 후 확정!)
 #    왼쪽=BigQuery 실제 컬럼명, 오른쪽=이 스크립트 내부 표준 컬럼명

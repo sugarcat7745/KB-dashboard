@@ -49,9 +49,9 @@ def fetch_master():
     job_id = r.json().get("id") or r.json().get("reportJobId")
     print("  job_id:", job_id)
 
-    # 2) 폴링 (15만개라 좀 걸림 → 최대 ~5분)
+    # 2) 폴링 (15만개라 좀 걸림 → 최대 ~10분)
     download_url = None
-    for _ in range(100):
+    for _ in range(200):
         time.sleep(3)
         u2 = f"/master-reports/{job_id}"
         pj = requests.get(BASE + u2, headers=_hdr("GET", u2)).json()
@@ -93,6 +93,22 @@ def main():
 
     bq = bq_client()
     table_id = f"{PROJECT}.{DATASET}.{TABLE}"
+
+    # 안전장치: 잘린 다운로드로 마스터가 훼손되는 것 방지.
+    # 새로 파싱한 df 건수가 기존 테이블 건수의 70% 미만이면 적재 중단(실패).
+    # 기존 건수 조회 실패(테이블 없음 등)면 검증 건너뛰고 정상 적재.
+    try:
+        prev = list(bq.query(
+            f"SELECT COUNT(*) AS n FROM `{table_id}`").result())[0].n
+    except Exception as e:
+        prev = None
+        print(f"  기존 테이블 건수 조회 실패({e}) — 검증 건너뜀(최초 적재로 간주)")
+
+    if prev is not None and prev > 0 and len(df) < prev * 0.7:
+        raise SystemExit(
+            f"⛔ 적재 중단: 신규 {len(df):,}개 < 기존 {prev:,}개의 70% "
+            f"({prev * 0.7:,.0f}개). 잘린 다운로드 의심 → 마스터 보존.")
+
     bq.load_table_from_dataframe(
         df, table_id,
         job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE"),

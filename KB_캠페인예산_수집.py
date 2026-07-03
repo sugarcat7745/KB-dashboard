@@ -6,7 +6,7 @@
 import os, sys, time, hmac, hashlib, base64, traceback
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from google.cloud import bigquery
 
 NAVER_API_KEY     = os.getenv("NAVER_API_KEY", "")
@@ -52,7 +52,7 @@ def main():
         return
 
     print(f"▶ STEP 2: 데이터 가공")
-    now = datetime.now()
+    now = datetime.now(timezone(timedelta(hours=9)))
     rows = []
     for c in camps:
         rows.append({
@@ -68,7 +68,7 @@ def main():
             "expect_cost": int(c.get("expectCost", 0) or 0),
         })
     df = pd.DataFrame(rows)
-    df["remaining"] = (df["daily_budget"] - df["total_charge_cost"]).clip(lower=0)
+    df["remaining"] = df["daily_budget"] - df["total_charge_cost"]
     print(df[["campaign_name", "daily_budget", "total_charge_cost", "remaining", "status"]].to_string())
 
     print(f"▶ STEP 3: BigQuery 적재")
