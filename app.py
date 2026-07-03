@@ -286,18 +286,32 @@ def build_data_context():
     today = date.today()
     P = [f"기준일: {today} (오늘까지 발생한 실데이터 기준)"]
     if not con.empty:
-        # 연도별 총매출 (신건/파생)
+        # 연도별 총매출(신건/파생) + 입금/미수 (계약 기준 vs 현금 기준 구분용)
         for yr in sorted([y for y in con["_y"].unique() if str(y) not in ("nan", "")]):
             yc = con[con["_y"] == yr]
             tot = yc["_amt"].sum(); new = yc[yc["_is_new"]]["_amt"].sum()
-            P.append(f"[{yr}년 계약매출] 전체 {tot:,.0f}원 (신건 {new:,.0f}원 / 파생 {tot-new:,.0f}원)")
-        # 올해 사건유형별 + 월별
-        cy = con[con["_y"] == str(today.year)]
+            paid = yc["_paid"].sum(); unpaid = yc["_unpaid"].sum()
+            _ur = unpaid / tot * 100 if tot else 0
+            P.append(f"[{yr}년 계약매출] 전체 {tot:,.0f}원 (신건 {new:,.0f}원 / 파생 {tot-new:,.0f}원) · "
+                     f"실입금 {paid:,.0f}원 / 미수 {unpaid:,.0f}원(미수율 {_ur:.0f}%)")
+        # 사건유형별 미수 (미수 관리용) — 전체기간
+        try:
+            ub = con.groupby("_type").agg(amt=("_amt", "sum"), unpaid=("_unpaid", "sum"))
+            ub = ub[ub["unpaid"] > 0].sort_values("unpaid", ascending=False)
+            P.append("[사건유형별 미수(전체기간)] " + "; ".join(
+                f"{t} 미수 {r.unpaid:,.0f}원(미수율 {r.unpaid/r.amt*100 if r.amt else 0:.0f}%)"
+                for t, r in ub.head(10).iterrows()))
+        except Exception:
+            pass
+        # 올해 사건유형별 + 월별 (매출·입금)
+        cy = con[con["_y"] == today.year]
         if not cy.empty:
             bt = cy[cy["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=False)
             P.append(f"{today.year}년 신건 사건유형별 매출: " + "; ".join(f"{t} {v:,.0f}원" for t, v in bt.head(12).items()))
             mm = cy[cy["_is_new"]].groupby("_m")["_amt"].sum()
             P.append(f"{today.year}년 월별 신건매출: " + "; ".join(f"{int(m)}월 {v:,.0f}원" for m, v in mm.items()))
+            mp = cy.groupby("_m")["_paid"].sum()
+            P.append(f"{today.year}년 월별 실입금액(계약월 기준): " + "; ".join(f"{int(m)}월 {v:,.0f}원" for m, v in mp.items()))
     # ── 월별 문의·상담·수임 (문의시트에서 직접 계산 — 연간요약 손입력 불필요!!) ──
     try:
         _inq = load_inquiries()
@@ -590,7 +604,6 @@ def clean_num(s):
     try: return float(str(s).replace(",", "").replace("원", "").replace("%", "").strip() or 0)
     except: return 0.0
 
-@st.cache_data(ttl=3600)
 @st.cache_data(ttl=120)
 def load_budget(day=None):
     """캠페인 예산/소진 — 해당 날짜(없으면 최신 날짜)의 캠페인별 '최대 소진'.
@@ -711,9 +724,8 @@ def load_etc():
         for c in ("cost", "impressions", "clicks", "conversions"):
             past[c] = pd.to_numeric(past[c], errors="coerce").fillna(0)
         past["media"] = past["media"].astype(str).str.strip()
-        if not sheet_df.empty:
-            cutoff = sheet_df["date"].min()          # 시트 시작일(=6/22)
-            past = past[past["date"] < cutoff]        # 그 전만 BigQuery에서
+        # (날짜·매체) 키로 병합 — 겹치면 시트 우선(아래 drop_duplicates keep="last").
+        # 시작일 컷오프를 쓰지 않으므로, 시트에 과거 날짜를 백필해도 BigQuery 과거분이 소실되지 않음.
         merged = pd.concat([past[cols], sheet_df[cols]], ignore_index=True)
     else:
         merged = sheet_df
@@ -875,15 +887,27 @@ def load_inquiries():
     d["date"] = d["date"].ffill()
     has_content = (d["name"].str.strip() != "") | (d["keyword"].str.strip() != "")
     d = d[d["date"].notna() & has_content].reset_index(drop=True)
+    d["category"] = d["category"].replace(CAT_ALIAS)   # 학폭→학교폭력 등 표기 통일(캠페인과 동일 별칭)
     d["category"] = d["category"].replace({"": "(미분류)", "nan": "(미분류)"})
     d["_ym"] = d["date"].dt.to_period("M").astype(str)
     d["name"] = d["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
     return d
 
+_CONTRACT_COLS = ["_amt", "_paid", "_unpaid", "_date", "_y", "_m", "_ym",
+                  "_type_raw", "_inflow", "_is_new", "_name", "_type", "_cid", "_split_n"]
+
 @st.cache_data(ttl=600)
 def load_contracts():
-    ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
-    df = pd.DataFrame(ws.get_all_records())
+    """계약 시트 → 사건유형 분리(explode)된 매출 데이터(축2).
+       시트 장애/빈 데이터에도 절대 예외를 던지지 않고 빈 DF(_컬럼 보유)를 반환 —
+       랜딩·요약·문의 탭이 계약 시트 하나 때문에 통째로 깨지지 않게 하는 안전망."""
+    try:
+        ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
+        df = pd.DataFrame(ws.get_all_records())
+    except Exception:
+        return pd.DataFrame(columns=_CONTRACT_COLS)
+    if df.empty:
+        return pd.DataFrame(columns=_CONTRACT_COLS)
     df.columns = [str(c).strip() for c in df.columns]
     def find(*keys, default=None):
         for c in df.columns:
@@ -898,6 +922,10 @@ def load_contracts():
     date_col = find("계약일", default="계약일")
     name_col = find("위임", "의뢰인", "이름")
 
+    # 필수 컬럼(계약일·금액·유형·유입)이 시트 헤더 변경으로 사라졌으면 빈 DF로 (예외 대신)
+    if any(c not in df.columns for c in (date_col, amt_col, typ_col, inflow_col)):
+        return pd.DataFrame(columns=_CONTRACT_COLS)
+
     def num(col):
         return pd.to_numeric(
             df[col].astype(str).str.replace(",", "").str.replace("원", "").str.strip(),
@@ -908,6 +936,8 @@ def load_contracts():
     df["_unpaid"] = num(unpaid_col) if unpaid_col else (df["_amt"] - df["_paid"])
     df["_date"] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.dropna(subset=["_date"])
+    if df.empty:                       # 유효한 계약일이 한 건도 없으면 빈 DF(컬럼 보유)로
+        return pd.DataFrame(columns=_CONTRACT_COLS)
     df["_y"] = df["_date"].dt.year
     df["_m"] = df["_date"].dt.month
     df["_ym"] = df["_date"].dt.to_period("M").astype(str)
@@ -1174,13 +1204,15 @@ def money(v):  # 적응형: 억/만/원
     if abs(v) >= 1e4: return f"{v/1e4:,.0f}만"
     return f"{v:,.0f}"
 
-def delta_str(cur, prev, kind="num"):
-    """기간 대비 증감을 화살표+수치(퍼센트 아님)로. (chg_text, direction) 반환."""
+def delta_str(cur, prev, kind="num", invert=False):
+    """기간 대비 증감을 화살표+수치(퍼센트 아님)로. (chg_text, direction) 반환.
+       invert=True → 비용성 지표(CPI·CPC 등, 오를수록 나쁨)용: 화살표는 실제 방향 그대로,
+       색만 반전(증가=빨강)해서 '비용 상승이 초록(개선)으로 오독'되는 것을 막는다."""
     diff = cur - prev
     if abs(diff) < 1e-9:
         return None, "up"
     arrow = "▲" if diff > 0 else "▼"
-    direction = "up" if diff > 0 else "down"
+    direction = ("down" if diff > 0 else "up") if invert else ("up" if diff > 0 else "down")
     a = abs(diff)
     if kind == "money":  txt = money(a) + "원"
     elif kind == "pct":  txt = f"{a:.2f}%p"
@@ -1209,6 +1241,7 @@ def sortable_table(columns, rows, height=420):
         trs += f"<tr>{tds}</tr>"
     html = f"""<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
   body{{margin:0;font-family:'Noto Sans KR',-apple-system,sans-serif;background:transparent;}}
   table{{width:100%;border-collapse:collapse;font-size:13px;color:#E8E4DA;}}
   th,td{{padding:9px 12px;border-bottom:1px solid #2A2A26;text-align:right;white-space:nowrap;}}
@@ -1447,12 +1480,12 @@ def deriv_toggle(wkey):
     return st.session_state[wkey]
 
 
-def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True):
-    """ROAS 강조 카드 — 광고비·매출 둘 다 있는 화면 공통. (효율 등급 + 직전 대비 + 영업이익)"""
+def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True, paid=None):
+    """ROAS 강조 카드 — 광고비·매출 둘 다 있는 화면 공통. (효율 등급 + 직전 대비)
+       paid(실입금액)를 넘기면 '입금 기준 ROAS'와 미수액을 함께 표기 —
+       계약 기준(청구액)만 크게 보이고 실제 현금 회수는 숨는 것을 막는다."""
     roas = rev / ad * 100 if ad else 0
     roas_p = (rev_p / ad_p * 100) if (rev_p and ad_p) else None
-    profit = rev - ad
-    pcolor = GOLD_B if profit >= 0 else CORAL
     if roas >= 300:   grade, gc = "효율 우수", GOLD_B
     elif roas >= 150: grade, gc = "효율 양호", GOLD
     else:             grade, gc = "효율 점검 필요", CORAL
@@ -1463,19 +1496,33 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True):
             cc = GOLD_B if roas >= roas_p else CORAL
             chg_html = (f'<span style="font-size:13px;margin-left:12px;color:{cc};font-weight:600;">{t} '
                         f'<span style="color:{MUTED};font-weight:400;">직전 대비</span></span>')
-    profit_row = (f'<br>영업이익 <b style="color:{pcolor};font-size:15px;">{money(profit)}</b>원' if show_profit else '')
-    desc = ("영업이익 = 매출 − 광고비 · " if show_profit else "") + f"광고비 100원당 매출 {roas:.0f}원"
+    # 입금 기준 ROAS (현금 회수) — paid가 주어질 때만
+    cash_html = ""
+    if paid is not None:
+        roas_cash = paid / ad * 100 if ad else 0
+        unpaid = max(rev - paid, 0)
+        ccash = GOLD_B if roas_cash >= 150 else CORAL
+        cash_html = (f'<div style="margin-top:8px;font-size:13px;color:{MUTED};">'
+                     f'입금 기준 <b style="color:{ccash};font-size:16px;">{roas_cash:.0f}%</b>'
+                     f'<span style="font-size:11px;"> (실입금 {money(paid)}원 ÷ 광고비)</span>'
+                     f' · 미수 <b style="color:{CORAL};">{money(unpaid)}</b>원</div>')
+    # '영업이익'은 회계용어라 오해 소지 → '광고비 차감 후 계약액'으로 명확화 (인건비·임차료 미반영)
+    profit = rev - ad
+    pcolor = GOLD_B if profit >= 0 else CORAL
+    profit_row = (f'<br>광고비 차감 후 <b style="color:{pcolor};font-size:15px;">{money(profit)}</b>원' if show_profit else '')
     st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
         display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin:6px 0 16px;flex-wrap:wrap;gap:14px;">
       <div>
         <div style="font-size:12px;color:{MUTED};letter-spacing:1px;">
-          <i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{(' · ' + period) if period else ''}</div>
+          <i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{(' · ' + period) if period else ''}
+          {' <span style="color:'+MUTED+';">(계약 기준)</span>' if paid is not None else ''}</div>
         <div style="margin-top:5px;line-height:1;">
           <span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>
           <span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(210,170,80,.14);color:{gc};">{grade}</span>{chg_html}</div>
+        {cash_html}
       </div>
       <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
-        매출 <b style="color:#E8E6DE;">{money(rev)}</b>원<br>
+        {'계약액' if paid is not None else '매출'} <b style="color:#E8E6DE;">{money(rev)}</b>원<br>
         광고비 <b style="color:#E8E6DE;">{money(ad)}</b>원{profit_row}</div>
     </div>""", unsafe_allow_html=True)
 
@@ -1585,7 +1632,7 @@ def render_brief():
         st.plotly_chart(fig_theme(pie, 260), use_container_width=True, config={"displayModeBar": False})
 
     # ═══ HERO: 이번 달 목표 달성 ═══
-    pct = min(revenue / MONTHLY_GOAL * 100, 100)
+    pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(100% 초과=초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(210,170,80,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
         <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
@@ -1597,7 +1644,7 @@ def render_brief():
         <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
         <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
         <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
-      </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
+      </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     # ── ROAS/효율은 '월간 종합'에서만 표시 (일간은 수임 시차로 효율 왜곡 → 제외) ──
 
@@ -1843,6 +1890,11 @@ def render_summary():
     include_deriv = deriv_toggle("deriv_sum")
     new_only = not include_deriv
     revenue, rev_p = rev(start, end, new_only), rev(ps, pe, new_only)
+    def rev_paid(s, e, new=False):
+        m = (con["_date"].dt.date >= s) & (con["_date"].dt.date <= e)
+        if new: m &= con["_is_new"]
+        return con[m]["_paid"].sum()
+    revenue_paid = rev_paid(start, end, new_only)              # 같은 기준의 실입금액(입금 기준 ROAS용)
     deriv = rev(start, end, False) - rev(start, end, True)      # 파생 금액(항상 참고)
     rev_label = "전체 매출(신건+파생)" if include_deriv else "신건 매출"
     roas = revenue / ad * 100 if ad else 0
@@ -1903,7 +1955,7 @@ def render_summary():
       unsafe_allow_html=True)
 
     # ═══ HERO: 이번 달 목표 달성 (달성률·매출·잔여) ═══
-    pct = min(revenue / MONTHLY_GOAL * 100, 100)
+    pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(210,170,80,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
         <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
@@ -1915,7 +1967,7 @@ def render_summary():
         <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
         <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
         <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
-      </div><div class="goalbar"><div style="width:{pct}%;"></div></div></div>""", unsafe_allow_html=True)
+      </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
                 f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {cmp_label} 증감</div>', unsafe_allow_html=True)
@@ -1929,8 +1981,8 @@ def render_summary():
     kpi(c[4], "fa-file-signature", "수임", f"{n_suim}", "건", *delta_str(n_suim, n_suim_p, "cnt"))
     kpi(c[5], "fa-percent", "수임전환율", f"{conv:.1f}", "%", *delta_str(conv, conv_p, "pct"))
 
-    # ── ROAS 강조 (광고 효율) · 일자별과 동일 카드 ──
-    roas_card(revenue, ad, rev_p, ad_p, plabel)
+    # ── ROAS 강조 (광고 효율) · 일자별과 동일 카드 (입금 기준 병기) ──
+    roas_card(revenue, ad, rev_p, ad_p, plabel, paid=revenue_paid)
 
     # ── 전환 퍼널 (문의→상담→수임) · 문의 시트 기준 (6KPI와 동일 소스!!) ──
     if n_inq > 0:
@@ -2063,7 +2115,7 @@ def render_daily():
     c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(total_ad), "원", *delta_str(total_ad, p_ad, "money"))
     kpi(c[1], "fa-phone", "문의", f"{n_inq}", "건", *delta_str(n_inq, p_inq, "cnt"))
-    kpi(c[2], "fa-coins", "문의당 비용", money(cpi), "원", *delta_str(cpi, p_cpi, "won"))
+    kpi(c[2], "fa-coins", "문의당 비용", money(cpi), "원", *delta_str(cpi, p_cpi, "won", invert=True))
     kpi(c[3], "fa-comments", "상담", f"{n_sang}", "건", *delta_str(n_sang, p_sang, "cnt"))
     kpi(c[4], "fa-file-signature", con_lbl, f"{n_con}", "건", *delta_str(n_con, p_con, "cnt"))
     kpi(c[5], "fa-sack-dollar", amt_lbl, money(con_amt), "원", *delta_str(con_amt, p_camt, "money"))
@@ -2250,7 +2302,13 @@ def render_ad_tab(media, full):
     kpi(c[1], "fa-eye", "노출수", money(ti), "", *delta_str(ti, pti, "num"))
     kpi(c[2], "fa-hand-pointer", "클릭수", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
     kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
-    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
+    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won", invert=True))
+
+    # 매체별 광고비 함정 안내 (총광고비·ROAS 해석 시 참고)
+    _note = ("※ 네이버 광고비에는 <b>브랜드검색(월정액)</b>이 키워드 데이터에 포함되지 않아, 메인 등 일부 광고비가 실제보다 적게 표시될 수 있습니다."
+             if media == "네이버" else
+             "※ 구글 광고비는 <b>VAT 제외</b> 기준입니다(부가세 포함 시트·실결제액과 최대 10% 차이).")
+    st.markdown(f'<div style="font-size:11.5px;color:{MUTED};margin:2px 0 14px;">{_note}</div>', unsafe_allow_html=True)
 
     # ── 광고비 추세 (오늘/어제 → 최근 7일 일별 / 올해·장기 → 월별로 통일) ──
     is_single = (start == end)                              # 오늘 또는 어제
@@ -2300,7 +2358,7 @@ def render_ad_tab(media, full):
 
     # ── 키워드 TOP 10 (광고비순) ──
     kw = bq(f"SELECT keyword,SUM(cost) cost,SUM(clicks) clk,SUM(impressions) imp "
-            f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' AND keyword NOT IN ('-','') "
+            f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' AND keyword NOT IN ('-','','(월 합계)') "
             f"AND date BETWEEN '{sd}' AND '{ed}' GROUP BY keyword ORDER BY cost DESC LIMIT 10")
     st.markdown('<div class="sec-title"><i class="fa-solid fa-magnifying-glass"></i> 키워드 TOP 10 (광고비순)</div>', unsafe_allow_html=True)
     rows = "".join(f"<tr><td>{r.keyword}</td><td class='num'>{r.cost:,.0f}원</td><td>{int(r.clk):,}</td>"
@@ -2348,7 +2406,7 @@ def render_etc():
     kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "", *delta_str(ti, pti, "num"))
     kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
     kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
-    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won"))
+    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won", invert=True))
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비</div>', unsafe_allow_html=True)
     cmap = {"카카오모먼트": GOLD, "모비온": TEAL, "메타": CORAL}
@@ -2375,16 +2433,7 @@ def render_etc():
 
 
 def render_inquiries():
-    st.markdown(
-        '<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
-        'background:linear-gradient(90deg,rgba(210,170,80,.16),rgba(210,170,80,.02));'
-        'border-left:5px solid #D2AA50;border-radius:12px;">'
-        '<div style="width:46px;height:46px;border-radius:11px;background:#D2AA50;display:flex;'
-        'align-items:center;justify-content:center;font-size:24px;color:#1a1a17;'
-        'box-shadow:0 4px 12px rgba(210,170,80,.4);"><i class="fa-solid fa-comments"></i></div>'
-        '<div><div style="font-size:20px;font-weight:800;color:#D2AA50;letter-spacing:-.5px;">문의 분석</div>'
-        '<div style="font-size:12px;color:#999;margin-top:2px;">문의 · 상담 · 수임 · 이름 대조</div></div></div>',
-        unsafe_allow_html=True)
+    tab_header("fa-comments", "문의 분석", "문의 · 상담 · 수임 · 이름 대조")
     inq = load_inquiries()
     if inq.empty:
         st.info("문의 데이터를 읽지 못했습니다. 시트 공유·탭 구조를 확인해주세요."); return
@@ -2468,6 +2517,48 @@ def render_inquiries():
     else:
         st.caption("이 기간 카테고리 데이터가 없습니다.")
 
+    # ── 카테고리별 효율 (광고비 · 문의당비용 · 수임건당 광고비) — 예산 재배분 판단의 핵심 테이블 ──
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-coins"></i> 카테고리별 효율 '
+                f'<span style="color:{MUTED};font-size:12px;font-weight:400;">(광고비 · 문의당비용 · 수임건당 광고비 · {start} ~ {end})</span></div>',
+                unsafe_allow_html=True)
+    try:
+        _adq = bq(f"SELECT campaign, SUM(cost) cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                  f"WHERE date BETWEEN '{start}' AND '{end}' AND campaign NOT LIKE '%월 합계%' GROUP BY campaign")
+    except Exception:
+        _adq = pd.DataFrame(columns=["campaign", "cost"])
+    _catcost = {}
+    for _, _r in _adq.iterrows():
+        _cat = _campaign_to_category(_r["campaign"])
+        _catcost[_cat] = _catcost.get(_cat, 0) + float(_r["cost"] or 0)
+    _ci = inqf[~inqf["category"].isin(bad)]
+    _inqn = _ci.groupby("category").size().to_dict()
+    _suimn = _ci[_ci["contracted"]].groupby("category").size().to_dict()
+    _cats = sorted(set(_catcost) | set(_inqn), key=lambda k: _catcost.get(k, 0), reverse=True)
+    if _cats:
+        _rows = []
+        for _cat in _cats:
+            _cost = _catcost.get(_cat, 0); _has = _cost > 0
+            _iq = int(_inqn.get(_cat, 0)); _sm = int(_suimn.get(_cat, 0))
+            _cpi = _cost / _iq if _iq else 0
+            _per = _cost / _sm if _sm else 0
+            _cvr = _sm / _iq * 100 if _iq else 0
+            _rows.append([
+                (_cat, _cat),
+                ((money(_cost) + "원") if _has else "—", _cost),
+                (f"{_iq:,}", _iq),
+                ((money(_cpi) + "원") if (_has and _iq) else "—", _cpi if (_has and _iq) else -1),
+                (f"{_sm:,}", _sm),
+                ((money(_per) + "원") if (_has and _sm) else "—", _per if (_has and _sm) else -1),
+                (f"{_cvr:.1f}%", _cvr),
+            ])
+        sortable_table(["카테고리", "광고비", "문의", "문의당비용", "수임", "수임건당 광고비", "전환율"],
+                       _rows, height=min(560, 70 + len(_rows) * 37))
+        st.caption("※ 광고비는 네이버·구글 키워드 데이터 기준(브랜드검색 월정액·기타매체 제외). "
+                   "'—'는 자연·미확인 유입 등 광고비가 매칭되지 않는 카테고리입니다. "
+                   "수임건당 광고비가 낮을수록 효율적 — 예산 재배분 판단에 활용하세요. (헤더 클릭 → 정렬)")
+    else:
+        st.caption("이 기간 카테고리별 효율 데이터가 없습니다.")
+
     # ════ 대단락: 이름 대조 ════
     st.markdown('<div class="big-section"><i class="fa-solid fa-magnifying-glass"></i> 이름 대조</div>', unsafe_allow_html=True)
     # 이름 대조 — 문의자 ↔ 계약/미수금
@@ -2537,7 +2628,7 @@ def render_welcome_splash(user):
       </div>
     </div>
     """, unsafe_allow_html=True)
-    time.sleep(1.8)
+    time.sleep(0.8)
 
 
 # ── 새로고침해도 로그인 유지 (URL 서명 토큰) ──────────────
@@ -2598,7 +2689,7 @@ def render_login():
                 st.rerun()
             else:
                 st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
-        st.caption("🔐 비밀번호는 영업비밀처럼 — 소중히, 그리고 비밀스럽게 다뤄주세요 🤫")
+        st.caption("🔐 계정 정보는 외부에 노출되지 않도록 안전하게 관리해 주세요.")
 
 
 def render_ai_chat():
@@ -2608,9 +2699,10 @@ def render_ai_chat():
     if "chat_history" not in st.session_state:
         with st.spinner("이전 대화를 불러오는 중…"):
             st.session_state.chat_history = load_ai_chat(user)   # 저장된 이력 복원
-    # 예시 질문 칩
-    st.markdown('<div style="font-size:12px;color:#8a8a82;margin:4px 0;">💡 예시: '
-                '"올해 형사 사건 매출 얼마야?" · "광고비 제일 많이 쓴 달은?" · "수임 전환이 가장 좋은 달은?"</div>',
+    # 예시 질문 칩 (대표님 관점 — 계약 vs 입금·미수·전년비교 포함)
+    st.markdown(f'<div style="font-size:12px;color:{MUTED};margin:4px 0;">💡 예시: '
+                '"이번 달 광고비 대비 실제 입금은?" · "미수금 큰 순서로 알려줘" · '
+                '"작년 여름과 올해 효율 비교해줘" · "수임건당 광고비가 가장 낮은 카테고리는?"</div>',
                 unsafe_allow_html=True)
     q = st.text_input("질문", key="ai_q", label_visibility="collapsed",
                       placeholder="질문을 입력하세요…")
@@ -2643,6 +2735,7 @@ def render_ai_chat():
 
 def render_admin_log():
     """관리자(admin) 전용 — 로그인 이력 + AI 사용 로그 + 토큰/비용 집계."""
+    tab_header("fa-shield-halved", "관리자 로그", "로그인 이력 · AI 사용 · 토큰/비용", color="#6E6E66", rgb="110,110,102")
     # ── 로그인 이력 ──
     st.markdown('<div class="sec-title"><i class="fa-solid fa-right-to-bracket"></i> 로그인 이력</div>', unsafe_allow_html=True)
     try:
@@ -2748,7 +2841,7 @@ def render_contracts():
 
         cmin = df["_date"].min().date()
         cmax = date.today()   # 달력 기준 통일: 기준일=오늘
-        cs, ce = period_selector("con", cmin, cmax, default="어제")
+        cs, ce = period_selector("con", cmin, cmax, default="이번달")
         include_deriv = deriv_toggle("deriv_con")
 
         # 선택 기간 (신건 중심)
@@ -2760,6 +2853,7 @@ def render_contracts():
         avg_amt = new_sum / new_cnt if new_cnt else 0
         new_ratio = new_sum / (new_sum + deriv_sum) * 100 if (new_sum + deriv_sum) else 0
         hero_sum = (new_sum + deriv_sum) if include_deriv else new_sum
+        hero_paid = (cf["_paid"].sum() if include_deriv else cf_new["_paid"].sum())  # 같은 기준의 실입금액
         hero_cnt = len(cf) if include_deriv else new_cnt
         hero_lbl = "전체 매출(신건+파생)" if include_deriv else "신건 매출"
 
@@ -2776,7 +2870,7 @@ def render_contracts():
         # 이번 달 신건 (목표바 — 항상 이번 달 기준)
         mstart = cmax.replace(day=1)
         month_new = df[(df["_date"].dt.date >= mstart) & (df["_date"].dt.date <= cmax) & df["_is_new"]]["_amt"].sum()
-        goal_pct = min(month_new / MONTHLY_GOAL * 100, 100) if MONTHLY_GOAL else 0
+        goal_pct = month_new / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(초과달성 그대로)
 
         # AI 배너
         byt = cf_new.groupby("_type")["_amt"].sum().sort_values(ascending=False)
@@ -2810,7 +2904,7 @@ def render_contracts():
               <span>이번 달 신건 <b style="color:{GOLD};">{won(month_new)}</b></span>
               <span>월 목표 2.5억 · <b style="color:{GOLD_B};">{goal_pct:.0f}%</b></span>
             </div>
-            <div class="goalbar"><div style="width:{goal_pct}%;"></div></div>
+            <div class="goalbar"><div style="width:{min(goal_pct,100)}%;"></div></div>
           </div>
         </div>""", unsafe_allow_html=True)
 
@@ -2831,7 +2925,7 @@ def render_contracts():
         _b = (_etc[(_etc["date"].dt.date >= cs) & (_etc["date"].dt.date <= ce)]["cost"].sum()
               if (_etc is not None and not _etc.empty) else 0)
         ad_period = float(_a or 0) + float(_b or 0)
-        roas_card(hero_sum, ad_period, period=hero_period)
+        roas_card(hero_sum, ad_period, period=hero_period, paid=float(hero_paid or 0))
         if len(cf):
             with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
                 rows = "".join(
@@ -2848,14 +2942,36 @@ def render_contracts():
         st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
         t_amt, t_paid, t_unpaid = df["_amt"].sum(), df["_paid"].sum(), df["_unpaid"].sum()
         rate = t_paid / t_amt * 100 if t_amt else 0
+        unpaid_ratio = t_unpaid / t_amt * 100 if t_amt else 0
         ci = st.columns(3)
         kpi(ci[0], "fa-circle-check", "입금 완료", money(t_paid), "원")
+        # 미수율은 화살표(증감)로 오해되지 않게 desc로 라벨 표기
         kpi(ci[1], "fa-circle-exclamation", "미수금", money(t_unpaid), "원",
-            chg=f"{t_unpaid/t_amt*100:.1f}%" if t_amt else None, chg_dir="down")
+            desc=f"미수율 {unpaid_ratio:.1f}% (계약액 대비)")
         kpi(ci[2], "fa-percent", "수금률", f"{rate:.1f}", "%")
 
-        # 미수금 리스트 (클릭하면 펼침)
+        # 미수금 에이징 (경과기간별) — 오래된 미수일수록 회수 난이도↑, 수금 우선순위 판단용
         unpaid = df[df["_unpaid"] > 0].sort_values("_unpaid", ascending=False)
+        if not unpaid.empty:
+            _today = pd.Timestamp(date.today())
+            _age = (_today - unpaid["_date"]).dt.days
+            _b_recent = unpaid.loc[_age < 90, "_unpaid"].sum()
+            _b_3to6   = unpaid.loc[(_age >= 90) & (_age < 180), "_unpaid"].sum()
+            _b_6to12  = unpaid.loc[(_age >= 180) & (_age < 365), "_unpaid"].sum()
+            _b_over1y = unpaid.loc[_age >= 365, "_unpaid"].sum()
+            _seg = [("3개월 미만", _b_recent, MUTED), ("3~6개월", _b_3to6, GOLD),
+                    ("6~12개월", _b_6to12, "#D99A5B"), ("1년 이상", _b_over1y, CORAL)]
+            _bar = "".join(
+                f'<div style="flex:{max(v,1)};min-width:2px;background:{c};height:100%;" title="{lab} {money(v)}원"></div>'
+                for lab, v, c in _seg if v > 0)
+            _leg = "  ".join(f'<span style="color:{c};">●</span> {lab} <b style="color:#E8E6DE;">{money(v)}</b>원'
+                             for lab, v, c in _seg)
+            st.markdown(
+                f'<div style="margin:2px 0 12px;"><div style="display:flex;height:10px;border-radius:5px;'
+                f'overflow:hidden;border:1px solid {LINE};">{_bar}</div>'
+                f'<div style="font-size:12px;color:{MUTED};margin-top:7px;">{_leg}'
+                f'<span style="margin-left:8px;color:{CORAL};">← 오래될수록 회수 난이도↑</span></div></div>',
+                unsafe_allow_html=True)
         with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원  (클릭하여 펼치기)"):
             if unpaid.empty:
                 st.success("미수금이 없습니다! 전액 수금 완료!")
@@ -3165,7 +3281,7 @@ def render_ga4():
         kpi(c[3], "fa-percent", "전환율", f"{cvr:.1f}", unit="%", chg=cr_c, chg_dir=cr_d)
         cmp_caption("전기 동기간")
     except Exception as e:
-        st.caption(f"KPI 로딩 중: {e}")
+        st.caption(f"KPI 불러오지 못했습니다 · 새로고침 요망: {e}")
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
@@ -3210,7 +3326,7 @@ def render_ga4():
         else:
             st.caption("채널 데이터가 아직 없습니다.")
     except Exception as e:
-        st.caption(f"채널 분석 로딩 중: {e}")
+        st.caption(f"채널 분석 불러오지 못했습니다 · 새로고침 요망: {e}")
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
@@ -3228,7 +3344,7 @@ def render_ga4():
                 text=[f"{s[1]:,}" for s in stages][::-1], textposition="auto"))
             st.plotly_chart(fig_theme(ff, 240), use_container_width=True, config={"displayModeBar": False})
         except Exception as e:
-            st.caption(f"퍼널 로딩 중: {e}")
+            st.caption(f"퍼널 불러오지 못했습니다 · 새로고침 요망: {e}")
     with cf2:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-phone-volume"></i> 전환 이벤트 상세 (센터별)</div>', unsafe_allow_html=True)
         try:
@@ -3244,7 +3360,7 @@ def render_ga4():
             else:
                 st.caption("전환 이벤트가 아직 없습니다.")
         except Exception as e:
-            st.caption(f"전환 이벤트 로딩 중: {e}")
+            st.caption(f"전환 이벤트 불러오지 못했습니다 · 새로고침 요망: {e}")
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
@@ -3266,7 +3382,7 @@ def render_ga4():
             else:
                 st.caption("디바이스 데이터 없음")
         except Exception as e:
-            st.caption(f"디바이스 로딩 중: {e}")
+            st.caption(f"디바이스 불러오지 못했습니다 · 새로고침 요망: {e}")
     with cd2:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-clock"></i> 시간대별 유입·전환 (KST)</div>', unsafe_allow_html=True)
         try:
@@ -3286,7 +3402,7 @@ def render_ga4():
             else:
                 st.caption("시간대 데이터 없음")
         except Exception as e:
-            st.caption(f"시간대 로딩 중: {e}")
+            st.caption(f"시간대 불러오지 못했습니다 · 새로고침 요망: {e}")
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
@@ -3313,7 +3429,7 @@ def render_ga4():
             else:
                 st.caption("랜딩페이지 데이터 없음")
         except Exception as e:
-            st.caption(f"랜딩페이지 로딩 중: {e}")
+            st.caption(f"랜딩페이지 불러오지 못했습니다 · 새로고침 요망: {e}")
     with cl2:
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-location-dot"></i> 지역별 방문자</div>', unsafe_allow_html=True)
         try:
@@ -3329,7 +3445,7 @@ def render_ga4():
             else:
                 st.caption("지역 데이터 없음")
         except Exception as e:
-            st.caption(f"지역 로딩 중: {e}")
+            st.caption(f"지역 불러오지 못했습니다 · 새로고침 요망: {e}")
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
@@ -3379,7 +3495,7 @@ def render_ga4():
         else:
             st.caption("아직 전환이 발생한 페이지 데이터가 없습니다 (데이터 쌓이면 표시).")
     except Exception as e:
-        st.caption(f"페이지별 전환 로딩 중: {e}")
+        st.caption(f"페이지별 전환 불러오지 못했습니다 · 새로고침 요망: {e}")
 
     st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
 
@@ -3413,7 +3529,7 @@ def render_ga4():
         else:
             st.caption("추세 데이터 없음")
     except Exception as e:
-        st.caption(f"추세 로딩 중: {e}")
+        st.caption(f"추세 불러오지 못했습니다 · 새로고침 요망: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3693,17 +3809,22 @@ def main():
     logo = get_logo()
     logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#D2AA50;">법무법인 KB</span>'
     today = datetime.now().strftime("%Y. %m. %d")
-    # 실시간 수집 배지 (ad_budget 최신 수집시각)
+    # 수집 신선도 배지 (ad_budget 최신 수집시각) — '실시간'이 아니라 실제 경과시간을 정직하게 표기
     bdf = load_budget()
     live = ""
     if not bdf.empty:
         try:
             last = pd.to_datetime(bdf["collected_at"].iloc[0])
+            age_h = (datetime.now() - last.to_pydatetime()).total_seconds() / 3600
+            if age_h <= 1.5:                       # 최근 수집 — 초록
+                dot, lab = "#5FB98E", "수집됨"
+            elif age_h <= 6:                       # 몇 시간 지남 — 금색
+                dot, lab = "#D2AA50", f"{int(age_h)}시간 전 수집"
+            else:                                  # 하루 가까이 밀림 — 경고
+                dot, lab = "#E0524E", f"{int(age_h)}시간 전 수집(지연)"
             live = (f'<div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;margin-top:4px;">'
-                    f'<span style="width:7px;height:7px;border-radius:50%;background:#E0524E;'
-                    f'box-shadow:0 0 6px #E0524E;animation:blink 1.4s infinite;"></span>'
-                    f'<span style="font-size:11px;color:#9a9a90;">실시간 수집 · {last:%m/%d %H:%M} 갱신</span></div>'
-                    f'<style>@keyframes blink{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}</style>')
+                    f'<span style="width:7px;height:7px;border-radius:50%;background:{dot};box-shadow:0 0 6px {dot};"></span>'
+                    f'<span style="font-size:11px;color:#9a9a90;">{lab} · {last:%m/%d %H:%M}</span></div>')
         except Exception:
             live = ""
     st.markdown(f"""<div class="kb-top"><div>{logo_html}</div>
@@ -3724,7 +3845,7 @@ def main():
             _xcol.download_button("📊 내보내기", data=build_export_zip(),
                 file_name=f"KB_분석데이터_{date.today():%Y%m%d}.zip", mime="application/zip",
                 use_container_width=True, key="export_main",
-                help="AI 분석용 데이터 ZIP(README+CSV 5개) · 관리자 전용")
+                help="AI 분석용 데이터 ZIP(README+CSV 10개) · 관리자 전용")
         except Exception:
             _xcol.button("📊 준비중", use_container_width=True, disabled=True, key="export_err")
     if _rcol.button("🔄 새로고침", use_container_width=True, key="refresh_main",
@@ -3732,7 +3853,7 @@ def main():
         st.cache_data.clear()
         st.rerun()
     if _gcol.button("🚪 로그아웃", use_container_width=True, key="logout_main"):
-        for k in ("auth_user", "login_id", "login_pw"):
+        for k in ("auth_user", "login_id", "login_pw", "chat_history"):
             st.session_state.pop(k, None)
         _clear_login_url()
         st.rerun()
@@ -3741,48 +3862,49 @@ def main():
     top_labels = ["📊 요약", "📈 광고", "💼 실적", "🌐 유입", "📝 변경", "🤖 AI"]
     top = st.tabs(top_labels)
 
+    def _safe(fn, label):
+        """탭 렌더를 감싸 한 탭의 오류가 전체 화면을 깨뜨리지 않게 함.
+           사용자에겐 담담한 안내만, 상세 예외는 admin에게만 노출."""
+        try:
+            fn()
+        except Exception as e:
+            st.warning(f"{label}을(를) 일시적으로 불러오지 못했습니다. 잠시 후 새로고침 해주세요.")
+            if is_admin:
+                st.caption(f"(관리자 참고) {type(e).__name__}: {e}")
+
     with top[0]:
         v = st.radio("보기", ["일간 보고", "월간 종합"], horizontal=True,
                      label_visibility="collapsed", key="nav_sum")
         if v == "일간 보고":
-            render_brief()
+            _safe(render_brief, "일간 보고")
         else:
-            render_summary()
+            _safe(render_summary, "월간 종합")
             st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.2);margin:28px 0;">', unsafe_allow_html=True)
-            render_daily()
+            _safe(render_daily, "일자별 요약")
 
     with top[1]:
         m = st.radio("매체", ["네이버", "구글", "기타"], horizontal=True,
                      label_visibility="collapsed", key="nav_ad")
         if m == "네이버":
-            render_ad_tab("네이버", full=True)
+            _safe(lambda: render_ad_tab("네이버", full=True), "네이버 광고")
         elif m == "구글":
-            render_ad_tab("구글", full=False)
+            _safe(lambda: render_ad_tab("구글", full=False), "구글 광고")
         else:
-            try:
-                render_etc()
-            except Exception as e:
-                st.warning(f"기타매체 로딩 중: {e}")
+            _safe(render_etc, "기타매체")
 
     with top[2]:
         p = st.radio("구분", ["계약", "문의"], horizontal=True,
                      label_visibility="collapsed", key="nav_perf")
         if p == "계약":
-            render_contracts()
+            _safe(render_contracts, "계약 매출 분석")
         else:
-            render_inquiries()
+            _safe(render_inquiries, "문의 분석")
 
     with top[3]:
-        try:
-            render_ga4()
-        except Exception as e:
-            st.warning(f"GA4 유입 분석 로딩 중: {e}")
+        _safe(render_ga4, "유입 분석(GA4)")
 
     with top[4]:
-        try:
-            render_changelog()
-        except Exception as e:
-            st.warning(f"변경사항 로딩 중: {e}")
+        _safe(render_changelog, "변경사항")
 
     with top[5]:
         if is_admin:
