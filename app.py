@@ -104,7 +104,7 @@ html, body, [class*="css"] {{ font-family:'Noto Sans KR',sans-serif; color:{TXT}
 .kb-tbl td.num {{ color:{GOLD_B}; font-weight:500; }}
 .placeholder {{ text-align:center; padding:70px 20px; color:{MUTED}; }}
 /* 대단락 */
-.big-section {{ font-family:'Noto Serif KR',serif; font-size:19px; font-weight:700; color:{GOLD};
+.big-section {{ font-size:19px; font-weight:700; color:{GOLD};
     margin:34px 0 6px; padding-bottom:10px; border-bottom:2px solid rgba(210,170,80,.28);
     display:flex; align-items:center; gap:11px; }}
 .big-section i {{ color:{GOLD}; font-size:17px; }}
