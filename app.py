@@ -1510,21 +1510,24 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True, paid=
     profit = rev - ad
     pcolor = GOLD_B if profit >= 0 else CORAL
     profit_row = (f'<br>광고비 차감 후 <b style="color:{pcolor};font-size:15px;">{money(profit)}</b>원' if show_profit else '')
-    st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);
-        display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin:6px 0 16px;flex-wrap:wrap;gap:14px;">
-      <div>
-        <div style="font-size:12px;color:{MUTED};letter-spacing:1px;">
-          <i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{(' · ' + period) if period else ''}
-          {' <span style="color:'+MUTED+';">(계약 기준)</span>' if paid is not None else ''}</div>
-        <div style="margin-top:5px;line-height:1;">
-          <span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>
-          <span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(210,170,80,.14);color:{gc};">{grade}</span>{chg_html}</div>
-        {cash_html}
-      </div>
-      <div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">
-        {'계약액' if paid is not None else '매출'} <b style="color:#E8E6DE;">{money(rev)}</b>원<br>
-        광고비 <b style="color:#E8E6DE;">{money(ad)}</b>원{profit_row}</div>
-    </div>""", unsafe_allow_html=True)
+    basis_tag = f' <span style="color:{MUTED};">(계약 기준)</span>' if paid is not None else ''
+    rev_lbl = "계약액" if paid is not None else "매출"
+    period_txt = (' · ' + period) if period else ''
+    # ⚠️ HTML은 반드시 '한 줄'로 — 줄바꿈·들여쓰기가 있으면 Streamlit 마크다운이 코드블록으로 오인해 태그가 글자로 노출됨
+    html = (
+        f'<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);'
+        f'display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin:6px 0 16px;flex-wrap:wrap;gap:14px;">'
+        f'<div><div style="font-size:12px;color:{MUTED};letter-spacing:1px;">'
+        f'<i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{period_txt}{basis_tag}</div>'
+        f'<div style="margin-top:5px;line-height:1;">'
+        f'<span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>'
+        f'<span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(210,170,80,.14);color:{gc};">{grade}</span>{chg_html}</div>'
+        f'{cash_html}</div>'
+        f'<div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">'
+        f'{rev_lbl} <b style="color:#E8E6DE;">{money(rev)}</b>원<br>'
+        f'광고비 <b style="color:#E8E6DE;">{money(ad)}</b>원{profit_row}</div></div>'
+    )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def render_brief():
