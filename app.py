@@ -103,12 +103,15 @@ html, body, [class*="css"] {{ font-family:'Noto Sans KR',sans-serif; color:{TXT}
 .kb-tbl td {{ font-size:14px; padding:11px 10px; border-bottom:1px solid {LINE}; }}
 .kb-tbl td.num {{ color:{GOLD_B}; font-weight:500; }}
 .placeholder {{ text-align:center; padding:70px 20px; color:{MUTED}; }}
-/* 대단락 */
-.big-section {{ font-size:19px; font-weight:700; color:{GOLD};
+/* ══ 타이포 위계 (일관 스케일) ══
+   대제목(탭헤더) 22/700 · 제목(대단락) 18/700 · 소제목(섹션) 15/600
+   · 본문 14/400 · 서브설명 12/400(흐림) · 숫자강조 명조(KPI·ROAS·금액에만) */
+/* 제목 — 대단락 */
+.big-section {{ font-size:18px; font-weight:700; color:{GOLD};
     margin:34px 0 6px; padding-bottom:10px; border-bottom:2px solid rgba(210,170,80,.28);
     display:flex; align-items:center; gap:11px; }}
-.big-section i {{ color:{GOLD}; font-size:17px; }}
-/* 중단락 */
+.big-section i {{ color:{GOLD}; font-size:16px; }}
+/* 소제목 — 섹션 */
 .sec-title {{ font-size:15px; font-weight:600; margin:20px 0 11px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
 .sec-title i {{ color:{GOLD}; font-size:14px; }}
 .placeholder i {{ font-size:40px; color:{GOLD_D}; margin-bottom:16px; }}
@@ -602,7 +605,7 @@ def ai_banner(summary, tab, period, focus=""):
     st.markdown(
         f'<div style="background:linear-gradient(135deg,rgba(210,170,80,.10),rgba(190,150,60,.03));'
         f'border:1px solid rgba(210,170,80,.25);border-left:3px solid #D2AA50;border-radius:12px;'
-        f'padding:13px 18px;margin:4px 0 16px;font-size:13.5px;line-height:1.65;color:#D8D4CA;">'
+        f'padding:13px 18px;margin:4px 0 16px;font-size:14px;line-height:1.65;color:#D8D4CA;">'
         f'<span style="color:#F0C86E;font-weight:700;white-space:nowrap;">'
         f'<i class="fa-solid fa-robot"></i> AI 분석</span>&nbsp;&nbsp;{txt}</div>',
         unsafe_allow_html=True)
@@ -1267,7 +1270,7 @@ def sortable_table(columns, rows, height=420):
   th{{color:#D2AA50;cursor:pointer;user-select:none;background:#1a1a17;position:sticky;top:0;font-weight:600;}}
   th:hover{{background:#262621;}}
   tr:hover td{{background:rgba(210,170,80,.06);}}
-  .ar{{font-size:9px;margin-left:5px;color:#9a9a90;}}
+  .ar{{font-size:11px;margin-left:5px;color:#9a9a90;}}
 </style>
 <table id="kt"><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>
 <script>
@@ -1471,7 +1474,7 @@ def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
 
 def cmp_caption(text):
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
-                f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {text} 증감</div>',
+                f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:11px;"></i> 화살표 = {text} 증감</div>',
                 unsafe_allow_html=True)
 
 def tab_header(icon_fa, title, sub, color="#D2AA50", rgb="210,170,80"):
@@ -1482,8 +1485,8 @@ def tab_header(icon_fa, title, sub, color="#D2AA50", rgb="210,170,80"):
         f'<div style="width:46px;height:46px;border-radius:11px;background:{color};display:flex;'
         f'align-items:center;justify-content:center;font-size:22px;color:#1a1a17;'
         f'box-shadow:0 4px 12px rgba({rgb},.4);"><i class="fa-solid {icon_fa}"></i></div>'
-        f'<div><div style="font-size:20px;font-weight:800;color:{color};letter-spacing:-.5px;">{title}</div>'
-        f'<div style="font-size:12px;color:#999;margin-top:2px;">{sub}</div></div></div>',
+        f'<div><div style="font-size:22px;font-weight:700;color:{color};letter-spacing:-.5px;">{title}</div>'
+        f'<div style="font-size:12px;color:{MUTED};margin-top:2px;">{sub}</div></div></div>',
         unsafe_allow_html=True)
 
 def deriv_toggle(wkey):
@@ -1791,7 +1794,7 @@ def render_brief():
         if not prev: return ""
         d = (cur - prev) / prev * 100
         col = "#7FB87F" if d >= 0 else CORAL
-        return f'<span style="color:{col};font-size:10px;">{"▲" if d>=0 else "▼"} {abs(d):.1f}%</span>'
+        return f'<span style="color:{col};font-size:11px;">{"▲" if d>=0 else "▼"} {abs(d):.1f}%</span>'
     heads = (f'<th style="padding:7px 8px;text-align:center;background:#2a2a26;color:{MUTED};position:sticky;left:0;">날짜</th>'
              + "".join(f'<th style="padding:7px 8px;text-align:center;background:{mcolor.get(m, "#555")};color:#1a1a17;font-weight:700;">{m}</th>' for m in cols_m)
              + f'<th style="padding:7px 8px;text-align:center;background:{GOLD_D};color:#1a1a17;font-weight:700;">총광고비</th>'
@@ -1832,7 +1835,7 @@ def render_brief():
                  + cell(ws, "#E8E6DE", True) + cell(ww, "#E8E6DE", True) + '</tr>')
         if prev_w is not None:
             body += (f'<tr style="background:rgba(255,255,255,.02);">'
-                     f'<td style="padding:3px 8px;text-align:center;color:{MUTED};font-size:10px;position:sticky;left:0;background:#1a1a17;">전주대비</td>'
+                     f'<td style="padding:3px 8px;text-align:center;color:{MUTED};font-size:11px;position:sticky;left:0;background:#1a1a17;">전주대비</td>'
                      + "".join(f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wsum[m], prev_w["m"].get(m, 0))}</td>' for m in cols_m)
                      + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wtot, prev_w["tot"])}</td>'
                      + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wq, prev_w["q"])}</td>'
@@ -1990,7 +1993,7 @@ def render_summary():
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
-                f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:10px;"></i> 화살표 = {cmp_label} 증감</div>', unsafe_allow_html=True)
+                f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:11px;"></i> 화살표 = {cmp_label} 증감</div>', unsafe_allow_html=True)
     c = st.columns(6)
     kpi(c[0], "fa-won-sign", "광고비", money(ad), "원", chg=ad_c, chg_dir=ad_d)
     kpi(c[1], "fa-comment-dots", "문의", f"{n_inq}", "건", *delta_str(n_inq, n_inq_p, "cnt"))
@@ -2328,7 +2331,7 @@ def render_ad_tab(media, full):
     _note = ("※ 네이버 광고비에는 <b>브랜드검색(월정액)</b>이 키워드 데이터에 포함되지 않아, 메인 등 일부 광고비가 실제보다 적게 표시될 수 있습니다."
              if media == "네이버" else
              "※ 구글 광고비는 <b>VAT 제외</b> 기준입니다(부가세 포함 시트·실결제액과 최대 10% 차이).")
-    st.markdown(f'<div style="font-size:11.5px;color:{MUTED};margin:2px 0 14px;">{_note}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:12px;color:{MUTED};margin:2px 0 14px;">{_note}</div>', unsafe_allow_html=True)
 
     # ── 광고비 추세 (오늘/어제 → 최근 7일 일별 / 올해·장기 → 월별로 통일) ──
     is_single = (start == end)                              # 오늘 또는 어제
