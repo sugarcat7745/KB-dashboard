@@ -15,6 +15,25 @@ except ImportError:
 
 st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="⚖️", layout="wide")
 
+# ── 폰트·아이콘 로딩 (강건화) ─────────────────────────────────────────
+# @import를 <style>에 주입하면 Streamlit Cloud에서 자주 무시돼 시스템 폰트로 폴백된다
+# (한글이 맑은고딕 등으로 떨어지고, 로드 안 된 굵기는 가짜 볼드로 뭉개짐).
+# → 부모 문서 <head>에 <link>로 직접 주입하고, 실제 사용하는 굵기(400~900)를 모두 로드한다.
+components.html("""
+<script>
+const head = window.parent.document.head;
+const add = (rel, href, cross) => {
+  if ([...head.querySelectorAll('link')].some(l => l.href === href)) return;
+  const l = document.createElement('link'); l.rel = rel; l.href = href;
+  if (cross) l.crossOrigin = 'anonymous'; head.appendChild(l);
+};
+add('preconnect', 'https://fonts.googleapis.com');
+add('preconnect', 'https://fonts.gstatic.com', true);
+add('stylesheet', 'https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;600;700&family=Noto+Sans+KR:wght@400;500;600;700;800;900&display=swap');
+add('stylesheet', 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css');
+</script>
+""", height=0)
+
 
 # ══════════════════════════════════════════════
 # 상수
@@ -42,8 +61,6 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly",
 # ══════════════════════════════════════════════
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@500;600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap');
-@import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css');
 .stApp {{ background:{BG};
   background-image: radial-gradient(ellipse 90% 55% at 50% -8%, rgba(210,170,80,0.08), transparent 55%),
                     radial-gradient(rgba(210,170,80,0.022) 1px, transparent 1px);
@@ -1240,8 +1257,9 @@ def sortable_table(columns, rows, height=420):
         tds = "".join(f'<td data-s="{s}">{d}</td>' for d, s in row)
         trs += f"<tr>{tds}</tr>"
     html = f"""<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
   body{{margin:0;font-family:'Noto Sans KR',-apple-system,sans-serif;background:transparent;}}
   table{{width:100%;border-collapse:collapse;font-size:13px;color:#E8E4DA;}}
   th,td{{padding:9px 12px;border-bottom:1px solid #2A2A26;text-align:right;white-space:nowrap;}}
@@ -1674,7 +1692,6 @@ def render_brief():
         rate = ts / tb * 100 if tb else 0
         rc = CORAL if rate >= 100 else (GOLD_B if rate >= 70 else GOLD)
         st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 어제({yday:%m/%d}) 네이버 캠페인 예산 대비 소진률</div>', unsafe_allow_html=True)
-        st.caption("네이버 캠페인 한정")
         bb["rate"] = bb.apply(lambda r: (float(r["spent"]) / float(r["daily_budget"]) * 100) if r["daily_budget"] else 0, axis=1)
         bb = bb.sort_values("rate", ascending=False).head(7)
         rows = ""
@@ -2304,8 +2321,8 @@ def render_ad_tab(media, full):
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
     kpi(c[1], "fa-eye", "노출수", money(ti), "", *delta_str(ti, pti, "num"))
     kpi(c[2], "fa-hand-pointer", "클릭수", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
-    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
-    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won", invert=True))
+    kpi(c[3], "fa-percent", "클릭률(CTR)", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
+    kpi(c[4], "fa-coins", "클릭당비용(CPC)", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won", invert=True))
 
     # 매체별 광고비 함정 안내 (총광고비·ROAS 해석 시 참고)
     _note = ("※ 네이버 광고비에는 <b>브랜드검색(월정액)</b>이 키워드 데이터에 포함되지 않아, 메인 등 일부 광고비가 실제보다 적게 표시될 수 있습니다."
@@ -2398,18 +2415,13 @@ def render_etc():
     pti = pdf["impressions"].sum() if not pdf.empty else 0
     ptk = pdf["clicks"].sum() if not pdf.empty else 0
     pctr = ptk/pti*100 if pti else 0; pcpc = ptc/ptk if ptk else 0
-    ai_banner(
-        f"기타매체(카카오/모비온 등). 기간 {s}~{e}. 광고비 {tc:,.0f}원(직전 {ptc:,.0f}원), "
-        f"노출 {ti:,.0f}, 클릭 {tk:,.0f}, CTR {ctr:.2f}%, CPC {cpc:,.0f}원.",
-        "광고-기타", f"{s}~{e}",
-        focus="기타매체 광고 효율을 차분히 평가하고 개선 방향을 1가지 제안하라.")
     cmp_caption(f"직전 {span}일 대비")
     c = st.columns(5)
     kpi(c[0], "fa-won-sign", "광고비", money(tc), "원", *delta_str(tc, ptc, "money"))
     kpi(c[1], "fa-eye", "노출", f"{int(ti):,}", "", *delta_str(ti, pti, "num"))
     kpi(c[2], "fa-hand-pointer", "클릭", f"{int(tk):,}", "", *delta_str(tk, ptk, "num"))
-    kpi(c[3], "fa-percent", "CTR", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
-    kpi(c[4], "fa-coins", "CPC", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won", invert=True))
+    kpi(c[3], "fa-percent", "클릭률(CTR)", f"{ctr:.2f}", "%", *delta_str(ctr, pctr, "pct"))
+    kpi(c[4], "fa-coins", "클릭당비용(CPC)", f"{cpc:,.0f}", "원", *delta_str(cpc, pcpc, "won", invert=True))
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 광고비</div>', unsafe_allow_html=True)
     cmap = {"카카오모먼트": GOLD, "모비온": TEAL, "메타": CORAL}
@@ -2593,8 +2605,6 @@ def render_inquiries():
                 st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
             else:
                 st.caption("계약 기록 없음")
-    else:
-        st.caption("💡 이름을 검색하면 그 사람의 문의 이력 + 계약 + 미수금을 한 화면에서 대조합니다.")
 
 
 def render_welcome_splash(user):
@@ -2602,36 +2612,19 @@ def render_welcome_splash(user):
     logo = get_logo()
     logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:72px;margin-bottom:26px;">'
                  if logo else '<div class="serif" style="font-size:30px;color:#D2AA50;margin-bottom:26px;">법무법인 KB</div>')
-    msgs = [
-        "안녕하세요, 법무법인 KB 담당자님 ☀️",
-        "KB 담당자님, 오늘도 좋은 하루 되세요 😊",
-        "KB 담당자님, 환영합니다 🙌",
-        "오늘의 성과를 정성껏 준비했습니다 ✨",
-        "좋은 소식이 기다리고 있길 바랍니다 🍀",
-        "차 한잔의 여유와 함께 시작하세요 ☕",
-        "KB 담당자님, 오늘도 수임 가득한 하루 되세요 ⚖️",
-        "KB 담당자님, 만나뵙게 되어 반갑습니다 😊",
-        "오늘도 우상향하는 하루 되시길 바랍니다 📈",
-        "KB 담당자님, 편안히 살펴보세요 🌿",
-    ]
-    msg = random.choice(msgs)
     st.markdown(f"""
     <style>
-      @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(26px); }} to {{ opacity:1; transform:translateY(0); }} }}
-      @keyframes glow {{ 0%,100% {{ opacity:.5; }} 50% {{ opacity:1; }} }}
+      @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(18px); }} to {{ opacity:1; transform:translateY(0); }} }}
     </style>
-    <div style="position:fixed;inset:0;background:radial-gradient(circle at 50% 38%,#16140f 0%,#0a0a08 70%);
+    <div style="position:fixed;inset:0;background:radial-gradient(circle at 50% 40%,#16140f 0%,#0a0a08 70%);
       display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;">
-      <div style="text-align:center;">
-        <div style="animation:fadeUp .9s ease;">{logo_html}</div>
-        <div style="font-family:'Noto Serif KR',serif;font-size:27px;color:#F0C86E;font-weight:600;
-          margin-bottom:16px;letter-spacing:-.5px;animation:fadeUp 1.3s ease;">{msg}</div>
-        <div style="font-size:13px;color:#8a8a82;animation:fadeUp 1.7s ease, glow 1.8s ease-in-out infinite 1.7s;">
-          데이터를 불러오는 중입니다…</div>
+      <div style="text-align:center;animation:fadeUp .7s ease;">{logo_html}
+        <div style="font-family:'Noto Serif KR',serif;font-size:19px;color:#F0C86E;font-weight:600;
+          margin-top:14px;letter-spacing:-.3px;">광고·매출 통합 대시보드</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
-    time.sleep(0.8)
+    time.sleep(0.5)
 
 
 # ── 새로고침해도 로그인 유지 (URL 서명 토큰) ──────────────
@@ -2692,7 +2685,6 @@ def render_login():
                 st.rerun()
             else:
                 st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
-        st.caption("🔐 계정 정보는 외부에 노출되지 않도록 안전하게 관리해 주세요.")
 
 
 def render_ai_chat():
@@ -2733,7 +2725,7 @@ def render_ai_chat():
             f'<i class="fa-solid fa-robot" style="color:#5BB4C4;margin-right:7px;"></i>{answer}</div></div>',
             unsafe_allow_html=True)
     if not st.session_state.chat_history:
-        st.caption("아직 질문이 없습니다. 위에 궁금한 점을 입력해보세요!")
+        st.caption("아직 질문이 없습니다.")
 
 
 def render_admin_log():
@@ -2977,7 +2969,7 @@ def render_contracts():
                 unsafe_allow_html=True)
         with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원  (클릭하여 펼치기)"):
             if unpaid.empty:
-                st.success("미수금이 없습니다! 전액 수금 완료!")
+                st.success("미수금이 없습니다 · 전액 수금 완료")
             else:
                 rows = "".join(
                     f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%Y-%m-%d')}</td>"
@@ -3527,8 +3519,6 @@ def render_ga4():
                                  yaxis2=dict(overlaying="y", side="right", showgrid=False),
                                  legend=dict(orientation="h", y=1.12))
             st.plotly_chart(fig_theme(fd, 280), use_container_width=True, config={"displayModeBar": False})
-            if len(dl) < 7:
-                st.caption(f"※ 현재 {len(dl)}일치 — 매일 자동으로 점이 늘어나며 추세선이 완성됩니다.")
         else:
             st.caption("추세 데이터 없음")
     except Exception as e:
@@ -3696,7 +3686,7 @@ def render_changelog():
     df = load_changes(cat)
     if df is None or df.empty:
         st.caption(f"아직 기록된 {cat} 변경사항이 없습니다."
-                   + (" 위 '기록하기'로 첫 변경을 남겨보세요!" if is_admin else ""))
+                   + (" 위 '기록하기'로 첫 변경을 남겨보세요." if is_admin else ""))
         return
 
     # ── 수정·삭제 (admin 전용) ──
@@ -3796,19 +3786,6 @@ def main():
     if st.session_state.pop("show_splash", False):
         render_welcome_splash(user)
         st.rerun()
-    # 사이드바: 계정 정보 + 로그아웃
-    with st.sidebar:
-        st.markdown(f"**👤 {user}**" + ("  ·  🛡️ 관리자" if user == "admin" else ""))
-        if st.button("🔄 데이터 새로고침", use_container_width=True,
-                     help="시트·BigQuery에서 최신 데이터를 즉시 다시 불러옵니다 (평소엔 1시간마다 자동 갱신)"):
-            st.cache_data.clear()
-            st.rerun()
-        if st.button("로그아웃", use_container_width=True):
-            for k in ("auth_user", "login_id", "login_pw"):
-                st.session_state.pop(k, None)
-            _clear_login_url()
-            st.rerun()
-
     logo = get_logo()
     logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#D2AA50;">법무법인 KB</span>'
     today = datetime.now().strftime("%Y. %m. %d")
