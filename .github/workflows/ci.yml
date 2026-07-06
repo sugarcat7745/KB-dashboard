@@ -1,0 +1,44 @@
+name: ci
+
+# main으로 가는 PR마다 자동 검사 — 문법 오류·깨진 워크플로가 병합되는 것을 차단.
+# (지난 렌더 버그처럼, 배포 전에 최대한 걸러낸다)
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: PyYAML 설치
+        run: pip install pyyaml
+
+      - name: 파이썬 문법 검사 (py_compile)
+        run: |
+          python -m py_compile \
+            app.py \
+            collect_naver.py \
+            collect_google.py \
+            collect_naver_master.py \
+            "KB_캠페인예산_수집.py"
+
+      - name: 워크플로 YAML 검사
+        run: |
+          python - <<'PY'
+          import glob, yaml, sys
+          bad = []
+          for f in glob.glob(".github/workflows/*.yml"):
+              try:
+                  yaml.safe_load(open(f))
+              except Exception as e:
+                  bad.append(f"{f}: {e}")
+          if bad:
+              print("YAML 오류:"); [print(" ", b) for b in bad]; sys.exit(1)
+          print("모든 워크플로 YAML 정상")
+          PY

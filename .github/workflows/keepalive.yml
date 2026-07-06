@@ -1,0 +1,36 @@
+name: keepalive
+
+# GitHub은 '60일간 레포 활동 없음'이면 예약(cron) 워크플로를 통째로 꺼버린다 →
+# 수집이 조용히 전면 중단. 이를 막기 위해 매월 확인해, 50일 이상 조용하면 빈 커밋 1개로 활동을 갱신.
+# 평소엔(최근 커밋 있으면) 아무 것도 하지 않는다.
+on:
+  schedule:
+    - cron: "0 5 1 * *"   # 매월 1일 UTC 05:00 = KST 14:00
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 마지막 커밋 확인 후 필요 시 빈 커밋
+        run: |
+          LAST=$(git log -1 --format=%ct)
+          NOW=$(date +%s)
+          DAYS=$(( (NOW - LAST) / 86400 ))
+          echo "마지막 커밋: ${DAYS}일 전"
+          if [ "$DAYS" -ge 50 ]; then
+            echo "50일 이상 조용 → 스케줄 유지용 빈 커밋"
+            git config user.name "keepalive-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "chore: keepalive (스케줄 유지)"
+            git push
+          else
+            echo "최근 활동 있음 → 아무 것도 하지 않음"
+          fi
