@@ -1,0 +1,49 @@
+name: bq-query
+
+# 분석용 BigQuery 조회 도구 (수동 실행 전용, 읽기 SELECT만).
+# sql 입력으로 임의 SELECT를 돌려 결과를 로그로 출력. DML/변경 쿼리는 거부.
+on:
+  workflow_dispatch:
+    inputs:
+      sql:
+        description: "읽기 전용 SELECT/WITH 쿼리"
+        required: true
+
+jobs:
+  query:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install deps
+        run: pip install google-cloud-bigquery db-dtypes
+
+      - name: Run query (SELECT only)
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          SQL_INPUT: ${{ inputs.sql }}
+        run: |
+          python - <<'PY'
+          import os, json, re
+          from google.cloud import bigquery
+          from google.oauth2 import service_account
+          sql = (os.environ.get("SQL_INPUT") or "").strip().rstrip(";").strip()
+          low = sql.lower()
+          if not (low.startswith("select") or low.startswith("with")):
+              raise SystemExit("거부: SELECT/WITH 쿼리만 허용")
+          banned = ["insert ", "update ", "delete ", "drop ", "create ", "alter ",
+                    "truncate", "merge ", "grant ", "revoke", ";", "--", "/*"]
+          if any(b in low for b in banned):
+              raise SystemExit("거부: 변경/주석/다중문 금지 (읽기 전용만)")
+          info = json.loads(os.environ["GCP_SA_JSON"])
+          creds = service_account.Credentials.from_service_account_info(info)
+          c = bigquery.Client(project="kb-dashboard-499704", credentials=creds)
+          cfg = bigquery.QueryJobConfig(maximum_bytes_billed=2*1024*1024*1024)  # 2GB 상한
+          rows = list(c.query(sql, job_config=cfg).result())
+          if not rows:
+              print("(결과 0행)"); raise SystemExit(0)
+          cols = list(rows[0].keys())
+          print(" | ".join(cols))
+          print("-" * 80)
+          for r in rows[:200]:
+              print(" | ".join(str(r[col]) for col in cols))
+          print(f"\n총 {len(rows)}행")
+          PY
