@@ -2,11 +2,13 @@ name: collect-naver-daily
 
 on:
   schedule:
-    # GitHub cron은 정시(:00) 혼잡 + 한 번이면 스킵될 때 누락 → 아침에 3번 분산(구글과 시간 어긋나게)
-    # 네이버는 데이터가 빨리 확정되므로 'GitHub 스킵 대비' 중복 실행이 목적 (idempotent라 안전)
-    - cron: "37 21 * * *"   # UTC 21:37 = KST 06:37  (1차)
-    - cron: "57 22 * * *"   # UTC 22:57 = KST 07:57  (2차)
-    - cron: "37 23 * * *"   # UTC 23:37 = KST 08:37  (출근 전 최종)
+    # GitHub 무료 플랜은 예약을 수 시간 미룸 → 아침~오전에 여러 번 분산 시도(idempotent라 안전).
+    # 지연돼도 확인 시각(~KST 10시)엔 최신 데이터가 있도록 오전 백스톱 포함.
+    - cron: "37 21 * * *"   # UTC 21:37 = KST 06:37
+    - cron: "57 22 * * *"   # UTC 22:57 = KST 07:57
+    - cron: "37 23 * * *"   # UTC 23:37 = KST 08:37
+    - cron: "13 0 * * *"    # UTC 00:13 = KST 09:13 (백스톱)
+    - cron: "13 1 * * *"    # UTC 01:13 = KST 10:13 (백스톱·확인 직전)
   workflow_dispatch: {}
 
 concurrency:
@@ -16,6 +18,9 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -33,3 +38,14 @@ jobs:
           NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
           GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
         run: python collect_naver.py
+
+      # 수집이 실패하면 조용히 넘어가지 않도록 GitHub 이슈로 알림 (수동 실행은 제외)
+      - name: 실패 시 알림 이슈
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "⚠️ 네이버 수집 실패 ($(date -u +%F))" \
+            --body "collect-naver-daily 실행이 실패했습니다. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            || echo "이슈 생성 건너뜀"
