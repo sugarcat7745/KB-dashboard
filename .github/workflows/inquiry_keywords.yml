@@ -1,0 +1,23 @@
+name: inquiry-keywords
+
+# 문의시트(통합문의)의 '검색키워드'별 문의·상담·수임 집계(읽기 전용).
+# 광고 전환(중복집계·문의까지)이 아니라 '실제 접수된 문의의 유입 키워드'로 교차검증.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  agg:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install gspread google-auth
+
+      - name: 문의 키워드 집계
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+        run: python inquiry_keywords.py
