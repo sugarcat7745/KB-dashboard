@@ -1,0 +1,31 @@
+name: naver-audit
+
+# 네이버 계정 감사(읽기 전용) — 지금 설정과 '최근 바뀐 것'을 API 원본에서 확인.
+# 수동 실행 전용. 계정을 변경하지 않음(전부 GET).
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "최근 며칠 내 변경을 표시할지 (기본 3)"
+        required: false
+        default: "3"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: 계정 감사 실행
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          AUDIT_DAYS:        ${{ inputs.days }}
+        run: python naver_audit.py
