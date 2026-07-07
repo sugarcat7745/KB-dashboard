@@ -32,7 +32,16 @@ def main():
     creds = service_account.Credentials.from_service_account_info(info)
     client = bigquery.Client(project=PROJECT, credentials=creds)
     tid = f"{PROJECT}.{DATASET}.change_log"
-    schema = [bigquery.SchemaField(f, "STRING") for f in FIELDS]
+    # 기존 테이블 스키마에 맞춤: ts는 TIMESTAMP(ISO 문자열은 BQ가 파싱), 나머지 STRING
+    schema = [
+        bigquery.SchemaField("id", "STRING"),
+        bigquery.SchemaField("ts", "TIMESTAMP"),
+        bigquery.SchemaField("user", "STRING"),
+        bigquery.SchemaField("category", "STRING"),
+        bigquery.SchemaField("title", "STRING"),
+        bigquery.SchemaField("detail", "STRING"),
+        bigquery.SchemaField("reason", "STRING"),
+    ]
     job = client.load_table_from_json(
         [row], tid,
         job_config=bigquery.LoadJobConfig(
