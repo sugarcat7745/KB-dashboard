@@ -1,0 +1,28 @@
+name: naver-campaign-keywords
+
+# 특정 네이버 캠페인의 키워드 인벤토리 덤프(읽기 전용). 확장 추천 근거용.
+on:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "캠페인 이름 부분일치 (기본 보이스피싱)"
+        required: false
+        default: "보이스피싱"
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 키워드 인벤토리
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          CAMPAIGN_FILTER:   ${{ inputs.campaign }}
+        run: python naver_campaign_keywords.py
