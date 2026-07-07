@@ -1,0 +1,34 @@
+name: google-audit
+
+# 구글 Ads 계정 감사(읽기 전용) — 지금 구조와 '최근 변경(change_event)'을 원본에서 확인.
+# 수동 실행 전용. 계정을 변경하지 않음(전부 조회).
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "최근 며칠 내 변경을 볼지 (기본 3)"
+        required: false
+        default: "3"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install google-ads
+
+      - name: 구글 계정 감사 실행
+        env:
+          GOOGLE_DEVELOPER_TOKEN:   ${{ secrets.GOOGLE_DEVELOPER_TOKEN }}
+          GOOGLE_CLIENT_ID:         ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET:     ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN:     ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GOOGLE_LOGIN_CUSTOMER_ID: ${{ secrets.GOOGLE_LOGIN_CUSTOMER_ID }}
+          GOOGLE_CUSTOMER_ID:       ${{ secrets.GOOGLE_CUSTOMER_ID }}
+          AUDIT_DAYS:               ${{ inputs.days }}
+        run: python google_audit.py
