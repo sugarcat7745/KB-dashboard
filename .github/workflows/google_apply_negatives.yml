@@ -1,0 +1,35 @@
+name: google-apply-negatives
+
+# 구글 계정 전체 제외목록에 제외키워드 일괄 추가.
+# apply=no(기본): 구글 서버 검증만(validate_only) — 실제 반영 없음.
+# apply=yes: 검증 통과 시 실제 반영. 되돌리기는 목록에서 삭제.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "실제 반영? (no=검증만 / yes=반영)"
+        required: true
+        default: "no"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install google-ads
+
+      - name: 제외키워드 반영
+        env:
+          GOOGLE_DEVELOPER_TOKEN:   ${{ secrets.GOOGLE_DEVELOPER_TOKEN }}
+          GOOGLE_CLIENT_ID:         ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET:     ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN:     ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GOOGLE_LOGIN_CUSTOMER_ID: ${{ secrets.GOOGLE_LOGIN_CUSTOMER_ID }}
+          GOOGLE_CUSTOMER_ID:       ${{ secrets.GOOGLE_CUSTOMER_ID }}
+          APPLY: ${{ inputs.apply == 'yes' && '1' || '0' }}
+        run: python google_apply_negatives.py
