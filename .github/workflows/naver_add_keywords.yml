@@ -1,0 +1,34 @@
+name: naver-add-keywords
+
+# 보이스피싱 핵심 그룹에 확장 키워드 등록.
+# apply=no(기본): 드라이런(신규/중복만 확인). apply=yes: 실제 등록. 중복은 자동 스킵.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "실제 등록? (no=드라이런 / yes=등록)"
+        required: true
+        default: "no"
+      bid:
+        description: "입찰가(원)"
+        required: false
+        default: "31250"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 키워드 등록
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          APPLY: ${{ inputs.apply == 'yes' && '1' || '0' }}
+          BID: ${{ inputs.bid }}
+        run: python naver_add_keywords.py
