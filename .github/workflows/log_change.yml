@@ -1,0 +1,41 @@
+name: log-change
+
+# 대시보드 '변경사항' 로그(change_log)에 한 건 기록. 계정 변경을 대시보드에도 남길 때 사용.
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: "변경 내용 (한 줄) *"
+        required: true
+      detail:
+        description: "상세"
+        required: false
+        default: ""
+      reason:
+        description: "이유"
+        required: false
+        default: ""
+      category:
+        description: "분류 (대시보드/광고/전략)"
+        required: false
+        default: "광고"
+
+jobs:
+  log:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install google-cloud-bigquery
+      - name: 변경사항 기록
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          TITLE:    ${{ inputs.title }}
+          DETAIL:   ${{ inputs.detail }}
+          REASON:   ${{ inputs.reason }}
+          CATEGORY: ${{ inputs.category }}
+          CHANGE_USER: claude
+        run: python log_change_entry.py
