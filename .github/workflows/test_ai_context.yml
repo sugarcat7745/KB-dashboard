@@ -1,0 +1,20 @@
+name: test-ai-context
+
+# app.py에 추가한 '카테고리별 문의/상담/수임 ↔ 광고비 교차' 로직을 실데이터로 검증(읽기 전용).
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install gspread google-cloud-bigquery google-auth db-dtypes pandas
+      - name: 컨텍스트 교차 검증
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+        run: python test_ai_context.py
