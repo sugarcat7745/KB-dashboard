@@ -406,12 +406,44 @@ def build_data_context():
                     f"{r.campaign} {int(r.cost):,}원(클릭{int(r.clk)})" for _, r in sub.iterrows()))
     except Exception:
         pass
+    # ── 카테고리별 문의·상담·수임 + 광고비 (문의 시트↔광고를 '카테고리' 공통키로 교차) ──
+    #    문의 시트엔 개별 캠페인 식별자가 없지만, 문의 카테고리와 캠페인 카테고리가 동일 별칭(CAT_ALIAS)이라
+    #    '카테고리(≈캠페인) 단위' 교차는 가능. 아래 두 줄을 대응시키면 캠페인별 효율 판단이 된다.
+    try:
+        _iq = load_inquiries()
+        if _iq is not None and not _iq.empty:
+            _recent = sorted(_iq["_ym"].unique())[-3:]
+            _rq = _iq[_iq["_ym"].isin(_recent)]
+            _cg = (_rq.groupby("category")
+                      .agg(q=("name", "size"), s=("consulted", "sum"), w=("contracted", "sum"))
+                      .sort_values("q", ascending=False))
+            P.append(f"[최근3개월({_recent[0]}~{_recent[-1]}) 카테고리별 문의/상담/수임] " + "; ".join(
+                f"{c} 문의{int(r.q)}/상담{int(r.s)}/수임{int(r.w)}" for c, r in _cg.head(20).iterrows()))
+            try:
+                _from = _recent[0] + "-01"
+                _ac = bq(f"SELECT campaign, SUM(cost) cost, SUM(clicks) clk "
+                         f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                         f"WHERE date >= '{_from}' AND campaign NOT LIKE '%월 합계%' "
+                         f"GROUP BY campaign HAVING cost > 0")
+                if not _ac.empty:
+                    _ac["cat"] = _ac["campaign"].apply(_campaign_to_category)
+                    _acc = (_ac.groupby("cat").agg(cost=("cost", "sum"), clk=("clk", "sum"))
+                               .sort_values("cost", ascending=False))
+                    P.append("[최근3개월 카테고리별 광고비(캠페인→카테고리 합산)] " + "; ".join(
+                        f"{c} {int(r.cost):,}원(클릭{int(r.clk)})" for c, r in _acc.head(20).iterrows()))
+            except Exception:
+                pass
+    except Exception:
+        pass
     P.append("[정의] 신건=온라인 광고로 유입된 신규 고객 / 파생=기존 고객의 재의뢰. 매출 기준은 기본보수액. "
              "사건유형(형사·민사·이혼 등)은 '계약' 분류이고, 광고 카테고리(교통·성범죄 등)와는 별개 체계임. "
              "광고 전환수는 부정확하여 제외함(광고비·노출·클릭·CTR·CPC만 신뢰). "
              "[데이터 적재 범위] 네이버 키워드 일별 데이터는 2024년 7월부터 존재(2024년 4~6월은 월 총비용만, keyword='(월 합계)'). "
              "구글은 2025년 2월(중순)부터 일별 데이터 존재. "
              "문의·상담·수임은 문의 시트에서, 광고비는 BigQuery+기타시트에서 직접 계산한 실데이터다(연간요약 수기입력 아님). "
+             "위에 '카테고리별 문의/상담/수임'과 '카테고리별 광고비'가 같은 카테고리 축으로 제공되므로, "
+             "캠페인(=카테고리)별 효율·부진 원인은 이 둘을 카테고리로 대응시켜 답하라(예: 금융 광고비 대비 금융 문의/상담/수임). "
+             "다만 문의 시트에는 개별 캠페인 식별자가 없어 '캠페인 하위(광고그룹·키워드)별 문의'까지는 만들 수 없다(카테고리 단위까지만 교차). "
              "매출은 계약 시트 실데이터다. 따라서 이번 달도 실시간 반영된다. "
              "더 구체적인 키워드·기간 조회가 필요하면 query_ad_keyword 도구로 직접 BigQuery를 조회할 것. "
              "데이터에 없는 기간은 '데이터에 없다'고 안내할 것.")
