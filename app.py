@@ -421,16 +421,18 @@ def build_data_context():
                 f"{c} 문의{int(r.q)}/상담{int(r.s)}/수임{int(r.w)}" for c, r in _cg.head(20).iterrows()))
             try:
                 _from = _recent[0] + "-01"
-                _ac = bq(f"SELECT campaign, SUM(cost) cost, SUM(clicks) clk "
+                _ac = bq(f"SELECT media, campaign, SUM(cost) cost, SUM(clicks) clk "
                          f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
                          f"WHERE date >= '{_from}' AND campaign NOT LIKE '%월 합계%' "
-                         f"GROUP BY campaign HAVING cost > 0")
+                         f"GROUP BY media, campaign HAVING cost > 0")
                 if not _ac.empty:
                     _ac["cat"] = _ac["campaign"].apply(_campaign_to_category)
+                    _g = _ac["media"] == "구글"          # 구글은 문의 시트 태그와 맞춰 '구글○○'로 구분
+                    _ac.loc[_g, "cat"] = _ac.loc[_g, "cat"].map(lambda x: GOOGLE_CAT_MAP.get(x, "구글" + str(x)))
                     _acc = (_ac.groupby("cat").agg(cost=("cost", "sum"), clk=("clk", "sum"))
                                .sort_values("cost", ascending=False))
-                    P.append("[최근3개월 카테고리별 광고비(캠페인→카테고리 합산)] " + "; ".join(
-                        f"{c} {int(r.cost):,}원(클릭{int(r.clk)})" for c, r in _acc.head(20).iterrows()))
+                    P.append("[최근3개월 카테고리별 광고비(캠페인→카테고리, 구글은 구글○○)] " + "; ".join(
+                        f"{c} {int(r.cost):,}원(클릭{int(r.clk)})" for c, r in _acc.head(24).iterrows()))
             except Exception:
                 pass
     except Exception:
