@@ -16,6 +16,8 @@ PROJECT = "kb-dashboard-499704"; DATASET = "kb_ads"
 INQ_SHEET_ID = "1jvOGtJrkOQSV6qLFmbR72ueB8ebDnmk9C7Z_mNEOeNA"
 CAT_ALIAS = {"일반형사": "형사", "음주운전": "음주", "외국인/출입국": "외국인",
              "교통사고": "교통", "하자/보수": "하자보수", "의료분쟁": "의료", "학폭": "학교폭력"}
+GOOGLE_CAT_MAP = {"검색광고": "구글메인", "성범죄": "구글성범죄", "부동산센터": "구글부동산",
+                  "금융": "구글금융", "형사": "구글형사", "음주": "구글음주", "학폭": "구글학폭"}
 
 _info = json.loads(os.environ["GCP_SA_JSON"])
 _bq = bigquery.Client(project=PROJECT,
@@ -119,12 +121,14 @@ def main():
         f"{c} 문의{int(r.q)}/상담{int(r.s)}/수임{int(r.w)}" for c, r in cg.head(20).iterrows()))
 
     _from = recent[0] + "-01"
-    ac = bq(f"SELECT campaign, SUM(cost) cost, SUM(clicks) clk FROM `{PROJECT}.{DATASET}.ad_keyword` "
-            f"WHERE date >= '{_from}' AND campaign NOT LIKE '%월 합계%' GROUP BY campaign HAVING cost>0")
+    ac = bq(f"SELECT media, campaign, SUM(cost) cost, SUM(clicks) clk FROM `{PROJECT}.{DATASET}.ad_keyword` "
+            f"WHERE date >= '{_from}' AND campaign NOT LIKE '%월 합계%' GROUP BY media, campaign HAVING cost>0")
     ac["cat"] = ac["campaign"].apply(campaign_to_category)
+    g = ac["media"] == "구글"
+    ac.loc[g, "cat"] = ac.loc[g, "cat"].map(lambda x: GOOGLE_CAT_MAP.get(x, "구글" + str(x)))
     acc = ac.groupby("cat").agg(cost=("cost", "sum"), clk=("clk", "sum")).sort_values("cost", ascending=False)
-    P.append("[최근3개월 카테고리별 광고비(캠페인→카테고리 합산)] " + "; ".join(
-        f"{c} {int(r.cost):,}원(클릭{int(r.clk)})" for c, r in acc.head(20).iterrows()))
+    P.append("[최근3개월 카테고리별 광고비(캠페인→카테고리, 구글은 구글○○)] " + "; ".join(
+        f"{c} {int(r.cost):,}원(클릭{int(r.clk)})" for c, r in acc.head(24).iterrows()))
 
     print("\n=== AI 컨텍스트에 들어갈 새 두 줄 ===")
     for line in P:
