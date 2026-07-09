@@ -97,6 +97,28 @@ def _post(uri, body, params=None):
     return False, None, f"{r.status_code}: {r.text[:500]}"
 
 
+def _put(uri, body, params=None):
+    h = _hdr("PUT", uri); h["Content-Type"] = "application/json; charset=UTF-8"
+    try:
+        r = requests.put(BASE + uri, headers=h, params=params or {},
+                         data=json.dumps(body, ensure_ascii=False).encode("utf-8"), timeout=60)
+    except Exception as e:
+        return False, None, f"요청 예외: {e}"
+    if r.status_code in (200, 201):
+        try:
+            return True, r.json(), ""
+        except Exception:
+            return True, None, ""
+    return False, None, f"{r.status_code}: {r.text[:500]}"
+
+
+def turn_off_campaign(cid):
+    """캠페인 OFF(일시중지)=userLock true. 검수 전 노출·소진 방지. (ok, err) 반환."""
+    ok, _res, err = _put(f"/ncc/campaigns/{cid}", {"nccCampaignId": cid, "userLock": True},
+                         params={"fields": "userLock"})
+    return ok, err
+
+
 # ── URL 치환: 옛 도메인 URL → 새 URL ────────────────────────
 def rewrite_url(u):
     """옛 도메인이 든 URL이면 새 주소로. 랜딩(경로·쿼리 있음)→NEW_FINAL_URL,
@@ -317,6 +339,12 @@ def mode_migrate():
         new_cid = res.get("nccCampaignId")
         print(f"   ✅ 새 캠페인 {new_cid}")
 
+        # 검수 전 노출·소진 방지 — 새 캠페인은 OFF(일시중지)로 둔다
+        if os.environ.get("CREATE_OFF", "1") == "1":
+            time.sleep(0.3)
+            off_ok, off_err = turn_off_campaign(new_cid)
+            print("   🔕 새 캠페인 OFF(일시중지)" if off_ok else f"   ⚠️ OFF 실패 — {off_err} (광고관리에서 직접 중지)")
+
         for g in groups:
             gid = g.get("nccAdgroupId")
             grp_body = {
@@ -360,7 +388,8 @@ def mode_migrate():
     if not APPLY:
         print("드라이런 완료 — 위 규모·치환 확인 후 apply=yes 로 실제 생성.")
     else:
-        print("완료. 기존 캠페인은 그대로 뒀다. 새 소재 검수·노출 확인 후 기존을 OFF/삭제.")
+        print("완료. 새 캠페인은 OFF(일시중지)로 뒀다. 검수·노출 확인 후 광고관리에서 ON.")
+        print("기존 캠페인은 그대로 살아있다 — 새 것 확인 후 사람이 직접 OFF/삭제.")
 
 
 def main():

@@ -87,6 +87,29 @@ def _post(uri, body):
     return False, None, f"{r.status_code}: {r.text[:500]}"
 
 
+def _put(uri, body, params=None):
+    """부분 수정 PUT. (성공여부, 응답json 또는 None, 에러텍스트)."""
+    h = _hdr("PUT", uri); h["Content-Type"] = "application/json; charset=UTF-8"
+    try:
+        r = requests.put(BASE + uri, headers=h, params=params or {},
+                         data=json.dumps(body, ensure_ascii=False).encode("utf-8"), timeout=60)
+    except Exception as e:
+        return False, None, f"요청 예외: {e}"
+    if r.status_code in (200, 201):
+        try:
+            return True, r.json(), ""
+        except Exception:
+            return True, None, ""
+    return False, None, f"{r.status_code}: {r.text[:500]}"
+
+
+def turn_off_campaign(cid):
+    """캠페인 OFF(일시중지) = userLock true. 생성 직후 검수 전 노출·소진 방지용."""
+    ok, res, err = _put(f"/ncc/campaigns/{cid}", {"nccCampaignId": cid, "userLock": True},
+                        params={"fields": "userLock"})
+    return ok, err
+
+
 def _won(v):
     try:
         return f"{int(v):,}"
@@ -206,8 +229,15 @@ def mode_create():
         return
     gid = res2.get("nccAdgroupId")
     print(f"✅ 광고그룹 생성: {gid} ({res2.get('name')})")
+
+    # 3) 검수 전 노출·소진 방지 — 기본 OFF(일시중지)
+    if os.environ.get("CREATE_OFF", "1") == "1":
+        time.sleep(0.3)
+        off_ok, off_err = turn_off_campaign(cid)
+        print("🔕 캠페인 OFF(일시중지) 처리" if off_ok else f"⚠️ OFF 처리 실패 — {off_err}\n   광고관리에서 직접 일시중지 요망")
+
     print(f"\n완료. 이 캠페인을 광고관리에서 복사해 필요한 개수만큼 늘리면 된다.")
-    print(f"되돌리기: 광고관리에서 캠페인 '{cname}' 삭제.")
+    print(f"검수·설정 확인 후 광고관리에서 ON. 되돌리기: 캠페인 '{cname}' 삭제.")
 
 
 def main():
