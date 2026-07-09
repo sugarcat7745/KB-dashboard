@@ -1,0 +1,29 @@
+name: qna-sync
+
+# QnA 게시판 → BigQuery qna_posts 동기화(대시보드 QnA 탭 코퍼스).
+# mode=seed(기본): 커밋된 qna_seed.csv 적재(보드계정 불필요). mode=live: 실시간 스크랩.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "seed(시드 적재) / live(실시간 스크랩)"
+        required: true
+        default: "seed"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install google-cloud-bigquery pandas requests beautifulsoup4 db-dtypes
+      - name: 동기화
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          MODE: ${{ inputs.mode }}
+          QNA_ID: ${{ secrets.QNA_ID }}
+          QNA_PW: ${{ secrets.QNA_PW }}
+        run: python qna_sync.py
