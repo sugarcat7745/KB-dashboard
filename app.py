@@ -3739,6 +3739,20 @@ QNA_CATS = ["형사", "성범죄", "학교폭력", "음주운전·교통사고",
             "소년범죄", "행정소송", "금융범죄", "건설·부동산분쟁", "소액및손해배상",
             "회생·파산", "외국인·출입국"]
 
+# QnA 탭 접근 허용 아이디(관리자 admin 외 추가). 회사계정 등.
+#   여기 상수에 추가하거나, Streamlit Secrets [qna_access] users = ["아이디", ...] 로도 지정 가능.
+QNA_USERS = {"lawkbsw"}
+
+
+def qna_can_see(user):
+    """QnA 탭을 볼 수 있는 사용자? admin + QNA_USERS + 시크릿 허용목록."""
+    allow = set(QNA_USERS)
+    try:
+        allow |= set(st.secrets["qna_access"]["users"])
+    except Exception:
+        pass
+    return user == "admin" or user in allow
+
 
 # ── 검증용 법조문(qna_laws.json) — AI는 이 목록 안에서만 인용, 밖이면 빨강 ──
 QNA_LAW_ALIASES = {
@@ -4475,8 +4489,9 @@ def main():
         st.rerun()
 
     is_admin = (user == "admin")
+    can_qna = qna_can_see(user)
     top_labels = ["📊 요약", "📈 광고", "💼 실적", "🌐 유입", "📝 변경", "🤖 AI"]
-    if is_admin:
+    if can_qna:
         top_labels = top_labels + ["📚 QnA"]
     top = st.tabs(top_labels)
 
@@ -4535,7 +4550,7 @@ def main():
         else:
             render_ai_chat()
 
-    if is_admin and len(top) > 6:
+    if can_qna and len(top) > 6:
         with top[6]:
             _safe(render_qna, "QnA 관리")
 
