@@ -339,14 +339,14 @@ def build_data_context():
             _t = _inq.copy()
             _t["_ym"] = pd.to_datetime(_t["date"], errors="coerce").dt.to_period("M").astype(str)
             _t = _t[_t["_ym"] != "NaT"]
-            _g = _t.groupby("_ym").agg(q=("name", "size"), s=("consulted", "sum"),
-                                       w=("contracted", "sum")).reset_index()
+            _g = _t.groupby("_ym").agg(q=("name", "size"), v=("valid", "sum"),
+                                       s=("consulted", "sum"), w=("contracted", "sum")).reset_index()
             _by = {}
             for _, r in _g.iterrows():
                 _by.setdefault(r["_ym"][:4], []).append(r)
             for yr in sorted(_by):
-                P.append(f"[{yr}년 문의·상담·수임 월별] " + "; ".join(
-                    f"{r['_ym'][5:7]}월 문의{int(r['q'])}/상담{int(r['s'])}/수임{int(r['w'])}건" for r in _by[yr]))
+                P.append(f"[{yr}년 문의·유효문의·상담·수임 월별] " + "; ".join(
+                    f"{r['_ym'][5:7]}월 문의{int(r['q'])}/유효{int(r['v'])}/상담{int(r['s'])}/수임{int(r['w'])}건" for r in _by[yr]))
     except Exception:
         pass
     # ── 월별 광고비 (BigQuery + 기타시트 직접 계산 — 연간요약 불필요!!) ──
@@ -415,10 +415,11 @@ def build_data_context():
             _recent = sorted(_iq["_ym"].unique())[-3:]
             _rq = _iq[_iq["_ym"].isin(_recent)]
             _cg = (_rq.groupby("category")
-                      .agg(q=("name", "size"), s=("consulted", "sum"), w=("contracted", "sum"))
+                      .agg(q=("name", "size"), v=("valid", "sum"),
+                           s=("consulted", "sum"), w=("contracted", "sum"))
                       .sort_values("q", ascending=False))
-            P.append(f"[최근3개월({_recent[0]}~{_recent[-1]}) 카테고리별 문의/상담/수임] " + "; ".join(
-                f"{c} 문의{int(r.q)}/상담{int(r.s)}/수임{int(r.w)}" for c, r in _cg.head(20).iterrows()))
+            P.append(f"[최근3개월({_recent[0]}~{_recent[-1]}) 카테고리별 문의/유효문의/상담/수임] " + "; ".join(
+                f"{c} 문의{int(r.q)}/유효{int(r.v)}/상담{int(r.s)}/수임{int(r.w)}" for c, r in _cg.head(20).iterrows()))
             try:
                 _from = _recent[0] + "-01"
                 _ac = bq(f"SELECT media, campaign, SUM(cost) cost, SUM(clicks) clk "
@@ -442,9 +443,13 @@ def build_data_context():
              "광고 전환수는 부정확하여 제외함(광고비·노출·클릭·CTR·CPC만 신뢰). "
              "[데이터 적재 범위] 네이버 키워드 일별 데이터는 2024년 7월부터 존재(2024년 4~6월은 월 총비용만, keyword='(월 합계)'). "
              "구글은 2025년 2월(중순)부터 일별 데이터 존재. "
-             "문의·상담·수임은 문의 시트에서, 광고비는 BigQuery+기타시트에서 직접 계산한 실데이터다(연간요약 수기입력 아님). "
-             "위에 '카테고리별 문의/상담/수임'과 '카테고리별 광고비'가 같은 카테고리 축으로 제공되므로, "
-             "캠페인(=카테고리)별 효율·부진 원인은 이 둘을 카테고리로 대응시켜 답하라(예: 금융 광고비 대비 금융 문의/상담/수임). "
+             "문의·유효문의·상담·수임은 문의 시트에서, 광고비는 BigQuery+기타시트에서 직접 계산한 실데이터다(연간요약 수기입력 아님). "
+             "[퍼널 정의] 문의=접수된 전체 문의 / 유효문의=상담 또는 수임으로 이어진 문의(상담∪수임, 진성 문의) / "
+             "상담=상담 진행 / 수임=수임완료및입금. 문의 ≥ 유효문의 ≥ 상담 ≥ 수임 순의 깔때기다. "
+             "위에 '카테고리별 문의/유효문의/상담/수임'과 '카테고리별 광고비'가 같은 카테고리 축으로 제공되므로, "
+             "캠페인(=카테고리)별 효율·부진 원인은 이 둘을 카테고리로 대응시켜 답하라. "
+             "표로 물으면 반드시 [카테고리|광고비|클릭|문의|유효문의|상담|수임]을 함께 붙여서 제시하고, "
+             "효율 판단은 '광고비 대비 유효문의·수임'(진성 기준)으로 하라(예: 금융 광고비 대비 금융 유효문의/수임). "
              "다만 문의 시트에는 개별 캠페인 식별자가 없어 '캠페인 하위(광고그룹·키워드)별 문의'까지는 만들 수 없다(카테고리 단위까지만 교차). "
              "매출은 계약 시트 실데이터다. 따라서 이번 달도 실시간 반영된다. "
              "더 구체적인 키워드·기간 조회가 필요하면 query_ad_keyword 도구로 직접 BigQuery를 조회할 것. "
@@ -937,6 +942,7 @@ def load_inquiries():
         "category": col(ti) if (ti is not None and ti in body.columns) else "",
         "consulted": nonempty(si),
         "contracted": nonempty(wi),
+        "valid": nonempty(si) | nonempty(wi),   # 유효문의 = 상담 또는 수임으로 이어진 문의
     })
     d["date"] = d["date"].ffill()
     has_content = (d["name"].str.strip() != "") | (d["keyword"].str.strip() != "")
