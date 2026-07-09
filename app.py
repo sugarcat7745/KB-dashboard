@@ -2672,19 +2672,37 @@ def render_welcome_splash(user):
     logo = get_logo()
     logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:72px;margin-bottom:26px;">'
                  if logo else '<div class="serif" style="font-size:30px;color:#D2AA50;margin-bottom:26px;">법무법인 KB</div>')
+    import random
+    msgs = [
+        "안녕하세요, 법무법인 KB 담당자님 ☀️",
+        "KB 담당자님, 오늘도 좋은 하루 되세요 😊",
+        "KB 담당자님, 환영합니다 🙌",
+        "오늘의 성과를 정성껏 준비했습니다 ✨",
+        "좋은 소식이 기다리고 있길 바랍니다 🍀",
+        "차 한잔의 여유와 함께 시작하세요 ☕",
+        "KB 담당자님, 오늘도 수임 가득한 하루 되세요 ⚖️",
+        "KB 담당자님, 만나뵙게 되어 반갑습니다 😊",
+        "오늘도 우상향하는 하루 되시길 바랍니다 📈",
+        "KB 담당자님, 편안히 살펴보세요 🌿",
+    ]
+    msg = random.choice(msgs)
     st.markdown(f"""
     <style>
-      @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(18px); }} to {{ opacity:1; transform:translateY(0); }} }}
+      @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(26px); }} to {{ opacity:1; transform:translateY(0); }} }}
+      @keyframes glow {{ 0%,100% {{ opacity:.5; }} 50% {{ opacity:1; }} }}
     </style>
-    <div style="position:fixed;inset:0;background:radial-gradient(circle at 50% 40%,#16140f 0%,#0a0a08 70%);
+    <div style="position:fixed;inset:0;background:radial-gradient(circle at 50% 38%,#16140f 0%,#0a0a08 70%);
       display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;">
-      <div style="text-align:center;animation:fadeUp .7s ease;">{logo_html}
-        <div style="font-family:'Noto Serif KR',serif;font-size:19px;color:#F0C86E;font-weight:600;
-          margin-top:14px;letter-spacing:-.3px;">광고·매출 통합 대시보드</div>
+      <div style="text-align:center;">
+        <div style="animation:fadeUp .9s ease;">{logo_html}</div>
+        <div style="font-family:'Noto Serif KR',serif;font-size:27px;color:#F0C86E;font-weight:600;
+          margin-bottom:16px;letter-spacing:-.5px;animation:fadeUp 1.3s ease;">{msg}</div>
+        <div style="font-size:13px;color:#8a8a82;animation:fadeUp 1.7s ease, glow 1.8s ease-in-out infinite 1.7s;">
+          데이터를 불러오는 중입니다…</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
-    time.sleep(0.5)
+    time.sleep(0.8)
 
 
 # ── 새로고침해도 로그인 유지 (URL 서명 토큰) ──────────────
@@ -4394,8 +4412,8 @@ def main():
         try:
             last = pd.to_datetime(bdf["collected_at"].iloc[0])
             age_h = (datetime.now() - last.to_pydatetime()).total_seconds() / 3600
-            if age_h <= 1.5:                       # 최근 수집 — 초록
-                dot, lab = "#5FB98E", "수집됨"
+            if age_h <= 1.5:                       # 최근 수집 — 초록(실시간 표기는 이때만)
+                dot, lab = "#5FB98E", "실시간 수집 중"
             elif age_h <= 6:                       # 몇 시간 지남 — 금색
                 dot, lab = "#D2AA50", f"{int(age_h)}시간 전 수집"
             else:                                  # 하루 가까이 밀림 — 경고
