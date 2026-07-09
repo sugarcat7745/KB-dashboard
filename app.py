@@ -3837,10 +3837,12 @@ def _qna_client():
     return anthropic.Anthropic(api_key=key)
 
 
-def qna_gen_questions(keyword, cat, existing_titles, n=10):
-    """공백 키워드 → 다양한 말투의 Q n개(중복 제외). 리스트 반환."""
+def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
+    """공백 키워드 → 다양한 말투의 Q n개(중복 제외). 리스트 반환.
+    client 지정 시 그 클라이언트 사용(병렬 호출용, 스레드 안전)."""
     if not HAS_ANTHROPIC:
         return ["(AI 비활성화)"]
+    cli = client or _qna_client()
     sysp = ("너는 법무법인 KB(형사·성범죄·학폭 등 형사전문) 홈페이지 QnA 질문을 만드는 카피라이터다. "
             "의뢰인(피의자·피해자)이 실제로 검색·문의하는 자연스러운 말투로, 서로 다른 유형"
             "(처벌수위형·절차형·합의형·상황서술형·걱정형·성립요건형)을 섞어 질문을 만든다. "
@@ -3849,7 +3851,7 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10):
     usr = (f"키워드: {keyword} (분류: {cat})\n"
            f"[이미 있는 제목 일부]\n" + "\n".join(existing_titles[:60]))
     try:
-        m = _qna_client().messages.create(model=MODEL_CHAT, max_tokens=1500,
+        m = cli.messages.create(model=MODEL_CHAT, max_tokens=1500,
               system=sysp, messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
         arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
@@ -3858,10 +3860,12 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10):
         return [f"(생성 오류: {e})"]
 
 
-def qna_gen_answer(title, keyword, cat):
-    """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환."""
+def qna_gen_answer(title, keyword, cat, client=None):
+    """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환.
+    실패 시 None(병렬 호출 대비 st.* 미사용). client 지정 시 그 클라이언트 사용."""
     if not HAS_ANTHROPIC:
         return None
+    cli = client or _qna_client()
     sysp = ("너는 법무법인 KB의 형사전문 변호사 원고를 쓰는 조수다. 홈페이지 QnA 답변 '초안'을 만든다. "
             "독자는 피의자·의뢰인이며, 차분하고 정직한 톤으로 방어 관점에서 쓴다. "
             "반드시 아래 JSON 스키마로만 출력하라(설명 금지):\n"
@@ -3876,13 +3880,28 @@ def qna_gen_answer(title, keyword, cat):
             "과장·확정적 법률 단정은 피하고, 각 문단은 3~4문장 존댓말 서술형으로 쓴다.")
     usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}"
     try:
-        m = _qna_client().messages.create(model=MODEL_CHAT, max_tokens=3500,
+        m = cli.messages.create(model=MODEL_CHAT, max_tokens=3500,
               system=sysp, messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
         d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
         return d
-    except Exception as e:
-        st.error(f"A 초안 생성 오류: {e}")
+    except Exception:
+        return None
+
+
+def qna_make_one(keyword, cat, existing, client=None):
+    """키워드 1개 → {kw,cat,core,title,ans,body} 완성본. 실패 시 None."""
+    try:
+        core = re.sub(r"\s*변호사$", "", str(keyword)).strip()
+        qs = qna_gen_questions(keyword, cat, existing, n=3, client=client)
+        title = next((q for q in qs if "|" in q), None) or f"{keyword} 변호사 | 처벌과 대응은?"
+        ans = qna_gen_answer(title, core, cat, client=client)
+        if not ans:
+            return None
+        body = qna_build_html(core, ans.get("intro3", []),
+                              [(s["sub"], s["paras"]) for s in ans.get("sections", [])])
+        return {"kw": keyword, "cat": cat, "core": core, "title": title, "ans": ans, "body": body}
+    except Exception:
         return None
 
 
@@ -3926,8 +3945,8 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
 
 def render_qna():
     st.markdown(f"<h3 style='color:{GOLD};margin:.2rem 0'>QnA 원고 생성</h3>", unsafe_allow_html=True)
-    st.caption("게시판 분류를 고르면 실수요 기반으로 '모자란 키워드'를 추천합니다. "
-               "확인을 누르면 질문·답변·완성본이 만들어지고, 붉게 표시된 부분은 반드시 검수 후 업로드하세요.")
+    st.caption("게시판 분류를 고르면 실수요 기반으로 '모자란 키워드' 10개를 추천합니다. "
+               "확인 한 번에 10개 전부 질문·답변·완성본이 만들어지고, 붉게 표시된 부분은 반드시 검수 후 업로드하세요.")
     corpus = qna_corpus()
     if corpus.empty:
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
@@ -3965,84 +3984,90 @@ def render_qna():
     if not reco:
         st.info("‘키워드 10개 추천’을 누르면 이 게시판에 새로 쓸 키워드를 뽑아줍니다.")
         return
-    pick = st.radio("키워드 선택", reco, key="qna_pick_kw")
+    st.markdown("추천 키워드 " + "  ·  ".join(f"`{k}`" for k in reco))
 
-    # ── 3) 확인 → 질문·답변·완성본 ──
-    if st.button("✅ 확인 — 질문·답변·완성본 생성", key="qna_make", type="primary"):
-        with st.spinner("질문·답변·완성본 생성 중… (30초 내외)"):
-            core = re.sub(r"\s*변호사$", "", str(pick)).strip()
-            qs = qna_gen_questions(pick, sel, existing, n=3)
-            title = next((q for q in qs if "|" in q), None) or f"{pick} 변호사 | 처벌과 대응은?"
-            ans = qna_gen_answer(title, core, sel)
-            if ans:
-                body = qna_build_html(core, ans.get("intro3", []),
-                                      [(s["sub"], s["paras"]) for s in ans.get("sections", [])])
-                st.session_state["qna_full"] = {"cat": sel, "core": core, "title": title,
-                                                "ans": ans, "body": body}
-            else:
-                st.session_state.pop("qna_full", None)
+    # ── 3) 확인 → 10개 전부 질문·답변·완성본 (병렬 생성) ──
+    if st.button("✅ 확인 — 추천 10개 전부 질문·답변·완성본 생성", key="qna_make", type="primary"):
+        from concurrent.futures import ThreadPoolExecutor
+        try:
+            client = _qna_client()
+        except Exception:
+            client = None
+        with st.spinner(f"{len(reco)}개 원고 동시 생성 중… (1분 내외)"):
+            with ThreadPoolExecutor(max_workers=5) as ex:
+                items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client), reco))
+        st.session_state["qna_full"] = {"cat": sel, "items": [it for it in items if it]}
 
     full = st.session_state.get("qna_full")
     if not full or full.get("cat") != sel:
         return
-    cat, core, title, ans, body = (full["cat"], full["core"], full["title"],
-                                   full["ans"], full["body"])
+    items = full.get("items", [])
+    if not items:
+        st.error("생성에 실패했습니다. 다시 시도하거나 키워드를 새로고침하세요.")
+        return
 
-    st.divider()
-    # 질문(Q)
-    st.markdown("**❓ 질문(Q)**")
-    st.markdown(f"<div style='border:1px solid {LINE};border-radius:8px;padding:12px 14px;"
-                f"background:{SURF2}'><b style='color:{GOLD}'>[{cat}]</b> &nbsp;{title}</div>",
-                unsafe_allow_html=True)
-    # 답변(A) — 읽기용
-    st.markdown("**💬 답변(A) 초안**")
-    md = "**핵심 요약**\n\n" + "\n".join(f"- {x}" for x in ans.get("intro3", [])) + "\n\n"
-    for s in ans.get("sections", []):
-        md += f"**{core} | {s['sub']}**\n\n" + "\n\n".join(s.get("paras", [])) + "\n\n"
-    st.markdown(md)
-    # 완성본(업로드 골격 그대로)
-    st.markdown("**🧩 완성본** (게시판에 올라갈 실제 골격)")
-    prev = (f"<div style='border:1px solid {LINE};border-radius:8px;padding:16px;"
-            f"background:{SURF};max-height:460px;overflow:auto'>"
-            f"<div style='color:{GOLD};font-weight:700'>[분류: {cat}]</div>"
-            f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{body}</div>")
-    components.html(prev, height=480, scrolling=True)
-
-    # 검수 필요 부분 — 빨간색
     RED = "#E5484D"
-    laws = ans.get("laws", []) or ["(모델이 인용한 법조문 없음 — 직접 확인 필요)"]
-    st.markdown(
-        f"<div style='border:2px solid {RED};border-radius:8px;padding:12px 14px;background:#2A1416'>"
-        f"<b style='color:{RED}'>🔴 검수 필요 — 게시 전 안대표님 확인</b>"
-        f"<div style='color:{MUTED};font-size:.85rem;margin:.2rem 0 .5rem'>"
-        f"AI가 인용한 법조문입니다. 법명·조문번호·최신 개정 여부를 반드시 확인하세요."
-        f" (‘★’ 표시는 모델이 스스로 불확실하다고 남긴 것)</div><ul style='margin:0'>"
-        + "".join(f"<li style='color:{RED}'>{l}</li>" for l in laws)
-        + "</ul></div>", unsafe_allow_html=True)
-
-    # ── 4) 업로드 ──
-    st.markdown("**4) 업로드**")
-    tags = [core] + [t.strip() for t in st.text_input(
-        "해시태그(쉼표)", value=f"{core},{cat},형사전문변호사", key="qna_tags").split(",") if t.strip()]
-    ok = st.checkbox("위 🔴 검수 항목을 확인했고, 이 원고를 게시하는 데 동의합니다.", key="qna_confirm")
     cid, _ = _qna_creds()
-    if not cid:
-        st.info("업로드하려면 Streamlit Secrets에 [qna_board] id/pw 를 추가하세요.")
-    if st.button("🚀 게시판에 업로드", key="qna_upload_btn", disabled=not (ok and cid),
-                 type="primary"):
-        try:
-            with st.spinner("업로드 중…"):
-                wid = qna_upload(title, cat, body, tags)
-            st.success(f"업로드 완료! wr_id={wid} · {QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wid}")
-            st.balloons()
-            try:
-                log_change(st.session_state.get("auth_user", "admin"), "QnA",
-                           f"QnA 게시: {title}", f"wr_id={wid} 분류={cat}", "실수요 기반 원고")
-            except Exception:
-                pass
-            st.session_state.pop("qna_full", None)
-        except Exception as e:
-            st.error(f"업로드 실패: {e}")
+    st.divider()
+    st.markdown(f"**생성 완료 {len(items)}개** — 각 원고를 펼쳐 검수 후 개별 업로드하세요."
+                + ("" if cid else "  ·  ⚠️ 업로드는 Secrets `[qna_board] id/pw` 설정 후 활성화됩니다."))
+
+    for i, it in enumerate(items):
+        cat, core, title, ans, body = it["cat"], it["core"], it["title"], it["ans"], it["body"]
+        posted = st.session_state.get(f"qna_posted_{i}")
+        head = f"{'✅ 게시됨 · ' if posted else ''}{i+1}. {title}"
+        with st.expander(head, expanded=(i == 0 and not posted)):
+            # 질문(Q)
+            st.markdown(f"<div style='border:1px solid {LINE};border-radius:8px;padding:10px 12px;"
+                        f"background:{SURF2}'><b style='color:{GOLD}'>❓ [{cat}]</b> &nbsp;{title}</div>",
+                        unsafe_allow_html=True)
+            # 답변(A) — 읽기용
+            md = "**💬 답변(A) 초안 · 핵심 요약**\n\n" + "\n".join(f"- {x}" for x in ans.get("intro3", [])) + "\n\n"
+            for s in ans.get("sections", []):
+                md += f"**{core} | {s['sub']}**\n\n" + "\n\n".join(s.get("paras", [])) + "\n\n"
+            st.markdown(md)
+            # 완성본
+            st.markdown("**🧩 완성본** (게시판 골격)")
+            prev = (f"<div style='border:1px solid {LINE};border-radius:8px;padding:14px;"
+                    f"background:{SURF};max-height:380px;overflow:auto'>"
+                    f"<div style='color:{GOLD};font-weight:700'>[분류: {cat}]</div>"
+                    f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{body}</div>")
+            components.html(prev, height=400, scrolling=True)
+            # 검수 필요 — 빨강
+            laws = ans.get("laws", []) or ["(모델이 인용한 법조문 없음 — 직접 확인 필요)"]
+            st.markdown(
+                f"<div style='border:2px solid {RED};border-radius:8px;padding:10px 12px;background:#2A1416'>"
+                f"<b style='color:{RED}'>🔴 검수 필요 — 게시 전 확인</b>"
+                f"<div style='color:{MUTED};font-size:.82rem;margin:.2rem 0 .4rem'>"
+                f"법명·조문번호·최신 개정 여부를 확인하세요. ‘★’는 모델이 불확실하다고 남긴 부분입니다.</div>"
+                f"<ul style='margin:0'>"
+                + "".join(f"<li style='color:{RED}'>{l}</li>" for l in laws)
+                + "</ul></div>", unsafe_allow_html=True)
+            # 업로드(개별)
+            tags = [core] + [t.strip() for t in st.text_input(
+                "해시태그(쉼표)", value=f"{core},{cat},형사전문변호사",
+                key=f"qna_tags_{i}").split(",") if t.strip()]
+            if posted:
+                st.success(f"게시 완료 · {QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={posted}")
+            else:
+                ok = st.checkbox("🔴 검수 항목을 확인했고, 이 원고를 게시하는 데 동의합니다.",
+                                 key=f"qna_confirm_{i}")
+                if not cid:
+                    st.info("업로드하려면 Streamlit Secrets에 [qna_board] id/pw 를 추가하세요.")
+                if st.button("🚀 이 원고 업로드", key=f"qna_upbtn_{i}",
+                             disabled=not (ok and cid), type="primary"):
+                    try:
+                        with st.spinner("업로드 중…"):
+                            wid = qna_upload(title, cat, body, tags)
+                        st.session_state[f"qna_posted_{i}"] = wid
+                        try:
+                            log_change(st.session_state.get("auth_user", "admin"), "QnA",
+                                       f"QnA 게시: {title}", f"wr_id={wid} 분류={cat}", "실수요 기반 원고")
+                        except Exception:
+                            pass
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"업로드 실패: {e}")
 
 
 
