@@ -30,6 +30,14 @@ on:
         description: "[migrate] 새 랜딩 URL 전체(utm 포함, utm_term={keyword} 유지)"
         required: false
         default: ""
+      copy_groups:
+        description: "[migrate] 그룹·키워드·소재도 복제? no=캠페인만 생성"
+        required: false
+        default: "yes"
+      exclude_name:
+        description: "[migrate] 이 문자열이 이름에 있으면 원본에서 제외(예: 신채널)"
+        required: false
+        default: ""
       limit_groups:
         description: "[migrate] 파일럿: 앞 N개 그룹만(0=전체)"
         required: false
@@ -56,5 +64,7 @@ jobs:
           NEW_CAMPAIGN_NAME: ${{ inputs.new_campaign_name }}
           BIZ_CHANNEL_ID: ${{ inputs.biz_channel_id }}
           NEW_FINAL_URL: ${{ inputs.new_final_url }}
+          COPY_GROUPS: ${{ inputs.copy_groups == 'no' && '0' || '1' }}
+          EXCLUDE_NAME: ${{ inputs.exclude_name }}
           LIMIT_GROUPS: ${{ inputs.limit_groups }}
         run: python naver_migrate_channel.py
