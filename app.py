@@ -3722,6 +3722,104 @@ QNA_CATS = ["형사", "성범죄", "학교폭력", "음주운전·교통사고",
             "회생·파산", "외국인·출입국"]
 
 
+# ── 검증용 법조문(qna_laws.json) — AI는 이 목록 안에서만 인용, 밖이면 빨강 ──
+QNA_LAW_ALIASES = {
+    "성폭력범죄의처벌등에관한특례법": ["성폭력처벌법", "성폭법", "성특법"],
+    "아동·청소년의성보호에관한법률": ["아청법", "청소년성보호법", "아동청소년성보호법"],
+    "정보통신망이용촉진및정보보호등에관한법률": ["정보통신망법", "정통망법"],
+    "특정범죄가중처벌등에관한법률": ["특정범죄가중법", "특가법"],
+    "특정경제범죄가중처벌등에관한법률": ["특정경제범죄법", "특경법"],
+    "교통사고처리특례법": ["교통사고처리특례법", "교특법"],
+    "학교폭력예방및대책에관한법률": ["학교폭력예방법", "학폭법"],
+    "폭력행위등처벌에관한법률": ["폭력행위처벌법", "폭처법"],
+    "전기통신금융사기피해방지및피해금환급에관한특별법": ["통신사기피해환급법", "전기통신금융사기법"],
+    "형사소송법": ["형소법"],
+}
+
+
+@st.cache_data(ttl=3600)
+def qna_laws():
+    """검증용 법조문 파일 {분류:[{law,article,summary}]}. 없으면 {}."""
+    import os
+    for p in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "qna_laws.json"),
+              "qna_laws.json"):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            continue
+    return {}
+
+
+def qna_laws_for(cat):
+    """분류에 적용할 검증 조문(공통 + 해당 분류), 중복 제거."""
+    d = qna_laws()
+    out, seen = [], set()
+    for it in list(d.get("공통", [])) + list(d.get(cat, [])):
+        k = (it.get("law"), it.get("article"))
+        if k in seen:
+            continue
+        seen.add(k); out.append(it)
+    return out
+
+
+def qna_law_url(law, article):
+    from urllib.parse import quote
+    return (f"https://www.law.go.kr/법령/{quote(str(law).replace(' ', ''))}"
+            f"/{quote(str(article).replace(' ', ''))}")
+
+
+def qna_law_match(law_text, verified):
+    """모델이 쓴 법조문 문자열이 검증목록에 있으면 그 항목 dict, 없으면 None."""
+    s = str(law_text).replace(" ", "")
+    arts = set(re.findall(r"제\d+조(?:의\d+)?", s))
+    for v in verified:
+        vl = str(v.get("law", "")).replace(" ", "")
+        names = [vl] + QNA_LAW_ALIASES.get(vl, [])
+        name_hit = any(nm and nm in s for nm in names)
+        art_hit = str(v.get("article", "")).replace(" ", "") in arts
+        if art_hit and name_hit:
+            return v
+    return None
+
+
+@st.cache_data(ttl=1800)
+def qna_perf(days=90):
+    """게시한 QnA 글 페이지의 조회·전환(GA4). wr_id별 집계."""
+    lo, hi = _ga4_suffix(days)
+    return bq(f"""
+      WITH pv AS (
+        SELECT REGEXP_EXTRACT(
+                 (SELECT value.string_value FROM UNNEST(event_params) WHERE key='page_location'),
+                 'wr_id=([0-9]+)') AS wid,
+               event_name
+        FROM {_ga4_from()}
+        WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'
+          AND (SELECT value.string_value FROM UNNEST(event_params)
+               WHERE key='page_location') LIKE '%bo_table=QnA%'
+      )
+      SELECT wid, COUNTIF(event_name='page_view') views, COUNTIF({GA4_CONV}) conv
+      FROM pv WHERE wid IS NOT NULL GROUP BY wid ORDER BY views DESC LIMIT 100
+    """)
+
+
+def _qna_perf_panel(corpus):
+    df = qna_perf()
+    if df is None or df.empty:
+        st.info("최근 90일 QnA 글 페이지 유입 데이터가 없습니다. (GA4는 2026-06-29~ 수집, 게시 후 며칠 지나면 잡힙니다)")
+        return
+    m = corpus.set_index("wr_id")["title"].astype(str).to_dict() if (not corpus.empty and "wr_id" in corpus) else {}
+    df["제목"] = df["wid"].map(lambda w: m.get(str(w), f"wr_id={w}"))
+    df["전환율"] = (df["conv"] / df["views"].clip(lower=1) * 100).round(1).astype(str) + "%"
+    c1, c2, c3 = st.columns(3)
+    c1.metric("추적된 QnA 글", f"{len(df):,}개")
+    c2.metric("총 조회수(90일)", f"{int(df['views'].sum()):,}")
+    c3.metric("총 전환", f"{int(df['conv'].sum()):,}")
+    st.dataframe(df.rename(columns={"views": "조회수", "conv": "전환수"})[["제목", "조회수", "전환수", "전환율"]],
+                 use_container_width=True, hide_index=True)
+    st.caption("QnA 글 페이지에서 발생한 조회·전환(전화·카톡·상담). 어떤 주제가 유입을 끌었는지 → 다음 원고 우선순위 판단.")
+
+
 @st.cache_data(ttl=600)
 def qna_corpus():
     """qna_posts 코퍼스(514개 등). 테이블 없으면 빈 DF(탭이 안내만 표시)."""
@@ -3860,12 +3958,17 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
         return [f"(생성 오류: {e})"]
 
 
-def qna_gen_answer(title, keyword, cat, client=None):
+def qna_gen_answer(title, keyword, cat, client=None, verified=None):
     """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환.
-    실패 시 None(병렬 호출 대비 st.* 미사용). client 지정 시 그 클라이언트 사용."""
+    실패 시 None(병렬 호출 대비 st.* 미사용). client 지정 시 그 클라이언트 사용.
+    verified: 인용 허용 검증 조문 목록(이 밖은 쓰지 말라고 지시)."""
     if not HAS_ANTHROPIC:
         return None
     cli = client or _qna_client()
+    vtxt = ""
+    if verified:
+        vtxt = "\n\n[검증된 법조문 — 반드시 이 목록 안에서만 인용]\n" + "\n".join(
+            f"- {v['law']} {v['article']} ({v.get('summary', '')})" for v in verified)
     sysp = ("너는 법무법인 KB의 형사전문 변호사 원고를 쓰는 조수다. 홈페이지 QnA 답변 '초안'을 만든다. "
             "독자는 피의자·의뢰인이며, 차분하고 정직한 톤으로 방어 관점에서 쓴다. "
             "반드시 아래 JSON 스키마로만 출력하라(설명 금지):\n"
@@ -3876,9 +3979,11 @@ def qna_gen_answer(title, keyword, cat, client=None):
             '{"sub":"변호사 선임이 필요한 이유","paras":["...","..."]},'
             '{"sub":"법무법인 KB의 강점","paras":["...","..."]}],'
             '"laws":["인용한 법조문(정확한 법명·조문번호). 최근 개정이 얽히면 \'★개정 확인 필요\' 표기"]}\n'
-            "핵심 사항에는 반드시 관련 법조문을 정확히 인용하라. 확실하지 않은 조문·개정은 laws에 '★확인'으로 남겨라. "
-            "과장·확정적 법률 단정은 피하고, 각 문단은 3~4문장 존댓말 서술형으로 쓴다.")
-    usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}"
+            "핵심 사항에는 반드시 관련 법조문을 인용하라. **법조문은 아래 [검증된 법조문] 목록 안에서만 골라 인용하고, "
+            "목록에 없는 조문은 쓰지 마라.** 목록 밖 조문이 꼭 필요하면 laws 항목 맨 앞에 '★미검증:'을 붙여라. "
+            "형량·개정의 최신 수치는 확정적으로 단정하지 말고 '~에 처해질 수 있습니다'처럼 서술하라. "
+            "각 문단은 3~4문장 존댓말 서술형으로 쓴다.")
+    usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}" + vtxt
     try:
         m = cli.messages.create(model=MODEL_CHAT, max_tokens=3500,
               system=sysp, messages=[{"role": "user", "content": usr}])
@@ -3895,7 +4000,7 @@ def qna_make_one(keyword, cat, existing, client=None):
         core = re.sub(r"\s*변호사$", "", str(keyword)).strip()
         qs = qna_gen_questions(keyword, cat, existing, n=3, client=client)
         title = next((q for q in qs if "|" in q), None) or f"{keyword} 변호사 | 처벌과 대응은?"
-        ans = qna_gen_answer(title, core, cat, client=client)
+        ans = qna_gen_answer(title, core, cat, client=client, verified=qna_laws_for(cat))
         if not ans:
             return None
         body = qna_build_html(core, ans.get("intro3", []),
@@ -3953,6 +4058,11 @@ def render_qna():
     cc = corpus["cat"].value_counts() if not corpus.empty else pd.Series(dtype=int)
     existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
 
+    # ── 게시 성과(GA4) — 어떤 QnA가 유입을 끌었나 (접이식) ──
+    if st.toggle("📈 게시한 QnA 성과 보기 (GA4 · 조회·전환)", key="qna_perf_toggle"):
+        _qna_perf_panel(corpus)
+        st.divider()
+
     # ── 1) 게시판 분류 선택 (현재 글 수 표시) ──
     st.markdown("**1) 게시판 분류** · 괄호 안은 현재 등록된 글 수")
     sel = st.session_state.get("qna_sel_cat")
@@ -4009,19 +4119,26 @@ def render_qna():
     RED = "#E5484D"; OKC = "#3DB47E"
     cid, _ = _qna_creds()
 
-    def _law_uncertain(l):
-        s = str(l)
-        return ("★" in s) or ("확인" in s) or ("개정" in s)
+    def _split_laws(item):
+        """편집된 laws를 검증 목록과 대조 → (미검증=빨강 str리스트, 검증됨=(str,hit) 리스트)."""
+        vr = qna_laws_for(item["cat"])
+        need, okl = [], []
+        for l in item["ans"].get("laws", []):
+            hit = qna_law_match(l, vr)
+            if hit and "★" not in str(l):
+                okl.append((l, hit))
+            else:
+                need.append(l)
+        return need, okl
 
-    # ── 요약 목록 (제목 · 검수 배지 · 승인 체크) ──
+    # ── 요약 목록 (제목 · 검증 배지 · 승인 체크) ──
     st.divider()
     done_n = sum(1 for i in range(len(items)) if st.session_state.get(f"qna_posted_{i}"))
-    st.markdown(f"**생성 완료 {len(items)}개** · 게시됨 {done_n}개 — 아래 목록에서 검수 후 "
+    st.markdown(f"**생성 완료 {len(items)}개** · 게시됨 {done_n}개 — 상세에서 검수·수정 후 "
                 "‘승인’을 체크하고, 맨 아래에서 한 번에 업로드하세요."
                 + ("" if cid else "  ·  ⚠️ 업로드는 Secrets `[qna_board] id/pw` 설정 후 활성화."))
     for i, it in enumerate(items):
-        laws = it["ans"].get("laws", [])
-        nred = sum(1 for l in laws if _law_uncertain(l))
+        need, _okl = _split_laws(it)
         posted = st.session_state.get(f"qna_posted_{i}")
         c0, c1 = st.columns([0.1, 0.9])
         if posted:
@@ -4032,52 +4149,73 @@ def render_qna():
         else:
             c0.checkbox("승인", key=f"qna_confirm_{i}", label_visibility="collapsed",
                         disabled=not cid)
-            badge = (f"<span style='color:{RED};font-weight:700'>🔴 검수 {nred}건</span>"
-                     if nred else f"<span style='color:{OKC}'>✓ 법조문 특이사항 없음</span>")
+            badge = (f"<span style='color:{RED};font-weight:700'>🔴 미검증 조문 {len(need)}건</span>"
+                     if need else f"<span style='color:{OKC}'>✓ 검증된 조문만 인용</span>")
             c1.markdown(f"{i+1}. {it['title']} &nbsp; {badge}", unsafe_allow_html=True)
 
-    # ── 상세 보기 (드롭다운으로 1개만) ──
+    # ── 상세 보기·수정 (드롭다운으로 1개만) ──
     st.divider()
-    sidx = st.selectbox("🔎 원고 상세 보기 / 검수", list(range(len(items))),
+    sidx = st.selectbox("🔎 원고 상세 · 검수 · 수정", list(range(len(items))),
                         format_func=lambda i: f"{i+1}. {items[i]['title']}", key="qna_detail_sel")
-    it = items[sidx]
-    cat, core, title, ans, body = it["cat"], it["core"], it["title"], it["ans"], it["body"]
-    # 질문(Q)
-    st.markdown(f"<div style='border:1px solid {LINE};border-radius:8px;padding:10px 12px;"
-                f"background:{SURF2}'><b style='color:{GOLD}'>❓ [{cat}]</b> &nbsp;{title}</div>",
-                unsafe_allow_html=True)
-    # 답변(A)
-    md = "**💬 답변(A) 초안 · 핵심 요약**\n\n" + "\n".join(f"- {x}" for x in ans.get("intro3", [])) + "\n\n"
-    for s in ans.get("sections", []):
-        md += f"**{core} | {s['sub']}**\n\n" + "\n\n".join(s.get("paras", [])) + "\n\n"
-    st.markdown(md)
-    # 검수 — 불확실만 빨강, 나머지는 회색 참고
-    laws = ans.get("laws", [])
-    need = [l for l in laws if _law_uncertain(l)]
-    refs = [l for l in laws if not _law_uncertain(l)]
+    it = items[sidx]; cat = it["cat"]; core = it["core"]; ans = it["ans"]
+    st.caption("아래 내용은 바로 고칠 수 있습니다. 수정하면 완성본·업로드에 자동 반영됩니다.")
+
+    title = st.text_input("❓ 제목(Q)", value=it["title"], key=f"qna_e_title_{sidx}")
+    intro_txt = st.text_area("💬 핵심 요약 (줄당 1개)", value="\n".join(ans.get("intro3", [])),
+                             key=f"qna_e_intro_{sidx}", height=90)
+    intro3 = [x.strip() for x in intro_txt.splitlines() if x.strip()]
+    sections = []
+    for si, s in enumerate(ans.get("sections", [])):
+        ptxt = st.text_area(f"📄 {core} | {s['sub']}  (문단은 빈 줄로 구분)",
+                            value="\n\n".join(s.get("paras", [])),
+                            key=f"qna_e_sec_{sidx}_{si}", height=150)
+        sections.append({"sub": s["sub"], "paras": [p.strip() for p in ptxt.split("\n\n") if p.strip()]})
+    laws_txt = st.text_area("⚖️ 인용 법조문 (줄당 1개) — 편집 가능",
+                            value="\n".join(ans.get("laws", [])),
+                            key=f"qna_e_laws_{sidx}", height=110)
+    laws = [x.strip() for x in laws_txt.splitlines() if x.strip()]
+
+    # 편집 결과를 세션 아이템에 반영 → 완성본·업로드·목록배지에 즉시 사용
+    it["title"] = title
+    it["ans"]["intro3"] = intro3
+    it["ans"]["sections"] = sections
+    it["ans"]["laws"] = laws
+    it["body"] = qna_build_html(core, intro3, [(s["sub"], s["paras"]) for s in sections])
+
+    # 법조문 검증 표시 (미검증=빨강, 검증됨=회색+공식링크)
+    need, okl = _split_laws(it)
     if need:
         st.markdown(
             f"<div style='border:2px solid {RED};border-radius:8px;padding:10px 12px;background:#2A1416'>"
-            f"<b style='color:{RED}'>🔴 반드시 확인 ({len(need)}건)</b>"
+            f"<b style='color:{RED}'>🔴 미검증 조문 {len(need)}건 — 게시 전 반드시 확인</b>"
             f"<div style='color:{MUTED};font-size:.82rem;margin:.2rem 0 .4rem'>"
-            f"모델이 불확실(★)하다고 표시했거나 개정이 얽힌 부분입니다.</div><ul style='margin:0'>"
+            f"검증 파일(qna_laws.json)에 없거나 ★로 표시된 조문입니다. 법명·조문번호를 확인하고 위 칸을 고치세요."
+            f"</div><ul style='margin:0'>"
             + "".join(f"<li style='color:{RED}'>{l}</li>" for l in need)
             + "</ul></div>", unsafe_allow_html=True)
-    elif laws:
-        st.markdown(f"<div style='color:{OKC}'>✓ 불확실 표시된 법조문 없음 — 그래도 게시 전 최종 확인 권장</div>",
-                    unsafe_allow_html=True)
-    if refs:
-        st.markdown(f"<div style='border:1px solid {LINE};border-radius:8px;padding:8px 12px;margin-top:6px'>"
-                    f"<b style='color:{MUTED}'>인용 법조문(참고)</b><ul style='margin:0;color:{MUTED}'>"
-                    + "".join(f"<li>{l}</li>" for l in refs) + "</ul></div>", unsafe_allow_html=True)
+    if okl:
+        lis = "".join(
+            f"<li style='color:{MUTED}'>{l} &nbsp;·&nbsp;"
+            f"<a href='{qna_law_url(h['law'], h['article'])}' style='color:{GOLD}'>law.go.kr 확인</a></li>"
+            for l, h in okl)
+        st.markdown(
+            f"<div style='border:1px solid {LINE};border-radius:8px;padding:8px 12px;margin-top:6px'>"
+            f"<b style='color:{OKC}'>✓ 검증된 조문 {len(okl)}건</b>"
+            f"<div style='color:{MUTED};font-size:.8rem'>조문 번호는 검증 파일과 일치. 형량·최신 개정은 링크에서 확인하세요.</div>"
+            f"<ul style='margin:0'>{lis}</ul></div>", unsafe_allow_html=True)
     if not laws:
-        st.info("모델이 인용한 법조문이 없습니다 — 본문에 근거 조문을 직접 확인/추가하세요.")
-    # 완성본 — 평소 접어둠(토글)
+        st.info("인용 법조문이 없습니다 — 위 칸에 근거 조문을 추가하세요.")
+
+    with st.expander(f"⚖️ '{cat}'에서 인용 가능한 검증 법조문 {len(qna_laws_for(cat))}개"):
+        for v in qna_laws_for(cat):
+            st.markdown(f"- **{v['law']} {v['article']}** — {v.get('summary','')} "
+                        f"[[law.go.kr]({qna_law_url(v['law'], v['article'])})]")
+
     if st.toggle("🧩 완성본(게시판 골격) 보기", key=f"qna_prev_{sidx}"):
         prev = (f"<div style='border:1px solid {LINE};border-radius:8px;padding:14px;"
                 f"background:{SURF};max-height:380px;overflow:auto'>"
                 f"<div style='color:{GOLD};font-weight:700'>[분류: {cat}]</div>"
-                f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{body}</div>")
+                f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{it['body']}</div>")
         components.html(prev, height=400, scrolling=True)
 
     # ── 일괄 업로드 ──
