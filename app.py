@@ -3928,8 +3928,30 @@ def _qna_session():
     return s
 
 
-def qna_upload(title, cat, body_html, tags):
-    """QnA 게시판에 글 등록. 성공 시 wr_id 반환."""
+def _qna_summary_field(form, soup):
+    """글쓰기 폼에서 '핵심 요약 답변' 입력칸의 name 추정. 못 찾으면 None.
+    게시판 스킨이 핵심요약을 별도 필드(wr_숫자)로 두므로 라벨 근처에서 탐색."""
+    known = {"wr_content", "wr_subject", "wr_4"}
+    for node in soup.find_all(string=re.compile("핵심|요약")):
+        cur = node.parent
+        for _ in range(6):
+            if cur is None:
+                break
+            for f in cur.find_all(["textarea", "input"]):
+                nm = f.get("name") or ""
+                if re.fullmatch(r"wr_\d+", nm) and nm not in known:
+                    return nm
+            cur = cur.parent
+    # 폴백: wr_content 외 첫 textarea(태그 필드 wr_4 제외)
+    for f in form.find_all("textarea"):
+        nm = f.get("name") or ""
+        if nm and nm not in known:
+            return nm
+    return None
+
+
+def qna_upload(title, cat, detail_html, summary_html, tags):
+    """QnA 게시판에 글 등록. 핵심요약/상세를 각 필드로 전송. 성공 시 wr_id 반환."""
     from bs4 import BeautifulSoup
     s = _qna_session()
     r = s.get(f"{QNA_BASE}/bbs/write.php?bo_table=QnA", timeout=30)
@@ -3942,9 +3964,12 @@ def qna_upload(title, cat, body_html, tags):
             continue
         data[nm] = el.get("value", "") if el.name != "textarea" else (el.text or "")
     data.update({"bo_table": "QnA", "w": "", "wr_id": "0", "ca_name": cat,
-                 "wr_subject": title, "wr_content": body_html,
-                 "wr_4": "".join(f"<li>#{t}</li>" for t in tags)})
-    data.setdefault("html", "html1")
+                 "wr_subject": title, "wr_content": detail_html,
+                 "wr_4": "".join(f"<li>#{t}</li>" for t in tags),
+                 "html": "html2"})   # html2 = HTML 허용·자동 줄바꿈(nl2br) 끔 → 이중 <br> 방지
+    sf = _qna_summary_field(form, soup)
+    if sf:
+        data[sf] = summary_html      # 핵심 요약 답변 칸
     rr = s.post(f"{QNA_BASE}/bbs/write_update.php", data=data, timeout=40,
                 headers={"Referer": f"{QNA_BASE}/bbs/write.php?bo_table=QnA"})
     m = re.search(r"wr_id=(\d+)", rr.url) or re.search(r"wr_id=(\d+)", rr.text)
@@ -3953,19 +3978,37 @@ def qna_upload(title, cat, body_html, tags):
     return m.group(1)
 
 
-# ── HTML 골격(실게시물과 동일) ─────────────────────────────────────
-def qna_build_html(keyword, intro3, sections):
-    def para(t):
-        return f'<p><span style="font-size: 18px;">{t}</span></p><br/>\n<p> </p><br/>\n'
-    out = [f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>핵심 요약 답변</h2></div>',
-           '<div class="v_box column" data-aos="fade-up"><p>%s</p></div>' % "<br/>\n".join(intro3),
-           f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>상세 답변</h2></div>',
-           '<div class="v_box column" data-aos="fade-up">']
+# ── HTML 빌더 ───────────────────────────────────────────────────────
+# 게시판 스킨이 '핵심 요약 답변'/'상세 답변' 골격(제목+박스)을 스스로 그린다.
+# 따라서 업로드 시엔 골격 없이 ①핵심요약 필드 값과 ②상세 필드(wr_content) 본문만 각각 보낸다.
+# 실게시물(정상글)과 동일하게: 빈 줄은 <p>&nbsp;</p>, 줄바꿈은 <br /> 한 번, 자동 줄바꿈(html) 끔.
+def qna_summary_html(intro3):
+    """핵심 요약 답변 필드 값 — 3줄을 <br />로 이음(스킨이 <p>로 감쌈)."""
+    return "<br />".join(x for x in intro3 if str(x).strip())
+
+
+def qna_detail_html(keyword, sections):
+    """상세 답변 필드(wr_content) 본문 — 골격 없이 소제목+문단만(정상글 포맷)."""
+    out = []
     for sub, paras in sections:
-        out.append(f'<p><h2><span style="font-size: 18px;">{keyword} | {sub}</span></h2><br/>\n<p> </p><br/>')
-        out += [para(p) for p in paras]
-    out.append('</div>')
+        out.append(f'<h2><span style="font-size: 18px;">{keyword} | {sub}</span></h2><br />')
+        out.append('<p>&nbsp;</p><br />')
+        for p in paras:
+            out.append(f'<p><span style="font-size: 18px;">{p}</span></p><br />')
+            out.append('<p>&nbsp;</p><br />')
     return "\n".join(out)
+
+
+def qna_build_html(keyword, intro3, sections):
+    """대시보드 미리보기용 — 게시판 스킨과 동일하게 핵심요약/상세 골격을 붙여 보여준다.
+    (실제 업로드는 qna_summary_html/qna_detail_html을 각 필드로 따로 전송)"""
+    summary = qna_summary_html(intro3)
+    return "\n".join([
+        f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>핵심 요약 답변</h2></div>',
+        f'<div class="v_box column" data-aos="fade-up"><p>{summary}</p></div>',
+        f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>상세 답변</h2></div>',
+        f'<div class="v_box column" data-aos="fade-up">{qna_detail_html(keyword, sections)}</div>',
+    ])
 
 
 # ── Claude 생성기 ───────────────────────────────────────────────────
@@ -4282,7 +4325,10 @@ def render_qna():
         for n, i in enumerate(approved):
             g = items[i]
             try:
-                wid = qna_upload(g["title"], g["cat"], g["body"],
+                _secs = [(s["sub"], s["paras"]) for s in g["ans"].get("sections", [])]
+                _detail = qna_detail_html(g["core"], _secs)
+                _summary = qna_summary_html(g["ans"].get("intro3", []))
+                wid = qna_upload(g["title"], g["cat"], _detail, _summary,
                                  [g["core"], g["cat"], "형사전문변호사"])
                 st.session_state[f"qna_posted_{i}"] = wid; done += 1
                 try:
