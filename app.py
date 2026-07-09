@@ -3987,16 +3987,30 @@ def qna_summary_html(intro3):
     return "<br />".join(x for x in intro3 if str(x).strip())
 
 
+def _qna_clean_sub(keyword, sub):
+    """모델이 소제목에 키워드를 이미 붙인 경우 제거 → '키워드 | 소제목' 중복 방지.
+    첫 구분자(| - — – : ·)로 나눠 왼쪽이 키워드(공백 무시 비교)면 오른쪽만 남긴다.
+    예: '재건축 조합원 제명 대응 — 핵심 사항' → '핵심 사항' (키워드 공백이 달라도 처리)."""
+    s = str(sub).strip()
+    kw_ns = re.sub(r"\s+", "", str(keyword))
+    m = re.match(r"^(.*?)\s*[|\-—–:·]+\s*(.+)$", s)
+    if m and kw_ns and re.sub(r"\s+", "", m.group(1)) == kw_ns:
+        return m.group(2).strip()
+    return s
+
+
 def qna_detail_html(keyword, sections):
-    """상세 답변 필드(wr_content) 본문 — 골격 없이 소제목+문단만(정상글 포맷)."""
+    """상세 답변 필드(wr_content) 본문 — 골격 없이 소제목+문단만(정상글 포맷).
+    개행문자를 넣지 않는다: 게시판이 자동 줄바꿈(nl2br)을 적용해도 <br> 이중이 안 되도록."""
     out = []
     for sub, paras in sections:
-        out.append(f'<h2><span style="font-size: 18px;">{keyword} | {sub}</span></h2><br />')
+        clean = _qna_clean_sub(keyword, sub)
+        out.append(f'<h2><span style="font-size: 18px;">{keyword} | {clean}</span></h2><br />')
         out.append('<p>&nbsp;</p><br />')
         for p in paras:
             out.append(f'<p><span style="font-size: 18px;">{p}</span></p><br />')
             out.append('<p>&nbsp;</p><br />')
-    return "\n".join(out)
+    return "".join(out)
 
 
 def qna_build_html(keyword, intro3, sections):
