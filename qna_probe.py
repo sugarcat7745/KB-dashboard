@@ -6,7 +6,7 @@ env: QNA_BASE(기본 lawfirmkb.com), QNA_ID, QNA_PW
 import os, re, requests
 from bs4 import BeautifulSoup
 
-BASE = os.environ.get("QNA_BASE", "https://www.lawfirmkb.com")
+BASE = os.environ.get("QNA_BASE") or "https://www.lawfirmkb.com"
 ID = os.environ["QNA_ID"]; PW = os.environ["QNA_PW"]
 
 s = requests.Session(); s.headers.update({"User-Agent": "Mozilla/5.0 Chrome/125"})
