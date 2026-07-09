@@ -4003,9 +4003,10 @@ def qna_gen_answer(title, keyword, cat, client=None, verified=None):
             '{"sub":"실제 대응 순서","paras":["첫째, ...","둘째, ...","셋째, ...","넷째, ..."]},'
             '{"sub":"변호사 선임이 필요한 이유","paras":["...","..."]},'
             '{"sub":"법무법인 KB의 강점","paras":["...","..."]}],'
-            '"laws":["인용한 법조문(정확한 법명·조문번호). 최근 개정이 얽히면 \'★개정 확인 필요\' 표기"]}\n'
+            '"laws":["인용한 법조문(정확한 법명·조문번호만. 부가 설명·★표시 금지)"]}\n'
             "핵심 사항에는 반드시 관련 법조문을 인용하라. **법조문은 아래 [검증된 법조문] 목록 안에서만 골라 인용하고, "
-            "목록에 없는 조문은 쓰지 마라.** 목록 밖 조문이 꼭 필요하면 laws 항목 맨 앞에 '★미검증:'을 붙여라. "
+            "목록에 없는 조문은 쓰지 마라.** 목록으로 충분히 답할 수 있으면 목록 밖 조문은 절대 쓰지 마라. "
+            "정말 목록에 없는 조문이 꼭 필요할 때만 laws 항목 맨 앞에 '★미검증:'을 붙여라(그 외에는 ★를 쓰지 마라). "
             "형량·개정의 최신 수치는 확정적으로 단정하지 말고 '~에 처해질 수 있습니다'처럼 서술하라. "
             "각 문단은 3~4문장 존댓말 서술형으로 쓴다.")
     usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}" + vtxt
@@ -4145,12 +4146,14 @@ def render_qna():
     cid, _ = _qna_creds()
 
     def _split_laws(item):
-        """편집된 laws를 검증 목록과 대조 → (미검증=빨강 str리스트, 검증됨=(str,hit) 리스트)."""
+        """편집된 laws를 검증 목록과 대조 → (미검증=빨강 str리스트, 검증됨=(str,hit) 리스트).
+        조문 번호가 파일과 일치하면 초록(검증). '★미검증' 접두만 강제 빨강."""
         vr = qna_laws_for(item["cat"])
         need, okl = [], []
         for l in item["ans"].get("laws", []):
+            forced = str(l).lstrip().startswith("★")
             hit = qna_law_match(l, vr)
-            if hit and "★" not in str(l):
+            if hit and not forced:
                 okl.append((l, hit))
             else:
                 need.append(l)
@@ -4162,6 +4165,16 @@ def render_qna():
     st.markdown(f"**생성 완료 {len(items)}개** · 게시됨 {done_n}개 — 상세에서 검수·수정 후 "
                 "‘승인’을 체크하고, 맨 아래에서 한 번에 업로드하세요."
                 + ("" if cid else "  ·  ⚠️ 업로드는 Secrets `[qna_board] id/pw` 설정 후 활성화."))
+    unposted = [i for i in range(len(items)) if not st.session_state.get(f"qna_posted_{i}")]
+    ac1, ac2, _ac3 = st.columns([1.1, 1, 3.9])
+    if ac1.button("☑️ 전체 승인", key="qna_approve_all", disabled=not (cid and unposted)):
+        for i in unposted:
+            st.session_state[f"qna_confirm_{i}"] = True
+        st.rerun()
+    if ac2.button("⬜ 전체 해제", key="qna_unapprove_all", disabled=not unposted):
+        for i in unposted:
+            st.session_state[f"qna_confirm_{i}"] = False
+        st.rerun()
     for i, it in enumerate(items):
         need, _okl = _split_laws(it)
         posted = st.session_state.get(f"qna_posted_{i}")
