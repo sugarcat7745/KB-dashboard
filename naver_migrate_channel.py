@@ -480,20 +480,39 @@ def mode_align():
                            {"nccAdgroupId": tgid, "name": sname, "bidAmt": sbid},
                            params={"fields": "name,bidAmt"})
         head = f"   '{tg.get('name')}' → '{sname}' | 이름·입찰 {'✅' if ok else '❌ '+err}"
-        # 2) 소재 교체
-        for a in get_ads(tgid):
-            _delete(f"/ncc/ads/{a.get('nccAdId')}"); time.sleep(0.12)
+        derrs = []
+        # 2) 소재 교체 — 기존 전부 삭제(결과 집계) 후 원본으로 재생성
+        old_ads = get_ads(tgid)
+        dok = 0
+        for a in old_ads:
+            okd, ed = _delete(f"/ncc/ads/{a.get('nccAdId')}")
+            if okd: dok += 1
+            else: derrs.append(f"소재삭제 {ed}")
+            time.sleep(0.12)
         ma, ea = clone_ads(tgid, get_ads(sgid))
-        head += f" | 소재 {ma}"
+        head += f" | 소재 삭제{dok}/{len(old_ads)}·생성{ma}"
         # 3) 확장소재 교체
-        for e in get_extensions(tgid):
-            _delete(f"/ncc/ad-extensions/{e.get('nccAdExtensionId')}"); time.sleep(0.12)
+        old_ext = get_extensions(tgid)
+        dok2 = 0
+        for e in old_ext:
+            okd, ed = _delete(f"/ncc/ad-extensions/{e.get('nccAdExtensionId')}")
+            if okd: dok2 += 1
+            else: derrs.append(f"확장삭제 {ed}")
+            time.sleep(0.12)
         me, ee = clone_extensions(tgid, get_extensions(sgid))
-        head += f" | 확장 {me}"
+        head += f" | 확장 삭제{dok2}/{len(old_ext)}·생성{me}"
+        # 4) 키워드 복제 — 대상에 없는 원본 키워드만 추가(그룹은 유지)
+        if COPY_KEYWORDS:
+            have = set(str(k.get("keyword", "")) for k in get_keywords(tgid))
+            newk = [k for k in get_keywords(sgid) if str(k.get("keyword", "")) not in have]
+            mk, ek = clone_keywords(tgid, newk) if newk else (0, [])
+            head += f" | 키워드 +{mk}"
+            derrs += [f"키워드 {x}" for x in ek]
         print(head)
-        for x in ea: print(f"        ❌ 소재: {x}")
-        for x in ee: print(f"        ❌ 확장: {x}")
-    print("\n완료. 그룹은 유지, 이름·입찰·소재·확장을 원본에 맞췄다. 키워드는 안 건드림.")
+        for x in ea: print(f"        ❌ 소재생성: {x}")
+        for x in ee: print(f"        ❌ 확장생성: {x}")
+        for x in derrs: print(f"        ❌ {x}")
+    print("\n완료. 그룹 유지 · 이름·입찰·소재·확장을 원본에 맞추고 키워드 복제(COPY_KEYWORDS).")
 
 
 def main():
