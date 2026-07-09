@@ -69,6 +69,7 @@ def load_inquiries():
         "name": col(ni), "keyword": col(ki),
         "category": col(ti) if (ti is not None and ti in body.columns) else "",
         "consulted": nonempty(si), "contracted": nonempty(wi),
+        "valid": nonempty(si) | nonempty(wi),  # 유효문의 = 상담 또는 수임으로 이어진 문의
     })
     d["date"] = d["date"].ffill()
     has = (d["name"].str.strip() != "") | (d["keyword"].str.strip() != "")
@@ -115,10 +116,11 @@ def main():
     print(f"문의행 총 {len(iq)}건 로드")
     recent = sorted(iq["_ym"].unique())[-3:]
     rq = iq[iq["_ym"].isin(recent)]
-    cg = (rq.groupby("category").agg(q=("name", "size"), s=("consulted", "sum"), w=("contracted", "sum"))
+    cg = (rq.groupby("category").agg(q=("name", "size"), v=("valid", "sum"),
+                                     s=("consulted", "sum"), w=("contracted", "sum"))
             .sort_values("q", ascending=False))
-    P.append(f"[최근3개월({recent[0]}~{recent[-1]}) 카테고리별 문의/상담/수임] " + "; ".join(
-        f"{c} 문의{int(r.q)}/상담{int(r.s)}/수임{int(r.w)}" for c, r in cg.head(20).iterrows()))
+    P.append(f"[최근3개월({recent[0]}~{recent[-1]}) 카테고리별 문의/유효문의/상담/수임] " + "; ".join(
+        f"{c} 문의{int(r.q)}/유효{int(r.v)}/상담{int(r.s)}/수임{int(r.w)}" for c, r in cg.head(20).iterrows()))
 
     _from = recent[0] + "-01"
     ac = bq(f"SELECT media, campaign, SUM(cost) cost, SUM(clicks) clk FROM `{PROJECT}.{DATASET}.ad_keyword` "
@@ -134,16 +136,17 @@ def main():
     for line in P:
         print("\n" + line)
 
-    # 교차 확인표: 카테고리별 광고비 대비 문의/상담/수임을 한눈에
-    print("\n\n=== 교차표 (카테고리 | 광고비 | 클릭 | 문의 | 상담 | 수임) ===")
+    # 교차 확인표: 카테고리별 광고비 대비 문의/유효문의/상담/수임을 한눈에
+    print("\n\n=== 교차표 (카테고리 | 광고비 | 클릭 | 문의 | 유효문의 | 상담 | 수임) ===")
     cats = sorted(set(acc.index) | set(cg.index),
                   key=lambda c: -(acc["cost"].get(c, 0)))
     for c in cats:
         cost = int(acc["cost"].get(c, 0)); clk = int(acc["clk"].get(c, 0))
-        q = int(cg["q"].get(c, 0)); s = int(cg["s"].get(c, 0)); w = int(cg["w"].get(c, 0))
+        q = int(cg["q"].get(c, 0)); v = int(cg["v"].get(c, 0))
+        s = int(cg["s"].get(c, 0)); w = int(cg["w"].get(c, 0))
         if cost == 0 and q == 0:
             continue
-        print(f"{c} | {cost:,}원 | {clk} | {q} | {s} | {w}")
+        print(f"{c} | {cost:,}원 | {clk} | {q} | {v} | {s} | {w}")
 
 
 if __name__ == "__main__":
