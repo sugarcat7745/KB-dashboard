@@ -114,6 +114,17 @@ def _put(uri, body, params=None):
     return False, None, f"{r.status_code}: {r.text[:500]}"
 
 
+def _put_raw(uri, body, params=None):
+    """PUT 후 (status_code, 응답본문텍스트) 그대로 반환 — 진단용."""
+    h = _hdr("PUT", uri); h["Content-Type"] = "application/json; charset=UTF-8"
+    try:
+        r = requests.put(BASE + uri, headers=h, params=params or {},
+                         data=json.dumps(body, ensure_ascii=False).encode("utf-8"), timeout=60)
+        return r.status_code, r.text
+    except Exception as e:
+        return -1, f"요청예외 {e}"
+
+
 def _delete(uri, params=None):
     h = _hdr("DELETE", uri)
     try:
@@ -472,20 +483,24 @@ def mode_align():
         return
 
     print("\n[적용]")
-    for sg, tg in pairs:
+    for idx, (sg, tg) in enumerate(pairs):
         sgid, tgid = sg.get("nccAdgroupId"), tg.get("nccAdgroupId")
         sname, sbid = sg.get("name"), int(sg.get("bidAmt", 0) or 0)
-        # 1) 이름·입찰가 — 대상 그룹 '전체 객체'를 되쓰기(최소 본문은 200을 받아도 실제
-        #    반영이 안 됨). 읽기전용 필드만 제거하고 name/bidAmt 덮어써 PUT.
+        # 1) 이름 변경 — 단일 필드(fields=name) PUT. 첫 그룹은 원시 응답을 찍어 진단.
+        #    그리고 PUT 결과를 믿지 말고 재조회(GET)로 실제 이름을 확인한다.
         upd = _strip(tg, {"regTm", "editTm", "status", "statusReason", "expectCost", "nccQi"})
         upd["nccAdgroupId"] = tgid
         upd["name"] = sname
         upd["bidAmt"] = sbid
-        ok, res_g, err = _put(f"/ncc/adgroups/{tgid}", upd, params={"fields": "name,bidAmt"})
-        # 실제 반영 확인(응답 name이 새 이름인지)
-        applied = bool(res_g and str(res_g.get("name", "")) == str(sname))
-        mark = "✅" if (ok and applied) else ("⚠️응답확인불가" if ok else "❌ " + err)
-        head = f"   '{tg.get('name')}' → '{sname}' | 이름·입찰 {mark}"
+        sc, raw = _put_raw(f"/ncc/adgroups/{tgid}", upd, params={"fields": "name"})
+        if idx == 0:
+            print(f"      [rename 진단] fields=name status={sc} body={raw[:450]}")
+        time.sleep(0.2)
+        after = _get(f"/ncc/adgroups/{tgid}")
+        now_name = str(after.get("name", "")) if isinstance(after, dict) else "?"
+        renamed = (now_name == str(sname))
+        head = (f"   '{tg.get('name')}' → '{sname}' | 이름 "
+                + ("✅" if renamed else f"❌(status {sc}, 현재='{now_name}')"))
         derrs = []
         # 2) 소재 교체 — 기존 전부 삭제(결과 집계) 후 원본으로 재생성
         old_ads = get_ads(tgid)
