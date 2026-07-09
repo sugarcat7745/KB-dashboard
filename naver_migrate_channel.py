@@ -49,6 +49,7 @@ PC = os.environ.get("PC_CHANNEL_ID", "").strip() or BIZ
 MO = os.environ.get("MOBILE_CHANNEL_ID", "").strip() or BIZ
 NEW_FINAL_URL = os.environ.get("NEW_FINAL_URL", "").strip()
 OLD_DOMAIN = os.environ.get("OLD_DOMAIN", "lawfirmkb.com").strip()
+COPY_GROUPS = os.environ.get("COPY_GROUPS", "1") == "1"   # 0이면 캠페인만 생성(그룹 없음)
 COPY_KEYWORDS = os.environ.get("COPY_KEYWORDS", "1") == "1"
 COPY_ADS = os.environ.get("COPY_ADS", "1") == "1"
 COPY_EXTENSIONS = os.environ.get("COPY_EXTENSIONS", "1") == "1"
@@ -157,7 +158,16 @@ def find_campaigns():
     camps = _get("/ncc/campaigns")
     if not isinstance(camps, list):
         print("캠페인 조회 실패:", camps); return []
-    return [c for c in camps if SOURCE_CAMPAIGN and SOURCE_CAMPAIGN in str(c.get("name", ""))]
+    exclude = os.environ.get("EXCLUDE_NAME", "").strip()   # 이 문자열이 이름에 있으면 제외(이미 만든 신채널 등)
+    out = []
+    for c in camps:
+        name = str(c.get("name", ""))
+        if SOURCE_CAMPAIGN and SOURCE_CAMPAIGN not in name:
+            continue
+        if exclude and exclude in name:
+            continue
+        out.append(c)
+    return out
 
 
 def get_groups(cid):
@@ -275,10 +285,11 @@ def clone_extensions(new_owner_id, src_ext):
 
 # ── 모드: migrate (쓰기) ────────────────────────────────────
 def mode_migrate():
-    # 필수값 검증
-    miss = [n for n, v in [("SOURCE_CAMPAIGN", SOURCE_CAMPAIGN),
-                           ("BIZ_CHANNEL_ID(또는 PC/MOBILE)", PC and MO),
-                           ("NEW_FINAL_URL", NEW_FINAL_URL)] if not v]
+    # 필수값 검증 — 그룹을 만들 때만 비즈채널·새 URL이 필요(캠페인만 만들 땐 불필요)
+    need = [("SOURCE_CAMPAIGN", SOURCE_CAMPAIGN)]
+    if COPY_GROUPS:
+        need += [("BIZ_CHANNEL_ID(또는 PC/MOBILE)", PC and MO), ("NEW_FINAL_URL", NEW_FINAL_URL)]
+    miss = [n for n, v in need if not v]
     if miss:
         print("필수 입력 누락:", ", ".join(miss)); return
 
@@ -292,11 +303,15 @@ def mode_migrate():
         print("   (그래도 전체 진행한다. 캠페인마다 새로 만든다.)\n")
 
     print(f"=== 채널 이전 · 모드 {'실제생성' if APPLY else '드라이런'} ===")
-    print(f"    새 채널 PC={PC} / MO={MO}")
-    print(f"    새 URL  {NEW_FINAL_URL}")
-    print(f"    옛 도메인 '{OLD_DOMAIN}' → 새 도메인 '{NEW_DOMAIN}'")
-    print(f"    복제 대상: 키워드={COPY_KEYWORDS} 소재={COPY_ADS} 확장소재={COPY_EXTENSIONS}"
-          + (f" · 파일럿 그룹 {LIMIT_GROUPS}개만" if LIMIT_GROUPS else "") + "\n")
+    if COPY_GROUPS:
+        print(f"    새 채널 PC={PC} / MO={MO}")
+        print(f"    새 URL  {NEW_FINAL_URL}")
+        print(f"    옛 도메인 '{OLD_DOMAIN}' → 새 도메인 '{NEW_DOMAIN}'")
+        print(f"    복제 대상: 키워드={COPY_KEYWORDS} 소재={COPY_ADS} 확장소재={COPY_EXTENSIONS}"
+              + (f" · 파일럿 그룹 {LIMIT_GROUPS}개만" if LIMIT_GROUPS else ""))
+    else:
+        print("    ⚑ 캠페인만 생성(그룹·키워드·소재 없음). 유형·게재방식·일예산은 원본 그대로.")
+    print(f"    대상 캠페인 {len(camps)}개\n")
 
     for c in camps:
         cid = c.get("nccCampaignId")
@@ -311,7 +326,7 @@ def mode_migrate():
         if c.get("useDailyBudget"):
             camp_body["dailyBudget"] = int(c.get("dailyBudget", 0) or 0)
 
-        groups = get_groups(cid)
+        groups = (get_groups(cid) if COPY_GROUPS else [])
         if LIMIT_GROUPS:
             groups = groups[:LIMIT_GROUPS]
         print(f"■ 원본 '{c.get('name')}' → 새 캠페인 '{new_cname}' (그룹 {len(groups)}개 예정)")
