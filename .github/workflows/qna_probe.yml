@@ -1,0 +1,21 @@
+name: qna-probe
+
+# QnA 글쓰기 폼 필드명 확인용 1회성 진단. QNA_ID/QNA_PW 시크릿으로 로그인.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install requests beautifulsoup4
+      - name: 폼 필드 확인
+        env:
+          QNA_BASE: ${{ secrets.QNA_BASE }}
+          QNA_ID: ${{ secrets.QNA_ID }}
+          QNA_PW: ${{ secrets.QNA_PW }}
+        run: python qna_probe.py
