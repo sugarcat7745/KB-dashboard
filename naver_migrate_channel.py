@@ -475,11 +475,17 @@ def mode_align():
     for sg, tg in pairs:
         sgid, tgid = sg.get("nccAdgroupId"), tg.get("nccAdgroupId")
         sname, sbid = sg.get("name"), int(sg.get("bidAmt", 0) or 0)
-        # 1) 이름·입찰가
-        ok, _r, err = _put(f"/ncc/adgroups/{tgid}",
-                           {"nccAdgroupId": tgid, "name": sname, "bidAmt": sbid},
-                           params={"fields": "name,bidAmt"})
-        head = f"   '{tg.get('name')}' → '{sname}' | 이름·입찰 {'✅' if ok else '❌ '+err}"
+        # 1) 이름·입찰가 — 대상 그룹 '전체 객체'를 되쓰기(최소 본문은 200을 받아도 실제
+        #    반영이 안 됨). 읽기전용 필드만 제거하고 name/bidAmt 덮어써 PUT.
+        upd = _strip(tg, {"regTm", "editTm", "status", "statusReason", "expectCost", "nccQi"})
+        upd["nccAdgroupId"] = tgid
+        upd["name"] = sname
+        upd["bidAmt"] = sbid
+        ok, res_g, err = _put(f"/ncc/adgroups/{tgid}", upd, params={"fields": "name,bidAmt"})
+        # 실제 반영 확인(응답 name이 새 이름인지)
+        applied = bool(res_g and str(res_g.get("name", "")) == str(sname))
+        mark = "✅" if (ok and applied) else ("⚠️응답확인불가" if ok else "❌ " + err)
+        head = f"   '{tg.get('name')}' → '{sname}' | 이름·입찰 {mark}"
         derrs = []
         # 2) 소재 교체 — 기존 전부 삭제(결과 집계) 후 원본으로 재생성
         old_ads = get_ads(tgid)
