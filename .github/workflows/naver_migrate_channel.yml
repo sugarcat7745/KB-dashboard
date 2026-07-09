@@ -1,0 +1,60 @@
+name: naver-migrate-channel
+
+# 네이버 캠페인을 '새 비즈채널'로 이전(복제 + URL 치환). 기존은 건드리지 않음.
+#   mode=dump    : 원본 캠페인 구조·소재 JSON 덤프(읽기). 먼저 이걸로 확인
+#   mode=migrate : 새 캠페인/그룹 생성 + 키워드·소재·확장소재 복제. apply=yes 여야 실제 생성
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "dump(원본확인) / migrate(이전)"
+        required: true
+        default: "dump"
+      apply:
+        description: "migrate일 때만: 실제 생성? (no=드라이런 / yes=생성)"
+        required: true
+        default: "no"
+      source_campaign:
+        description: "옮길 원본 캠페인 이름(부분일치). 예: finance / 금융"
+        required: true
+        default: ""
+      new_campaign_name:
+        description: "[migrate] 새 캠페인 이름(비우면 원본+' (신채널)')"
+        required: false
+        default: ""
+      biz_channel_id:
+        description: "[migrate] 새 비즈채널 id(PC/모바일 공통). naver-campaign-create의 channels로 확인"
+        required: false
+        default: ""
+      new_final_url:
+        description: "[migrate] 새 랜딩 URL 전체(utm 포함, utm_term={keyword} 유지)"
+        required: false
+        default: ""
+      limit_groups:
+        description: "[migrate] 파일럿: 앞 N개 그룹만(0=전체)"
+        required: false
+        default: "0"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 채널 이전
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          MODE: ${{ inputs.mode }}
+          APPLY: ${{ inputs.apply == 'yes' && '1' || '0' }}
+          SOURCE_CAMPAIGN: ${{ inputs.source_campaign }}
+          NEW_CAMPAIGN_NAME: ${{ inputs.new_campaign_name }}
+          BIZ_CHANNEL_ID: ${{ inputs.biz_channel_id }}
+          NEW_FINAL_URL: ${{ inputs.new_final_url }}
+          LIMIT_GROUPS: ${{ inputs.limit_groups }}
+        run: python naver_migrate_channel.py
