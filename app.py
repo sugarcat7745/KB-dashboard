@@ -3710,6 +3710,285 @@ def load_changes(category, limit=100):
         return None
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  QnA 콘텐츠 관리 탭 (관리자 전용) — 홈페이지 QnA 게시판 원고 생성·업로드
+#  가안(초안). 법률 내용이라 AI는 '초안'만 생성하고, 법조문은 안대표님 검수 후 게시.
+# ═══════════════════════════════════════════════════════════════════
+QNA_BASE = "https://www.lawfirmkb.com"
+QNA_ICON = "/skin/board/qna/img/icon_b_260514.png"
+# 게시판 분류(ca_name) 셀렉트 값과 동일해야 함
+QNA_CATS = ["형사", "성범죄", "학교폭력", "음주운전·교통사고", "민사·행정", "이혼·가사",
+            "소년범죄", "행정소송", "금융범죄", "건설·부동산분쟁", "소액및손해배상",
+            "회생·파산", "외국인·출입국"]
+
+
+@st.cache_data(ttl=600)
+def qna_corpus():
+    """qna_posts 코퍼스(514개 등). 테이블 없으면 빈 DF(탭이 안내만 표시)."""
+    try:
+        return bq(f"SELECT wr_id, cat, region, base_kw, title, has5, body_len "
+                  f"FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_posts`")
+    except Exception:
+        return pd.DataFrame(columns=["wr_id", "cat", "region", "base_kw", "title", "has5", "body_len"])
+
+
+@st.cache_data(ttl=1800)
+def qna_demand():
+    """실검색 수요 — ad_keyword 클릭 상위 키워드(브랜드·범용 제외)."""
+    try:
+        return bq(f"SELECT keyword, SUM(clicks) clk, SUM(impressions) imp "
+                  f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                  f"WHERE date >= '2026-01-01' AND keyword NOT LIKE '%법무법인%' "
+                  f"AND keyword NOT LIKE '%KB%' AND LENGTH(keyword) >= 5 "
+                  f"GROUP BY keyword HAVING SUM(clicks) >= 8 ORDER BY clk DESC LIMIT 300")
+    except Exception:
+        return pd.DataFrame(columns=["keyword", "clk", "imp"])
+
+
+def _qna_core(kw):
+    """수요 키워드에서 접미(변호사·처벌·신고 등) 제거 → 코퍼스 대조용 코어."""
+    return re.sub(r"(변호사|처벌|성립요건|합의금|신고|고소|절차|비용|형량|방법|기준|"
+                  r"공소시효|해지|벌금|당했을때|피해구제|피해|사기)$", "", str(kw)).strip()
+
+
+def qna_gap(corpus, demand):
+    """수요 높은데 QnA 공백인 주제 표. corpus의 title+base_kw와 대조."""
+    if demand.empty:
+        return pd.DataFrame()
+    hay = " || ".join(corpus["title"].astype(str)) + " || " + " || ".join(corpus["base_kw"].astype(str)) \
+        if not corpus.empty else ""
+    out = []
+    for _, r in demand.iterrows():
+        core = _qna_core(r["keyword"])
+        if len(core) < 2:
+            continue
+        covered = core in hay
+        out.append({"키워드": r["keyword"], "실클릭": int(r["clk"]),
+                    "노출": int(r["imp"]), "QnA": "있음" if covered else "❌공백"})
+    return pd.DataFrame(out)
+
+
+# ── 게시판 세션·업로드 (requests, 지연 임포트) ──────────────────────
+def _qna_creds():
+    try:
+        c = st.secrets["qna_board"]
+        return c["id"], c["pw"]
+    except Exception:
+        return None, None
+
+
+def _qna_session():
+    import requests
+    cid, cpw = _qna_creds()
+    if not cid:
+        raise RuntimeError("게시판 계정 미설정 (Streamlit Secrets [qna_board] id/pw 필요)")
+    s = requests.Session(); s.headers.update({"User-Agent": "Mozilla/5.0 Chrome/125"})
+    s.get(f"{QNA_BASE}/bbs/login.php", timeout=30)
+    s.post(f"{QNA_BASE}/bbs/login_check.php",
+           data={"url": "/", "mb_id": cid, "mb_password": cpw}, timeout=30)
+    if "로그아웃" not in s.get(f"{QNA_BASE}/bbs/board.php?bo_table=QnA", timeout=30).text:
+        raise RuntimeError("게시판 로그인 실패 (계정 확인)")
+    return s
+
+
+def qna_upload(title, cat, body_html, tags):
+    """QnA 게시판에 글 등록. 성공 시 wr_id 반환."""
+    from bs4 import BeautifulSoup
+    s = _qna_session()
+    r = s.get(f"{QNA_BASE}/bbs/write.php?bo_table=QnA", timeout=30)
+    soup = BeautifulSoup(r.text, "html.parser")
+    form = soup.find("form", {"name": "fwrite"}) or soup.find("form")
+    data = {}
+    for el in form.find_all(["input", "textarea", "select"]):
+        nm = el.get("name")
+        if not nm or el.get("type") in ("submit", "button", "image", "checkbox"):
+            continue
+        data[nm] = el.get("value", "") if el.name != "textarea" else (el.text or "")
+    data.update({"bo_table": "QnA", "w": "", "wr_id": "0", "ca_name": cat,
+                 "wr_subject": title, "wr_content": body_html,
+                 "wr_4": "".join(f"<li>#{t}</li>" for t in tags)})
+    data.setdefault("html", "html1")
+    rr = s.post(f"{QNA_BASE}/bbs/write_update.php", data=data, timeout=40,
+                headers={"Referer": f"{QNA_BASE}/bbs/write.php?bo_table=QnA"})
+    m = re.search(r"wr_id=(\d+)", rr.url) or re.search(r"wr_id=(\d+)", rr.text)
+    if rr.status_code not in (200, 302) or not m:
+        raise RuntimeError(f"등록 실패 {rr.status_code}: {rr.text[:200]}")
+    return m.group(1)
+
+
+# ── HTML 골격(실게시물과 동일) ─────────────────────────────────────
+def qna_build_html(keyword, intro3, sections):
+    def para(t):
+        return f'<p><span style="font-size: 18px;">{t}</span></p><br/>\n<p> </p><br/>\n'
+    out = [f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>핵심 요약 답변</h2></div>',
+           '<div class="v_box column" data-aos="fade-up"><p>%s</p></div>' % "<br/>\n".join(intro3),
+           f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>상세 답변</h2></div>',
+           '<div class="v_box column" data-aos="fade-up">']
+    for sub, paras in sections:
+        out.append(f'<p><h2><span style="font-size: 18px;">{keyword} | {sub}</span></h2><br/>\n<p> </p><br/>')
+        out += [para(p) for p in paras]
+    out.append('</div>')
+    return "\n".join(out)
+
+
+# ── Claude 생성기 ───────────────────────────────────────────────────
+def _qna_client():
+    key = st.secrets["anthropic_api_key"]
+    return anthropic.Anthropic(api_key=key)
+
+
+def qna_gen_questions(keyword, cat, existing_titles, n=10):
+    """공백 키워드 → 다양한 말투의 Q n개(중복 제외). 리스트 반환."""
+    if not HAS_ANTHROPIC:
+        return ["(AI 비활성화)"]
+    sysp = ("너는 법무법인 KB(형사·성범죄·학폭 등 형사전문) 홈페이지 QnA 질문을 만드는 카피라이터다. "
+            "의뢰인(피의자·피해자)이 실제로 검색·문의하는 자연스러운 말투로, 서로 다른 유형"
+            "(처벌수위형·절차형·합의형·상황서술형·걱정형·성립요건형)을 섞어 질문을 만든다. "
+            "각 질문은 반드시 '키워드 변호사 | 질문?' 형식 한 줄이고, 실제 사건 상황이 드러나야 한다. "
+            "아래 [이미 있는 제목]과 겹치지 않게 하라. JSON 배열(문자열 10개)만 출력하라.")
+    usr = (f"키워드: {keyword} (분류: {cat})\n"
+           f"[이미 있는 제목 일부]\n" + "\n".join(existing_titles[:60]))
+    try:
+        m = _qna_client().messages.create(model=MODEL_CHAT, max_tokens=1500,
+              system=sysp, messages=[{"role": "user", "content": usr}])
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
+        return [str(x) for x in arr][:n]
+    except Exception as e:
+        return [f"(생성 오류: {e})"]
+
+
+def qna_gen_answer(title, keyword, cat):
+    """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환."""
+    if not HAS_ANTHROPIC:
+        return None
+    sysp = ("너는 법무법인 KB의 형사전문 변호사 원고를 쓰는 조수다. 홈페이지 QnA 답변 '초안'을 만든다. "
+            "독자는 피의자·의뢰인이며, 차분하고 정직한 톤으로 방어 관점에서 쓴다. "
+            "반드시 아래 JSON 스키마로만 출력하라(설명 금지):\n"
+            '{"intro3":["직답1","직답2","직답3"],'
+            '"sections":[{"sub":"핵심 사항","paras":["...","...","..."]},'
+            '{"sub":"필수 주의 사항","paras":["...","..."]},'
+            '{"sub":"실제 대응 순서","paras":["첫째, ...","둘째, ...","셋째, ...","넷째, ..."]},'
+            '{"sub":"변호사 선임이 필요한 이유","paras":["...","..."]},'
+            '{"sub":"법무법인 KB의 강점","paras":["...","..."]}],'
+            '"laws":["인용한 법조문(정확한 법명·조문번호). 최근 개정이 얽히면 \'★개정 확인 필요\' 표기"]}\n'
+            "핵심 사항에는 반드시 관련 법조문을 정확히 인용하라. 확실하지 않은 조문·개정은 laws에 '★확인'으로 남겨라. "
+            "과장·확정적 법률 단정은 피하고, 각 문단은 3~4문장 존댓말 서술형으로 쓴다.")
+    usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}"
+    try:
+        m = _qna_client().messages.create(model=MODEL_CHAT, max_tokens=3500,
+              system=sysp, messages=[{"role": "user", "content": usr}])
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+        return d
+    except Exception as e:
+        st.error(f"A 초안 생성 오류: {e}")
+        return None
+
+
+def render_qna():
+    st.markdown(f"<h3 style='color:{GOLD};margin:.2rem 0'>QnA 원고 생성·관리</h3>", unsafe_allow_html=True)
+    st.caption("홈페이지 QnA 게시판 원고를 실수요 기반으로 만들고, 검수 후 업로드까지. "
+               "법률 내용이라 AI는 초안만 만들며, 법조문은 반드시 검수 후 게시합니다.")
+    corpus = qna_corpus()
+    if corpus.empty:
+        st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하면 "
+                   "514개가 적재되고 현황판이 켜집니다.")
+    view = st.radio("보기", ["📊 수요·공백 현황판", "✍️ 원고 생성"], horizontal=True,
+                    label_visibility="collapsed", key="qna_view")
+
+    # ── 현황판 ──
+    if view.startswith("📊"):
+        if not corpus.empty:
+            cc = corpus["cat"].value_counts()
+            c1, c2, c3 = st.columns(3)
+            c1.metric("등록된 QnA", f"{len(corpus):,}개")
+            c2.metric("분류 수", f"{corpus['cat'].nunique()}개",
+                      help="게시판 셀렉트 13개 중 실제 글이 있는 분류")
+            c3.metric("5소제목 완비율", f"{corpus['has5'].mean()*100:.0f}%")
+            st.markdown("**분류별 등록 현황** (빈 분류 = 기회)")
+            cov = pd.DataFrame({"분류": QNA_CATS})
+            cov["등록"] = cov["분류"].map(lambda c: int(cc.get(c, 0)))
+            cov["상태"] = cov["등록"].map(lambda n: "" if n else "❌ 공백(수요 있으면 신규 개설)")
+            st.dataframe(cov, use_container_width=True, hide_index=True)
+        st.markdown("**실수요 높은데 QnA 공백인 주제** (BigQuery 실클릭 대조)")
+        gap = qna_gap(corpus, qna_demand())
+        if gap.empty:
+            st.info("수요 데이터를 불러오지 못했습니다.")
+        else:
+            only_gap = st.toggle("공백만 보기", value=True, key="qna_only_gap")
+            show = gap[gap["QnA"] == "❌공백"] if only_gap else gap
+            st.dataframe(show.head(60), use_container_width=True, hide_index=True)
+            st.caption("→ 여기 상위 키워드로 '원고 생성' 탭에서 Q·A를 만들면 됩니다.")
+
+    # ── 원고 생성 ──
+    else:
+        kw = st.text_input("키워드 (예: 딥페이크음란물 · 데이트폭력 · 온라인사기)", key="qna_kw")
+        cat = st.selectbox("분류(게시판 ca_name)", QNA_CATS, key="qna_cat")
+        existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
+
+        st.markdown("**1) 질문(Q) 생성**")
+        if st.button("Q 10개 생성", key="qna_genq", disabled=not kw):
+            with st.spinner("생성 중…"):
+                st.session_state["qna_qs"] = qna_gen_questions(kw, cat, existing)
+        qs = st.session_state.get("qna_qs", [])
+        chosen = None
+        if qs:
+            # 중복 표시
+            def _dup(q):
+                core = _qna_core(q.split("|")[0].replace("변호사", "").strip())
+                return core and any(core in t for t in existing)
+            labels = [(("⚠️중복 " if _dup(q) else "") + q) for q in qs]
+            idx = st.radio("질문 선택", list(range(len(qs))),
+                           format_func=lambda i: labels[i], key="qna_pick")
+            chosen = qs[idx]
+
+        st.markdown("**2) 답변(A) 초안 생성**")
+        subkw = kw.replace("변호사", "").strip()
+        if st.button("A 초안 생성", key="qna_gena", disabled=not chosen):
+            with st.spinner("초안 작성 중…"):
+                st.session_state["qna_ans"] = qna_gen_answer(chosen, subkw, cat)
+                st.session_state["qna_title"] = chosen
+        ans = st.session_state.get("qna_ans")
+        if ans:
+            title = st.session_state.get("qna_title", chosen or "")
+            sections = [(s["sub"], s["paras"]) for s in ans.get("sections", [])]
+            body = qna_build_html(subkw, ans.get("intro3", []), sections)
+            st.markdown("**미리보기**")
+            prev = (f"<div style='border:1px solid {LINE};border-radius:8px;padding:16px;"
+                    f"background:{SURF};max-height:460px;overflow:auto'>"
+                    f"<div style='color:{GOLD};font-weight:700'>[분류: {cat}]</div>"
+                    f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{body}</div>")
+            components.html(prev, height=480, scrolling=True)
+
+            st.markdown(f"<div style='border:1px solid {GOLD};border-radius:8px;padding:12px'>"
+                        f"<b style='color:{GOLD}'>⚠️ 법조문 검수 필요 (안대표님)</b><ul>"
+                        + "".join(f"<li>{l}</li>" for l in ans.get("laws", ["(없음)"]))
+                        + "</ul></div>", unsafe_allow_html=True)
+
+            tags = [subkw] + [t.strip() for t in st.text_input(
+                "해시태그(쉼표)", value=f"{subkw},{cat},형사전문변호사", key="qna_tags").split(",") if t.strip()]
+            st.markdown("**3) 업로드**")
+            ok = st.checkbox("위 법조문을 검수했고, 이 원고를 게시하는 데 동의합니다.", key="qna_confirm")
+            cid, _ = _qna_creds()
+            if not cid:
+                st.info("업로드하려면 Streamlit Secrets에 [qna_board] id/pw 를 추가하세요.")
+            if st.button("게시판에 업로드", key="qna_upload", disabled=not (ok and cid),
+                         type="primary"):
+                try:
+                    with st.spinner("업로드 중…"):
+                        wid = qna_upload(title, cat, body, tags)
+                    st.success(f"업로드 완료! wr_id={wid} · {QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wid}")
+                    try:
+                        log_change(st.session_state.get("auth_user", "admin"), "QnA",
+                                   f"QnA 게시: {title}", f"wr_id={wid} 분류={cat}", "실수요 기반 원고")
+                    except Exception:
+                        pass
+                except Exception as e:
+                    st.error(f"업로드 실패: {e}")
+
+
+
 def render_changelog():
     tab_header("fa-clipboard-list", "변경사항",
                "대시보드 · 광고 · 전략 — 무엇을 언제 왜 바꿨는지 기록")
@@ -3900,6 +4179,8 @@ def main():
 
     is_admin = (user == "admin")
     top_labels = ["📊 요약", "📈 광고", "💼 실적", "🌐 유입", "📝 변경", "🤖 AI"]
+    if is_admin:
+        top_labels = top_labels + ["📚 QnA"]
     top = st.tabs(top_labels)
 
     def _safe(fn, label):
@@ -3956,6 +4237,10 @@ def main():
                 render_ai_chat()
         else:
             render_ai_chat()
+
+    if is_admin and len(top) > 6:
+        with top[6]:
+            _safe(render_qna, "QnA 관리")
 
 
 main()

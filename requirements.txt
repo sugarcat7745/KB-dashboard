@@ -9,3 +9,5 @@ plotly
 anthropic
 google-cloud-bigquery
 db-dtypes
+requests
+beautifulsoup4
