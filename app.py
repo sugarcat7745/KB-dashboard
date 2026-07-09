@@ -3803,20 +3803,22 @@ def qna_law_match(law_text, verified):
 
 @st.cache_data(ttl=1800)
 def qna_perf(days=90):
-    """게시한 QnA 글 페이지의 조회·전환(GA4). wr_id별 집계."""
+    """게시한 QnA 글별 유입(조회수·순방문자). GA4. 전환은 페이지 단위 기준이 애매해 제외."""
     lo, hi = _ga4_suffix(days)
     return bq(f"""
       WITH pv AS (
         SELECT REGEXP_EXTRACT(
                  (SELECT value.string_value FROM UNNEST(event_params) WHERE key='page_location'),
                  'wr_id=([0-9]+)') AS wid,
-               event_name
+               event_name, user_pseudo_id
         FROM {_ga4_from()}
         WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'
           AND (SELECT value.string_value FROM UNNEST(event_params)
                WHERE key='page_location') LIKE '%bo_table=QnA%'
       )
-      SELECT wid, COUNTIF(event_name='page_view') views, COUNTIF({GA4_CONV}) conv
+      SELECT wid,
+             COUNTIF(event_name='page_view') views,
+             COUNT(DISTINCT IF(event_name='page_view', user_pseudo_id, NULL)) visitors
       FROM pv WHERE wid IS NOT NULL GROUP BY wid ORDER BY views DESC LIMIT 100
     """)
 
@@ -3827,15 +3829,20 @@ def _qna_perf_panel(corpus):
         st.info("최근 90일 QnA 글 페이지 유입 데이터가 없습니다. (GA4는 2026-06-29~ 수집, 게시 후 며칠 지나면 잡힙니다)")
         return
     m = corpus.set_index("wr_id")["title"].astype(str).to_dict() if (not corpus.empty and "wr_id" in corpus) else {}
+    df = df.reset_index(drop=True)
     df["제목"] = df["wid"].map(lambda w: m.get(str(w), f"wr_id={w}"))
-    df["전환율"] = (df["conv"] / df["views"].clip(lower=1) * 100).round(1).astype(str) + "%"
+    # 고성과 = 조회 상위권(최대 10개 또는 상위 약 1/3)
+    topn = max(1, min(10, (len(df) + 2) // 3))
+    df["성과"] = ["🔥 고성과" if i < topn else "" for i in range(len(df))]
     c1, c2, c3 = st.columns(3)
     c1.metric("추적된 QnA 글", f"{len(df):,}개")
     c2.metric("총 조회수(90일)", f"{int(df['views'].sum()):,}")
-    c3.metric("총 전환", f"{int(df['conv'].sum()):,}")
-    st.dataframe(df.rename(columns={"views": "조회수", "conv": "전환수"})[["제목", "조회수", "전환수", "전환율"]],
-                 use_container_width=True, hide_index=True)
-    st.caption("QnA 글 페이지에서 발생한 조회·전환(전화·카톡·상담). 어떤 주제가 유입을 끌었는지 → 다음 원고 우선순위 판단.")
+    c3.metric("글당 평균 조회", f"{df['views'].mean():.0f}")
+    st.dataframe(
+        df.rename(columns={"views": "조회수", "visitors": "순방문자"})[["성과", "제목", "조회수", "순방문자"]],
+        use_container_width=True, hide_index=True)
+    st.caption("유입(조회) 기준. 전환은 페이지 단위로 집계 기준이 애매해 제외했습니다. "
+               "🔥 고성과 = 조회 상위권 → 이 주제·형식을 더 밀면 됩니다. (순방문자=중복 제외 실제 사람 수)")
 
 
 @st.cache_data(ttl=600)
@@ -4077,7 +4084,7 @@ def render_qna():
     existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
 
     # ── 게시 성과(GA4) — 어떤 QnA가 유입을 끌었나 (접이식) ──
-    if st.toggle("📈 게시한 QnA 성과 보기 (GA4 · 조회·전환)", key="qna_perf_toggle"):
+    if st.toggle("📈 게시한 QnA 성과 보기 (GA4 · 유입 기준)", key="qna_perf_toggle"):
         _qna_perf_panel(corpus)
         st.divider()
 
