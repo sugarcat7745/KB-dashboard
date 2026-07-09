@@ -4006,68 +4006,107 @@ def render_qna():
         st.error("생성에 실패했습니다. 다시 시도하거나 키워드를 새로고침하세요.")
         return
 
-    RED = "#E5484D"
+    RED = "#E5484D"; OKC = "#3DB47E"
     cid, _ = _qna_creds()
-    st.divider()
-    st.markdown(f"**생성 완료 {len(items)}개** — 각 원고를 펼쳐 검수 후 개별 업로드하세요."
-                + ("" if cid else "  ·  ⚠️ 업로드는 Secrets `[qna_board] id/pw` 설정 후 활성화됩니다."))
 
+    def _law_uncertain(l):
+        s = str(l)
+        return ("★" in s) or ("확인" in s) or ("개정" in s)
+
+    # ── 요약 목록 (제목 · 검수 배지 · 승인 체크) ──
+    st.divider()
+    done_n = sum(1 for i in range(len(items)) if st.session_state.get(f"qna_posted_{i}"))
+    st.markdown(f"**생성 완료 {len(items)}개** · 게시됨 {done_n}개 — 아래 목록에서 검수 후 "
+                "‘승인’을 체크하고, 맨 아래에서 한 번에 업로드하세요."
+                + ("" if cid else "  ·  ⚠️ 업로드는 Secrets `[qna_board] id/pw` 설정 후 활성화."))
     for i, it in enumerate(items):
-        cat, core, title, ans, body = it["cat"], it["core"], it["title"], it["ans"], it["body"]
+        laws = it["ans"].get("laws", [])
+        nred = sum(1 for l in laws if _law_uncertain(l))
         posted = st.session_state.get(f"qna_posted_{i}")
-        head = f"{'✅ 게시됨 · ' if posted else ''}{i+1}. {title}"
-        with st.expander(head, expanded=(i == 0 and not posted)):
-            # 질문(Q)
-            st.markdown(f"<div style='border:1px solid {LINE};border-radius:8px;padding:10px 12px;"
-                        f"background:{SURF2}'><b style='color:{GOLD}'>❓ [{cat}]</b> &nbsp;{title}</div>",
-                        unsafe_allow_html=True)
-            # 답변(A) — 읽기용
-            md = "**💬 답변(A) 초안 · 핵심 요약**\n\n" + "\n".join(f"- {x}" for x in ans.get("intro3", [])) + "\n\n"
-            for s in ans.get("sections", []):
-                md += f"**{core} | {s['sub']}**\n\n" + "\n\n".join(s.get("paras", [])) + "\n\n"
-            st.markdown(md)
-            # 완성본
-            st.markdown("**🧩 완성본** (게시판 골격)")
-            prev = (f"<div style='border:1px solid {LINE};border-radius:8px;padding:14px;"
-                    f"background:{SURF};max-height:380px;overflow:auto'>"
-                    f"<div style='color:{GOLD};font-weight:700'>[분류: {cat}]</div>"
-                    f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{body}</div>")
-            components.html(prev, height=400, scrolling=True)
-            # 검수 필요 — 빨강
-            laws = ans.get("laws", []) or ["(모델이 인용한 법조문 없음 — 직접 확인 필요)"]
-            st.markdown(
-                f"<div style='border:2px solid {RED};border-radius:8px;padding:10px 12px;background:#2A1416'>"
-                f"<b style='color:{RED}'>🔴 검수 필요 — 게시 전 확인</b>"
-                f"<div style='color:{MUTED};font-size:.82rem;margin:.2rem 0 .4rem'>"
-                f"법명·조문번호·최신 개정 여부를 확인하세요. ‘★’는 모델이 불확실하다고 남긴 부분입니다.</div>"
-                f"<ul style='margin:0'>"
-                + "".join(f"<li style='color:{RED}'>{l}</li>" for l in laws)
-                + "</ul></div>", unsafe_allow_html=True)
-            # 업로드(개별)
-            tags = [core] + [t.strip() for t in st.text_input(
-                "해시태그(쉼표)", value=f"{core},{cat},형사전문변호사",
-                key=f"qna_tags_{i}").split(",") if t.strip()]
-            if posted:
-                st.success(f"게시 완료 · {QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={posted}")
-            else:
-                ok = st.checkbox("🔴 검수 항목을 확인했고, 이 원고를 게시하는 데 동의합니다.",
-                                 key=f"qna_confirm_{i}")
-                if not cid:
-                    st.info("업로드하려면 Streamlit Secrets에 [qna_board] id/pw 를 추가하세요.")
-                if st.button("🚀 이 원고 업로드", key=f"qna_upbtn_{i}",
-                             disabled=not (ok and cid), type="primary"):
-                    try:
-                        with st.spinner("업로드 중…"):
-                            wid = qna_upload(title, cat, body, tags)
-                        st.session_state[f"qna_posted_{i}"] = wid
-                        try:
-                            log_change(st.session_state.get("auth_user", "admin"), "QnA",
-                                       f"QnA 게시: {title}", f"wr_id={wid} 분류={cat}", "실수요 기반 원고")
-                        except Exception:
-                            pass
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"업로드 실패: {e}")
+        c0, c1 = st.columns([0.1, 0.9])
+        if posted:
+            c0.markdown("✅")
+            c1.markdown(f"<span style='color:{MUTED}'>{i+1}. {it['title']} · 게시됨 "
+                        f"(<a href='{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={posted}' "
+                        f"style='color:{GOLD}'>보기</a>)</span>", unsafe_allow_html=True)
+        else:
+            c0.checkbox("승인", key=f"qna_confirm_{i}", label_visibility="collapsed",
+                        disabled=not cid)
+            badge = (f"<span style='color:{RED};font-weight:700'>🔴 검수 {nred}건</span>"
+                     if nred else f"<span style='color:{OKC}'>✓ 법조문 특이사항 없음</span>")
+            c1.markdown(f"{i+1}. {it['title']} &nbsp; {badge}", unsafe_allow_html=True)
+
+    # ── 상세 보기 (드롭다운으로 1개만) ──
+    st.divider()
+    sidx = st.selectbox("🔎 원고 상세 보기 / 검수", list(range(len(items))),
+                        format_func=lambda i: f"{i+1}. {items[i]['title']}", key="qna_detail_sel")
+    it = items[sidx]
+    cat, core, title, ans, body = it["cat"], it["core"], it["title"], it["ans"], it["body"]
+    # 질문(Q)
+    st.markdown(f"<div style='border:1px solid {LINE};border-radius:8px;padding:10px 12px;"
+                f"background:{SURF2}'><b style='color:{GOLD}'>❓ [{cat}]</b> &nbsp;{title}</div>",
+                unsafe_allow_html=True)
+    # 답변(A)
+    md = "**💬 답변(A) 초안 · 핵심 요약**\n\n" + "\n".join(f"- {x}" for x in ans.get("intro3", [])) + "\n\n"
+    for s in ans.get("sections", []):
+        md += f"**{core} | {s['sub']}**\n\n" + "\n\n".join(s.get("paras", [])) + "\n\n"
+    st.markdown(md)
+    # 검수 — 불확실만 빨강, 나머지는 회색 참고
+    laws = ans.get("laws", [])
+    need = [l for l in laws if _law_uncertain(l)]
+    refs = [l for l in laws if not _law_uncertain(l)]
+    if need:
+        st.markdown(
+            f"<div style='border:2px solid {RED};border-radius:8px;padding:10px 12px;background:#2A1416'>"
+            f"<b style='color:{RED}'>🔴 반드시 확인 ({len(need)}건)</b>"
+            f"<div style='color:{MUTED};font-size:.82rem;margin:.2rem 0 .4rem'>"
+            f"모델이 불확실(★)하다고 표시했거나 개정이 얽힌 부분입니다.</div><ul style='margin:0'>"
+            + "".join(f"<li style='color:{RED}'>{l}</li>" for l in need)
+            + "</ul></div>", unsafe_allow_html=True)
+    elif laws:
+        st.markdown(f"<div style='color:{OKC}'>✓ 불확실 표시된 법조문 없음 — 그래도 게시 전 최종 확인 권장</div>",
+                    unsafe_allow_html=True)
+    if refs:
+        st.markdown(f"<div style='border:1px solid {LINE};border-radius:8px;padding:8px 12px;margin-top:6px'>"
+                    f"<b style='color:{MUTED}'>인용 법조문(참고)</b><ul style='margin:0;color:{MUTED}'>"
+                    + "".join(f"<li>{l}</li>" for l in refs) + "</ul></div>", unsafe_allow_html=True)
+    if not laws:
+        st.info("모델이 인용한 법조문이 없습니다 — 본문에 근거 조문을 직접 확인/추가하세요.")
+    # 완성본 — 평소 접어둠(토글)
+    if st.toggle("🧩 완성본(게시판 골격) 보기", key=f"qna_prev_{sidx}"):
+        prev = (f"<div style='border:1px solid {LINE};border-radius:8px;padding:14px;"
+                f"background:{SURF};max-height:380px;overflow:auto'>"
+                f"<div style='color:{GOLD};font-weight:700'>[분류: {cat}]</div>"
+                f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{body}</div>")
+        components.html(prev, height=400, scrolling=True)
+
+    # ── 일괄 업로드 ──
+    st.divider()
+    approved = [i for i in range(len(items))
+                if st.session_state.get(f"qna_confirm_{i}") and not st.session_state.get(f"qna_posted_{i}")]
+    if not cid:
+        st.info("업로드하려면 Streamlit Secrets에 [qna_board] id/pw 를 추가하세요.")
+    if st.button(f"✅ 승인한 {len(approved)}개 일괄 업로드", key="qna_batch_up",
+                 disabled=not (approved and cid), type="primary"):
+        prog = st.progress(0.0); done = 0
+        for n, i in enumerate(approved):
+            g = items[i]
+            try:
+                wid = qna_upload(g["title"], g["cat"], g["body"],
+                                 [g["core"], g["cat"], "형사전문변호사"])
+                st.session_state[f"qna_posted_{i}"] = wid; done += 1
+                try:
+                    log_change(st.session_state.get("auth_user", "admin"), "QnA",
+                               f"QnA 게시: {g['title']}", f"wr_id={wid} 분류={g['cat']}", "실수요 기반 원고")
+                except Exception:
+                    pass
+            except Exception as e:
+                st.error(f"[{g['title']}] 업로드 실패: {e}")
+            prog.progress((n + 1) / len(approved))
+        st.success(f"{done}/{len(approved)}개 업로드 완료")
+        if done:
+            st.balloons()
+        st.rerun()
 
 
 
