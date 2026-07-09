@@ -1,0 +1,66 @@
+name: naver-campaign-create
+
+# 네이버 캠페인·광고그룹 생성 / 비즈채널 조회.
+#   mode=channels : 비즈채널 목록(읽기) — 새 채널 id 확인
+#   mode=list     : 캠페인 목록(읽기). campaign_filter 주면 그룹·연결채널까지
+#   mode=create   : 캠페인 1개 + 광고그룹 1개 생성. apply=yes 여야 실제 생성
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "channels(채널조회) / list(캠페인조회) / create(생성)"
+        required: true
+        default: "channels"
+      apply:
+        description: "create일 때만: 실제 생성? (no=드라이런 / yes=생성)"
+        required: true
+        default: "no"
+      campaign_name:
+        description: "[create] 캠페인 이름"
+        required: false
+        default: ""
+      adgroup_name:
+        description: "[create] 광고그룹 이름"
+        required: false
+        default: ""
+      biz_channel_id:
+        description: "[create] 새 비즈채널 id (PC/모바일 공통). channels 모드로 먼저 확인"
+        required: false
+        default: ""
+      daily_budget:
+        description: "[create] 캠페인 일예산(원). 0=제한없음"
+        required: false
+        default: "0"
+      adgroup_bid:
+        description: "[create] 그룹 기본입찰가(원)"
+        required: false
+        default: "700"
+      campaign_filter:
+        description: "[list] 캠페인 이름 필터(원본 확인용). 비우면 전체"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 캠페인 생성/조회
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          MODE: ${{ inputs.mode }}
+          APPLY: ${{ inputs.apply == 'yes' && '1' || '0' }}
+          CAMPAIGN_NAME: ${{ inputs.campaign_name }}
+          ADGROUP_NAME: ${{ inputs.adgroup_name }}
+          BIZ_CHANNEL_ID: ${{ inputs.biz_channel_id }}
+          DAILY_BUDGET: ${{ inputs.daily_budget }}
+          ADGROUP_BID: ${{ inputs.adgroup_bid }}
+          CAMPAIGN_FILTER: ${{ inputs.campaign_filter }}
+        run: python naver_campaign_create.py
