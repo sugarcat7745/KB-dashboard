@@ -536,9 +536,64 @@ def mode_align():
     print("\n완료. 그룹 유지 · 이름·입찰·소재·확장을 원본에 맞추고 키워드 복제(COPY_KEYWORDS).")
 
 
+# ── 모드: audit (소재·확장이 그룹명과 맞는지 재검수) ─────────
+TOPIC_TOKENS = ["보이스피싱", "리딩", "코인", "금융", "사기"]  # 앞이 더 구체(우선)
+
+
+def _group_topic(name):
+    for t in TOPIC_TOKENS:
+        if t in str(name):
+            return t
+    return None
+
+
+def mode_audit():
+    """SOURCE_CAMPAIGN(부분일치, 예: '신채널')에 해당하는 캠페인들의 그룹별로
+    소재 제목·확장소재를 나열하고, 그룹명 죄목 토큰이 소재 제목에 없으면 ⚠불일치 표시."""
+    filt = SOURCE_CAMPAIGN or TARGET_CAMPAIGN or "신채널"
+    camps = [c for c in _get("/ncc/campaigns") if isinstance(c, dict) and filt in str(c.get("name", ""))]
+    if not camps:
+        print(f"'{filt}' 포함 캠페인 없음"); return
+    print(f"=== 소재·확장 재검수 · 필터 '{filt}' · 캠페인 {len(camps)}개 ===\n")
+    mismatches = []
+    for c in sorted(camps, key=lambda x: str(x.get("name", ""))):
+        cid = c.get("nccCampaignId")
+        print(f"■ {c.get('name')}")
+        for g in sorted(get_groups(cid), key=lambda x: str(x.get("name", ""))):
+            gname = str(g.get("name", "")); topic = _group_topic(gname)
+            ads = get_ads(g.get("nccAdgroupId"))
+            exts = get_extensions(g.get("nccAdgroupId"))
+            heads = []
+            for a in ads:
+                ad = a.get("ad") or {}
+                heads.append(str(ad.get("headline", "")))
+            bad = [h for h in heads if topic and topic not in h]
+            flag = "  ⚠️불일치" if bad else ""
+            print(f"  [{gname}] 죄목={topic} · 소재{len(ads)}·확장{len(exts)}{flag}")
+            for h in heads:
+                print(f"      소재: {h}")
+            exlabels = []
+            for e in exts:
+                ax = e.get("adExtension") or {}
+                lab = ax.get("headline") or ax.get("heading") or ax.get("description") or "-"
+                exlabels.append(f"{e.get('type')}:{lab}")
+            print(f"      확장: {' | '.join(exlabels)}")
+            if bad:
+                mismatches.append(f"{c.get('name')} > {gname} (죄목 {topic}) — 안 맞는 소재: {bad}")
+        print()
+    print("=== 불일치 요약 ===")
+    if mismatches:
+        for m in mismatches:
+            print("  ⚠️ " + m)
+    else:
+        print("  ✅ 모든 그룹의 소재 제목이 그룹 죄목과 일치(확장은 위 나열로 육안 확인).")
+
+
 def main():
     if MODE == "dump":
         mode_dump()
+    elif MODE == "audit":
+        mode_audit()
     elif MODE == "migrate":
         mode_migrate()
     elif MODE == "align":
