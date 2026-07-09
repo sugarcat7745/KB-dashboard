@@ -1,0 +1,34 @@
+name: naver-distribute-sungbum
+
+# 성범죄 '복사용' 그룹 키워드를 죄명 일치 라이브 그룹으로 자동 분배.
+# apply=no(기본): 분배 계획만 출력. apply=yes: 실제 등록(그룹별 최빈 입찰가 적용).
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "실제 등록? (no=계획만 / yes=등록)"
+        required: true
+        default: "no"
+      bid:
+        description: "입찰가 강제 지정(원, 0=그룹 최빈가)"
+        required: false
+        default: "0"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 자동 분배
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          APPLY: ${{ inputs.apply == 'yes' && '1' || '0' }}
+          BID: ${{ inputs.bid }}
+        run: python naver_distribute_sungbum.py
