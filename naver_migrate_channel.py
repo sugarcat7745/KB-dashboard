@@ -43,6 +43,7 @@ MODE = os.environ.get("MODE", "dump").strip().lower()
 APPLY = os.environ.get("APPLY", "0") == "1"
 
 SOURCE_CAMPAIGN = os.environ.get("SOURCE_CAMPAIGN", "").strip()
+TARGET_CAMPAIGN = os.environ.get("TARGET_CAMPAIGN", "").strip()   # align: 갱신 대상(신채널) 캠페인
 NEW_CAMPAIGN_NAME = os.environ.get("NEW_CAMPAIGN_NAME", "").strip()
 BIZ = os.environ.get("BIZ_CHANNEL_ID", "").strip()
 PC = os.environ.get("PC_CHANNEL_ID", "").strip() or BIZ
@@ -111,6 +112,17 @@ def _put(uri, body, params=None):
         except Exception:
             return True, None, ""
     return False, None, f"{r.status_code}: {r.text[:500]}"
+
+
+def _delete(uri, params=None):
+    h = _hdr("DELETE", uri)
+    try:
+        r = requests.delete(BASE + uri, headers=h, params=params or {}, timeout=60)
+    except Exception as e:
+        return False, f"요청 예외: {e}"
+    if r.status_code in (200, 204):
+        return True, ""
+    return False, f"{r.status_code}: {r.text[:300]}"
 
 
 def turn_off_campaign(cid):
@@ -407,13 +419,92 @@ def mode_migrate():
         print("기존 캠페인은 그대로 살아있다 — 새 것 확인 후 사람이 직접 OFF/삭제.")
 
 
+# ── 모드: align (기존 복사 그룹을 원본에 맞춤) ──────────────
+def _find_one(name_filter, exclude=""):
+    """이름에 name_filter 포함(있으면 exclude 제외) 캠페인 목록."""
+    camps = _get("/ncc/campaigns")
+    if not isinstance(camps, list):
+        return []
+    out = []
+    for c in camps:
+        n = str(c.get("name", ""))
+        if name_filter and name_filter not in n:
+            continue
+        if exclude and exclude in n:
+            continue
+        out.append(c)
+    return out
+
+
+def mode_align():
+    """TARGET(신채널) 캠페인의 복사 그룹들을 SOURCE(원본) 그룹에 1:1로 맞춘다.
+    그룹은 유지(삭제 안 함). 그룹 이름·입찰가를 원본대로 바꾸고, 소재·확장소재는
+    기존 걸 지우고 원본 것으로 교체(URL은 새 주소로 치환). 키워드는 건드리지 않음."""
+    miss = [n for n, v in [("SOURCE_CAMPAIGN", SOURCE_CAMPAIGN),
+                           ("TARGET_CAMPAIGN", TARGET_CAMPAIGN),
+                           ("NEW_FINAL_URL", NEW_FINAL_URL)] if not v]
+    if miss:
+        print("필수 입력 누락:", ", ".join(miss)); return
+
+    srcs = _find_one(SOURCE_CAMPAIGN, exclude="신채널")   # 원본(신채널 제외)
+    tgts = _find_one(TARGET_CAMPAIGN)                      # 대상(신채널)
+    if len(srcs) != 1:
+        print(f"원본 '{SOURCE_CAMPAIGN}' 매칭 {len(srcs)}개 — 정확히 1개가 되게 좁혀라:", [c.get("name") for c in srcs]); return
+    if len(tgts) != 1:
+        print(f"대상 '{TARGET_CAMPAIGN}' 매칭 {len(tgts)}개 — 정확히 1개가 되게 좁혀라:", [c.get("name") for c in tgts]); return
+    src, tgt = srcs[0], tgts[0]
+    print(f"=== 그룹 정렬(align) · 모드 {'실제적용' if APPLY else '드라이런'} ===")
+    print(f"    원본  {src.get('name')}  →  대상 {tgt.get('name')}")
+    print(f"    새 URL {NEW_FINAL_URL}\n")
+
+    sgroups = sorted(get_groups(src.get("nccCampaignId")), key=lambda g: str(g.get("name", "")))
+    tgroups = sorted(get_groups(tgt.get("nccCampaignId")), key=lambda g: str(g.get("name", "")))
+    print(f"원본 그룹 {len(sgroups)}개 · 대상(복사) 그룹 {len(tgroups)}개")
+    if len(sgroups) != len(tgroups):
+        print(f"⚠️  개수 불일치 — 앞에서부터 {min(len(sgroups), len(tgroups))}쌍만 맞춘다. 나머지는 사람이 조정.")
+    pairs = list(zip(sgroups, tgroups))   # 복제본은 동일하므로 순서 매칭이면 충분
+
+    print("\n[매칭 계획]")
+    for sg, tg in pairs:
+        print(f"   대상 '{tg.get('name')}'  →  '{sg.get('name')}' (입찰 {sg.get('bidAmt')})")
+    if not APPLY:
+        print("\n드라이런 — 실제 적용은 apply=yes.")
+        return
+
+    print("\n[적용]")
+    for sg, tg in pairs:
+        sgid, tgid = sg.get("nccAdgroupId"), tg.get("nccAdgroupId")
+        sname, sbid = sg.get("name"), int(sg.get("bidAmt", 0) or 0)
+        # 1) 이름·입찰가
+        ok, _r, err = _put(f"/ncc/adgroups/{tgid}",
+                           {"nccAdgroupId": tgid, "name": sname, "bidAmt": sbid},
+                           params={"fields": "name,bidAmt"})
+        head = f"   '{tg.get('name')}' → '{sname}' | 이름·입찰 {'✅' if ok else '❌ '+err}"
+        # 2) 소재 교체
+        for a in get_ads(tgid):
+            _delete(f"/ncc/ads/{a.get('nccAdId')}"); time.sleep(0.12)
+        ma, ea = clone_ads(tgid, get_ads(sgid))
+        head += f" | 소재 {ma}"
+        # 3) 확장소재 교체
+        for e in get_extensions(tgid):
+            _delete(f"/ncc/ad-extensions/{e.get('nccAdExtensionId')}"); time.sleep(0.12)
+        me, ee = clone_extensions(tgid, get_extensions(sgid))
+        head += f" | 확장 {me}"
+        print(head)
+        for x in ea: print(f"        ❌ 소재: {x}")
+        for x in ee: print(f"        ❌ 확장: {x}")
+    print("\n완료. 그룹은 유지, 이름·입찰·소재·확장을 원본에 맞췄다. 키워드는 안 건드림.")
+
+
 def main():
     if MODE == "dump":
         mode_dump()
     elif MODE == "migrate":
         mode_migrate()
+    elif MODE == "align":
+        mode_align()
     else:
-        print(f"알 수 없는 MODE='{MODE}'. dump / migrate 중 하나.")
+        print(f"알 수 없는 MODE='{MODE}'. dump / migrate / align 중 하나.")
 
 
 if __name__ == "__main__":
