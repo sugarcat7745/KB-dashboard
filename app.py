@@ -67,8 +67,8 @@ st.markdown(f"""
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css");
 :root {{ --font:'Pretendard','Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif; }}
 .stApp {{ background:{BG}; }}
-html, body, [class*="css"], .stMarkdown, p, span, div, td, th, li, input, button, textarea {{
-  font-family:var(--font) !important; color:{TXT}; word-break:keep-all; }}
+html, body, [class*="css"], .stMarkdown, .stApp p, .stApp span, .stApp li {{ font-family:var(--font); }}
+body {{ word-break:keep-all; }}
 table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
 .serif {{ font-family:var(--font); }}
 #MainMenu, footer, header {{ visibility:hidden; }}
