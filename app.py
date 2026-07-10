@@ -1906,6 +1906,244 @@ def render_brief():
       </table></div>""", unsafe_allow_html=True)
 
 
+def render_exec_summary():
+    """임원용 큰 숫자 요약(시안) — 모바일 최적. 큰 숫자·고대비·깔끔한 제목·잔글자 최소.
+    기존 로더(load_contracts/inquiries/etc + ad_keyword)를 그대로 재활용한다."""
+    con = load_contracts()
+    inq = load_inquiries()
+    today = date.today()
+    start = today.replace(day=1)
+    yday = today - timedelta(days=1)
+    d2 = today - timedelta(days=2)
+
+    def rsum(df, s, e, col, newonly=True):
+        if df is None or df.empty or col not in df.columns or "_date" not in df.columns:
+            return 0.0
+        m = (df["_date"].dt.date >= s) & (df["_date"].dt.date <= e)
+        if newonly and "_is_new" in df.columns:
+            m = m & df["_is_new"]
+        return float(df[m][col].sum())
+
+    rev = rsum(con, start, today, "_amt")
+    paid = rsum(con, start, today, "_paid")
+    unpaid_m = max(rev - paid, 0.0)
+    total_unpaid = float(con["_unpaid"].sum()) if (con is not None and not con.empty and "_unpaid" in con.columns) else 0.0
+
+    pl_last = start - timedelta(days=1); pl_first = pl_last.replace(day=1)
+    pe = pl_first.replace(day=min(today.day, pl_last.day))
+    rev_pm = rsum(con, pl_first, pe, "_amt")
+    try:
+        rev_ly = rsum(con, start.replace(year=start.year - 1), today.replace(year=today.year - 1), "_amt")
+    except Exception:
+        rev_ly = 0.0
+
+    def spend(s, e):
+        a = 0
+        try:
+            a = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                   f"WHERE date BETWEEN '{s}' AND '{e}'")["c"].iloc[0]
+        except Exception:
+            a = 0
+        b = 0
+        try:
+            etc = load_etc()
+            if etc is not None and not etc.empty:
+                b = etc[(etc["date"].dt.date >= s) & (etc["date"].dt.date <= e)]["cost"].sum()
+        except Exception:
+            b = 0
+        return float(a or 0) + float(b or 0)
+    ad = spend(start, today)
+    roas = rev / ad * 100 if ad else 0
+
+    def inq_slice(s, e):
+        if inq is None or inq.empty or "date" not in inq.columns:
+            return 0, 0, 0
+        t = inq.copy(); t["_d"] = pd.to_datetime(t["date"], errors="coerce").dt.date
+        sl = t[(t["_d"] >= s) & (t["_d"] <= e)]
+        c = int(sl["consulted"].sum()) if "consulted" in sl.columns else 0
+        k = int(sl["contracted"].sum()) if "contracted" in sl.columns else 0
+        return len(sl), c, k
+    n_inq, n_sang, n_suim = inq_slice(start, today)
+    r_is = (n_sang / n_inq * 100) if n_inq else 0
+    r_sk = (n_suim / n_sang * 100) if n_sang else 0
+    r_ik = (n_suim / n_inq * 100) if n_inq else 0
+
+    # 6개월 신건 매출 추세
+    per = pd.Period(f"{today.year}-{today.month:02d}", freq="M")
+    seq = []
+    for i in range(5, -1, -1):
+        p = per - i
+        s0, e0 = p.start_time.date(), p.end_time.date()
+        if p == per:
+            e0 = today
+        seq.append((f"{p.month}월", rsum(con, s0, e0, "_amt")))
+
+    yad, yad_p = spend(yday, yday), spend(d2, d2)
+    yi, ys, yk = inq_slice(yday, yday)
+    yi_p, ys_p, yk_p = inq_slice(d2, d2)
+
+    # ── 포맷·조각 헬퍼 ──
+    def eok(v): return f"{v/1e8:.2f}"
+    def man(v): return f"{v/1e4:,.0f}"
+    def pchip(cur, base, unit):
+        if not base:
+            return f'<span class="exc flat">– {unit}</span>'
+        dd = (cur - base) / base * 100
+        cls = "up" if dd >= 0 else "down"; ar = "▲" if dd >= 0 else "▼"
+        return f'<span class="exc {cls}">{ar} {abs(dd):.1f}% <span class="u">{unit}</span></span>'
+    def dchip(cur, base):
+        d = cur - base
+        if d > 0: return f'<span class="exc up">▲ {d}</span>'
+        if d < 0: return f'<span class="exc down">▼ {abs(d)}</span>'
+        return '<span class="exc flat">– 0</span>'
+    pct = (rev / MONTHLY_GOAL * 100) if MONTHLY_GOAL else 0
+
+    # ── 스파크라인 SVG ──
+    vals = [v for _, v in seq] or [0]
+    mx = max(vals) or 1
+    n = len(vals)
+    pts = [(int(i * 320 / max(n - 1, 1)), int(90 - (v / mx) * 72)) for i, v in enumerate(vals)]
+    line_d = f"M{pts[0][0]},{pts[0][1]} " + " ".join(f"L{x},{y}" for x, y in pts[1:])
+    area_d = line_d + f" L320,100 L0,100 Z"
+    lx, ly_ = pts[-1]
+    xlabels = "".join(f"<span>{lbl}</span>" for lbl, _ in seq)
+
+    GD, RD, GN = "#E6BE5C", "#E07B67", "#54C08A"
+    alert_html = ""
+    if total_unpaid > 0:
+        alert_html = f"""
+      <div class="ex-eyebrow">주의</div>
+      <div class="ex-alert">
+        <div class="ico">⚠️</div>
+        <div class="t"><div class="lab">누적 미수금</div><div class="v tnum">{eok(total_unpaid)}억원</div></div>
+      </div>"""
+
+    html = f"""
+    <style>
+      .ex-wrap{{--gd:{GD};--rd:{RD};--gn:{GN};--tx:#F5F3ED;--t2:#C6C4BB;--t3:#8B897F;
+        --sf:#17171C;--sf2:#1F1F27;--ln:#2C2C35;--ln2:#3A3A45;
+        font-family:'Noto Sans KR',sans-serif;max-width:520px;margin:0 auto;}}
+      .ex-wrap .tnum{{font-variant-numeric:tabular-nums}}
+      .ex-eyebrow{{display:flex;align-items:center;gap:11px;margin:24px 2px 12px;
+        font-size:16px;font-weight:800;color:var(--tx);letter-spacing:-.2px}}
+      .ex-eyebrow::after{{content:"";flex:1;height:1px;background:var(--ln)}}
+      .ex-eyebrow .em{{color:var(--gd)}}
+      .ex-hero{{background:linear-gradient(160deg,var(--sf2),var(--sf));border:1px solid var(--ln2);
+        border-radius:20px;padding:22px 22px 20px;position:relative;overflow:hidden}}
+      .ex-hero::before{{content:"";position:absolute;inset:0 0 auto 0;height:3px;
+        background:linear-gradient(90deg,var(--gd),transparent 70%)}}
+      .ex-hero .lab{{font-size:15px;color:var(--t2);font-weight:600}}
+      .ex-hero .big{{font-size:52px;font-weight:800;letter-spacing:-2px;line-height:1;margin:10px 0 4px;color:var(--gd)}}
+      .ex-hero .big small{{font-size:24px;font-weight:700;color:var(--t2);margin-left:3px}}
+      .ex-sub{{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}}
+      .exc{{display:inline-flex;align-items:center;gap:4px;font-size:13px;font-weight:700;padding:4px 10px;border-radius:999px}}
+      .exc.up{{color:var(--gn);background:rgba(84,192,138,.14)}}
+      .exc.down{{color:var(--rd);background:rgba(224,123,103,.14)}}
+      .exc.flat{{color:var(--t2);background:rgba(255,255,255,.06)}}
+      .exc .u{{opacity:.65;font-weight:600}}
+      .ex-goal{{margin-top:18px}}
+      .ex-goal .row{{display:flex;justify-content:space-between;font-size:14px;color:var(--t2);margin-bottom:8px}}
+      .ex-goal .row b{{color:var(--tx);font-weight:700}}
+      .ex-bar{{height:12px;background:#0d0d10;border:1px solid var(--ln);border-radius:99px;overflow:hidden}}
+      .ex-bar>span{{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--gd),#C99A38)}}
+      .ex-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}}
+      .ex-card{{background:var(--sf);border:1px solid var(--ln);border-radius:16px;padding:16px}}
+      .ex-card .lab{{font-size:14px;color:var(--t2);font-weight:600}}
+      .ex-card .val{{font-size:30px;font-weight:800;letter-spacing:-.8px;margin-top:11px;color:var(--tx)}}
+      .ex-card .val small{{font-size:15px;color:var(--t2);font-weight:700}}
+      .ex-fun{{background:var(--sf);border:1px solid var(--ln);border-radius:16px;padding:18px 16px 8px}}
+      .ex-fun .steps{{display:flex;align-items:center;gap:4px}}
+      .ex-fstep{{flex:1;text-align:center}}
+      .ex-fstep .nm{{font-size:30px;font-weight:800;color:var(--tx);letter-spacing:-.8px}}
+      .ex-fstep .tt{{font-size:13px;color:var(--t2);margin-top:3px;font-weight:600}}
+      .ex-fstep.win .nm{{color:var(--gd)}}
+      .ex-far{{color:var(--gd);font-size:15px;font-weight:800;padding:0 2px}}
+      .ex-rate{{display:flex;justify-content:space-around;margin-top:12px;padding-top:13px;border-top:1px solid var(--ln)}}
+      .ex-rate div{{font-size:12px;color:var(--t3);text-align:center}}
+      .ex-rate b{{display:block;font-size:16px;color:var(--tx);font-weight:800;margin-top:3px}}
+      .ex-alert{{display:flex;gap:13px;align-items:center;background:rgba(224,123,103,.14);
+        border:1px solid rgba(224,123,103,.32);border-radius:16px;padding:16px}}
+      .ex-alert .ico{{font-size:22px}}
+      .ex-alert .lab{{font-size:14px;color:var(--t2);font-weight:600}}
+      .ex-alert .v{{font-size:25px;font-weight:800;color:var(--rd);margin-top:3px;letter-spacing:-.6px}}
+      .ex-trend{{background:var(--sf);border:1px solid var(--ln);border-radius:16px;padding:18px 16px 14px}}
+      .ex-trend .hd{{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px}}
+      .ex-trend .hd .t{{font-size:14px;color:var(--t2);font-weight:600}}
+      .ex-trend .hd .now{{font-size:16px;font-weight:800;color:var(--gd)}}
+      .ex-trend svg{{width:100%;height:100px;display:block}}
+      .ex-xlab{{display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:var(--t3)}}
+      .ex-snap{{background:var(--sf);border:1px solid var(--ln);border-radius:16px;overflow:hidden}}
+      .ex-snap .r{{display:flex;align-items:center;justify-content:space-between;padding:15px 16px;border-bottom:1px solid var(--ln)}}
+      .ex-snap .r:last-child{{border-bottom:none}}
+      .ex-snap .r .l{{font-size:14.5px;color:var(--t2);font-weight:600}}
+      .ex-snap .r .rt{{display:flex;align-items:center;gap:11px}}
+      .ex-snap .r .v{{font-size:18px;font-weight:800;color:var(--tx);letter-spacing:-.3px}}
+    </style>
+    <div class="ex-wrap">
+      <div class="ex-eyebrow">이번 달 <span class="em">신건 매출</span></div>
+      <div class="ex-hero">
+        <div class="lab">계약 기준</div>
+        <div class="big tnum">{eok(rev)}<small>억원</small></div>
+        <div class="ex-sub">{pchip(rev, rev_pm, "전월")}{pchip(rev, rev_ly, "전년")}</div>
+        <div class="ex-goal">
+          <div class="row"><span>월 목표 <b>{eok(MONTHLY_GOAL)}억</b></span><span><b>{pct:.0f}%</b> 달성</span></div>
+          <div class="ex-bar"><span style="width:{min(pct,100):.0f}%"></span></div>
+        </div>
+      </div>
+
+      <div class="ex-grid">
+        <div class="ex-card"><div class="lab">실입금</div><div class="val tnum">{eok(paid)}<small>억</small></div></div>
+        <div class="ex-card"><div class="lab">미수금</div><div class="val tnum" style="color:var(--rd)">{eok(unpaid_m)}<small>억</small></div></div>
+        <div class="ex-card"><div class="lab">광고비</div><div class="val tnum">{man(ad)}<small>만</small></div></div>
+        <div class="ex-card"><div class="lab">ROAS · 계약</div><div class="val tnum" style="color:var(--gd)">{roas:.0f}<small>%</small></div></div>
+      </div>
+
+      <div class="ex-eyebrow">전환 <span class="em">퍼널</span></div>
+      <div class="ex-fun">
+        <div class="steps">
+          <div class="ex-fstep"><div class="nm tnum">{n_inq}</div><div class="tt">문의</div></div>
+          <div class="ex-far">›</div>
+          <div class="ex-fstep"><div class="nm tnum">{n_sang}</div><div class="tt">상담</div></div>
+          <div class="ex-far">›</div>
+          <div class="ex-fstep win"><div class="nm tnum">{n_suim}</div><div class="tt">수임</div></div>
+        </div>
+        <div class="ex-rate">
+          <div>문의→상담<b class="tnum">{r_is:.1f}%</b></div>
+          <div>상담→수임<b class="tnum">{r_sk:.1f}%</b></div>
+          <div>수임률<b class="tnum">{r_ik:.1f}%</b></div>
+        </div>
+      </div>
+      {alert_html}
+
+      <div class="ex-eyebrow">신건 매출 <span class="em">추세</span></div>
+      <div class="ex-trend">
+        <div class="hd"><span class="t">최근 6개월 (억원)</span><span class="now tnum">{eok(rev)}</span></div>
+        <svg viewBox="0 0 320 100" preserveAspectRatio="none" aria-hidden="true">
+          <defs><linearGradient id="exg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="{GD}" stop-opacity=".34"/>
+            <stop offset="1" stop-color="{GD}" stop-opacity="0"/></linearGradient></defs>
+          <line x1="0" y1="26" x2="320" y2="26" stroke="#2C2C35" stroke-width="1"/>
+          <line x1="0" y1="63" x2="320" y2="63" stroke="#2C2C35" stroke-width="1"/>
+          <path d="{area_d}" fill="url(#exg)"/>
+          <path d="{line_d}" fill="none" stroke="{GD}" stroke-width="2.6" stroke-linejoin="round" stroke-linecap="round"/>
+          <circle cx="{lx}" cy="{ly_}" r="5" fill="{GD}"/>
+        </svg>
+        <div class="ex-xlab">{xlabels}</div>
+      </div>
+
+      <div class="ex-eyebrow">어제 <span class="em">{yday.month}/{yday.day}</span></div>
+      <div class="ex-snap">
+        <div class="r"><span class="l">광고비</span><span class="rt"><span class="v tnum">{man(yad)}만</span>{pchip(yad, yad_p, "전일")}</span></div>
+        <div class="r"><span class="l">문의</span><span class="rt"><span class="v tnum">{yi}건</span>{dchip(yi, yi_p)}</span></div>
+        <div class="r"><span class="l">상담</span><span class="rt"><span class="v tnum">{ys}건</span>{dchip(ys, ys_p)}</span></div>
+        <div class="r"><span class="l">신규 수임</span><span class="rt"><span class="v tnum">{yk}건</span>{dchip(yk, yk_p)}</span></div>
+      </div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+    st.caption("임원 요약(시안) · 실데이터 · 큰 숫자·핵심만. 자세한 분석은 다른 보기·탭에서.")
+
+
 def render_summary():
     tab_header("fa-chart-pie", "월간 종합", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
     con = load_contracts()
@@ -4591,9 +4829,11 @@ def main():
                 st.caption(f"(관리자 참고) {type(e).__name__}: {e}")
 
     with top[0]:
-        v = st.radio("보기", ["일간 보고", "월간 종합"], horizontal=True,
+        v = st.radio("보기", ["📱 임원 요약", "일간 보고", "월간 종합"], horizontal=True,
                      label_visibility="collapsed", key="nav_sum")
-        if v == "일간 보고":
+        if v == "📱 임원 요약":
+            _safe(render_exec_summary, "임원 요약")
+        elif v == "일간 보고":
             _safe(render_brief, "일간 보고")
         else:
             _safe(render_summary, "월간 종합")
