@@ -1,0 +1,8 @@
+# 밝은·모던 테마 — Streamlit 기본 위젯(라디오·표·입력·차트)도 이 톤으로 렌더됨.
+[theme]
+base = "light"
+primaryColor = "#2E63E6"
+backgroundColor = "#F4F6F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#171B21"
+font = "sans serif"

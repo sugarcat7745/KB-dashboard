@@ -48,10 +48,12 @@ MODEL_INSIGHT = "claude-haiku-4-5-20251001"
 MODEL_CHAT    = "claude-sonnet-4-6"
 #   ⚠️ Sonnet 문자열이 SDK에서 에러나면 이 줄만 교체 (대안: "claude-sonnet-4-5-20250929")
 
-GOLD   = "#D2AA50"; GOLD_B = "#F0C86E"; GOLD_D = "#BE963C"
-TEAL   = "#5BB4C4"; CORAL  = "#C77B6B"; GRAY   = "#6E6E66"
-BG     = "#0C0C0E"; SURF   = "#16161A"; SURF2  = "#1C1C21"
-LINE   = "#2A2A31"; TXT    = "#F2F0EA"; MUTED  = "#A8A69E"
+# 밝은·모던(라이트) 팔레트. 변수명은 유지(GOLD=포인트 블루로 의미 전환).
+GOLD   = "#2E63E6"; GOLD_B = "#14213D"; GOLD_D = "#1E4FD0"   # 포인트 블루 / 강조숫자 네이비 / 진블루
+TEAL   = "#0EA5B7"; CORAL  = "#E0463B"; GRAY   = "#8A93A0"
+BG     = "#F4F6F9"; SURF   = "#FFFFFF"; SURF2  = "#F1F4F8"
+LINE   = "#E6E9EF"; TXT    = "#171B21"; MUTED  = "#5A6472"
+GOOD   = "#129E62"                                            # 상승/정상 초록
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly",
           "https://www.googleapis.com/auth/drive.readonly"]
@@ -62,68 +64,63 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly",
 st.markdown(f"""
 <style>
 .stApp {{ background:{BG};
-  background-image: radial-gradient(ellipse 90% 55% at 50% -8%, rgba(210,170,80,0.08), transparent 55%),
-                    radial-gradient(rgba(210,170,80,0.022) 1px, transparent 1px);
-  background-size: auto, 26px 26px; }}
+  background-image: radial-gradient(ellipse 90% 50% at 50% -10%, rgba(46,99,230,0.05), transparent 60%); }}
 html, body, [class*="css"] {{ font-family:'Noto Sans KR',sans-serif; color:{TXT}; }}
-.serif {{ font-family:'Noto Serif KR',serif; }}
+.serif {{ font-family:'Noto Sans KR',sans-serif; }}   /* 명조 대신 산세리프로 통일(모던) */
 #MainMenu, footer, header {{ visibility:hidden; }}
-.block-container {{ padding-top:1.5rem; max-width:1200px; }}
+.block-container {{ padding-top:1.5rem; max-width:1120px; }}
 /* 헤더 */
 .kb-top {{ display:flex; justify-content:space-between; align-items:center;
-  padding:18px 4px 22px; border-bottom:1px solid {LINE}; border-top:2px solid {GOLD}; margin-bottom:8px; }}
+  padding:16px 4px 18px; border-bottom:1px solid {LINE}; margin-bottom:10px; }}
 .kb-date {{ text-align:right; }}
-.kb-date .d {{ font-size:17px; font-weight:500; font-family:'Noto Serif KR',serif; }}
+.kb-date .d {{ font-size:16px; font-weight:800; color:{GOLD_B}; }}
 .kb-date .w {{ font-size:12px; color:{MUTED}; margin-top:2px; }}
 /* eyebrow */
-.eyebrow {{ font-size:12px; letter-spacing:3px; color:{GOLD}; text-transform:uppercase;
+.eyebrow {{ font-size:12px; letter-spacing:2px; color:{GOLD}; text-transform:uppercase; font-weight:700;
   margin:18px 0; display:flex; align-items:center; gap:12px; }}
 .eyebrow::after {{ content:""; flex:1; height:1px; background:{LINE}; }}
 /* KPI */
-.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:12px; padding:14px 16px;
-  position:relative; min-height:88px; }}
-.kpi .l {{ font-size:12px; color:{MUTED}; margin-bottom:8px; }}
-.kpi .v {{ font-size:25px; font-weight:600; color:{GOLD_B}; line-height:1; font-family:'Noto Serif KR',serif; }}
-.kpi .v small {{ font-size:13px; color:{MUTED}; font-weight:400; margin-left:2px; }}
-.kpi .chg {{ font-size:12px; margin-top:7px; }}
-.kpi .chg.up {{ color:#7BB89A; }} .kpi .chg.down {{ color:{CORAL}; }}
+.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:14px; padding:16px 18px;
+  position:relative; min-height:90px; box-shadow:0 1px 2px rgba(20,30,50,.04),0 4px 16px rgba(20,30,50,.05); }}
+.kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:8px; font-weight:600; }}
+.kpi .v {{ font-size:27px; font-weight:800; color:{GOLD_B}; line-height:1; letter-spacing:-.5px; }}
+.kpi .v small {{ font-size:14px; color:{MUTED}; font-weight:700; margin-left:2px; }}
+.kpi .chg {{ font-size:12px; margin-top:8px; font-weight:700; }}
+.kpi .chg.up {{ color:{GOOD}; }} .kpi .chg.down {{ color:{CORAL}; }}
 .kpi .d {{ font-size:11px; margin-top:3px; color:{MUTED}; }}
-.kpi-ic {{ position:absolute; top:14px; right:14px; font-size:18px; color:rgba(210,170,80,0.3); }}
+.kpi-ic {{ position:absolute; top:16px; right:16px; font-size:18px; color:rgba(46,99,230,0.28); }}
 /* 카드 */
-.kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:12px; padding:22px 24px; margin-bottom:18px; }}
-.kb-card h3 {{ font-size:16px; font-weight:600; margin-bottom:16px; display:flex; align-items:center; gap:10px; }}
+.kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:14px; padding:20px 22px; margin-bottom:16px;
+  box-shadow:0 1px 2px rgba(20,30,50,.04),0 4px 16px rgba(20,30,50,.05); }}
+.kb-card h3 {{ font-size:16px; font-weight:800; margin-bottom:16px; display:flex; align-items:center; gap:10px; }}
 .kb-card h3 i {{ color:{GOLD}; font-size:15px; }}
 /* 목표바 */
-.goalbar {{ height:10px; background:{SURF2}; border-radius:5px; overflow:hidden; border:1px solid {LINE}; }}
-.goalbar > div {{ height:100%; background:{GOLD}; border-radius:5px; }}
+.goalbar {{ height:11px; background:#EEF1F6; border-radius:99px; overflow:hidden; border:1px solid {LINE}; }}
+.goalbar > div {{ height:100%; background:linear-gradient(90deg,{GOLD},{GOLD_D}); border-radius:99px; }}
 /* 표 */
 .kb-tbl {{ width:100%; border-collapse:collapse; }}
-.kb-tbl th {{ font-size:12px; color:{MUTED}; font-weight:400; text-align:right; padding:9px 10px; border-bottom:1px solid {LINE}; }}
+.kb-tbl th {{ font-size:12px; color:{MUTED}; font-weight:700; text-align:right; padding:9px 10px; border-bottom:1px solid {LINE}; }}
 .kb-tbl th:first-child, .kb-tbl td:first-child {{ text-align:left; }}
-.kb-tbl td {{ font-size:14px; padding:11px 10px; border-bottom:1px solid {LINE}; }}
-.kb-tbl td.num {{ color:{GOLD_B}; font-weight:500; }}
+.kb-tbl td {{ font-size:14px; padding:12px 10px; border-bottom:1px solid #F0F2F6; }}
+.kb-tbl td.num {{ color:{GOLD_B}; font-weight:800; }}
 .placeholder {{ text-align:center; padding:70px 20px; color:{MUTED}; }}
-/* ══ 타이포 위계 (일관 스케일) ══
-   대제목(탭헤더) 22/700 · 제목(대단락) 18/700 · 소제목(섹션) 15/600
-   · 본문 14/400 · 서브설명 12/400(흐림) · 숫자강조 명조(KPI·ROAS·금액에만) */
-/* 제목 — 대단락 */
-.big-section {{ font-size:18px; font-weight:700; color:{GOLD};
-    margin:34px 0 6px; padding-bottom:10px; border-bottom:2px solid rgba(210,170,80,.28);
+/* ══ 타이포 위계 (일관 스케일) ══ */
+.big-section {{ font-size:18px; font-weight:800; color:{TXT};
+    margin:34px 0 6px; padding-bottom:10px; border-bottom:2px solid {LINE};
     display:flex; align-items:center; gap:11px; }}
 .big-section i {{ color:{GOLD}; font-size:16px; }}
-/* 소제목 — 섹션 */
-.sec-title {{ font-size:15px; font-weight:600; margin:20px 0 11px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
+.sec-title {{ font-size:15px; font-weight:700; margin:20px 0 11px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
 .sec-title i {{ color:{GOLD}; font-size:14px; }}
-.placeholder i {{ font-size:40px; color:{GOLD_D}; margin-bottom:16px; }}
+.placeholder i {{ font-size:40px; color:{GOLD}; margin-bottom:16px; }}
 /* 탭 — 알약 스타일 */
 .stTabs [data-baseweb="tab-list"] {{ gap:8px; border-bottom:none; flex-wrap:wrap; padding:2px 0 6px; }}
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}
-.stTabs [data-baseweb="tab"] {{ color:{MUTED}; font-size:14px; font-weight:600; padding:9px 20px;
-    background:rgba(255,255,255,.03); border:1px solid {LINE}; border-radius:11px; transition:all .2s; }}
-.stTabs [data-baseweb="tab"]:hover {{ background:rgba(210,170,80,.1); color:{GOLD_B}; border-color:{GOLD_D}; }}
-.stTabs [aria-selected="true"] {{ color:#1a1a17 !important;
-    background:linear-gradient(135deg,{GOLD},{GOLD_D}); border-color:{GOLD};
-    box-shadow:0 4px 14px rgba(210,170,80,.32); }}
+.stTabs [data-baseweb="tab"] {{ color:{MUTED}; font-size:14px; font-weight:700; padding:9px 18px;
+    background:{SURF}; border:1px solid {LINE}; border-radius:10px; transition:all .18s; }}
+.stTabs [data-baseweb="tab"]:hover {{ background:#EAF0FE; color:{GOLD_D}; border-color:#CFDCFB; }}
+.stTabs [aria-selected="true"] {{ color:#fff !important;
+    background:{GOLD}; border-color:{GOLD};
+    box-shadow:0 4px 12px rgba(46,99,230,.28); }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -642,10 +639,10 @@ def ai_banner(summary, tab, period, focus=""):
     if not txt:
         return
     st.markdown(
-        f'<div style="background:linear-gradient(135deg,rgba(210,170,80,.10),rgba(190,150,60,.03));'
-        f'border:1px solid rgba(210,170,80,.25);border-left:3px solid #D2AA50;border-radius:12px;'
+        f'<div style="background:linear-gradient(135deg,rgba(46,99,230,.10),rgba(190,150,60,.03));'
+        f'border:1px solid rgba(46,99,230,.25);border-left:3px solid #2E63E6;border-radius:12px;'
         f'padding:13px 18px;margin:4px 0 16px;font-size:14px;line-height:1.65;color:#D8D4CA;">'
-        f'<span style="color:#F0C86E;font-weight:700;white-space:nowrap;">'
+        f'<span style="color:#1E4FD0;font-weight:700;white-space:nowrap;">'
         f'<i class="fa-solid fa-robot"></i> AI 분석</span>&nbsp;&nbsp;{txt}</div>',
         unsafe_allow_html=True)
 
@@ -1254,11 +1251,11 @@ def build_export_zip():
 def fig_theme(fig, h=240):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="Noto Sans KR", color="#B5B3AB", size=12),
+        font=dict(family="Noto Sans KR", color="#5A6472", size=12),
         margin=dict(l=10, r=10, t=10, b=10), height=h,
-        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#B5B3AB")),
-        xaxis=dict(gridcolor="rgba(255,255,255,0.05)", zeroline=False),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.05)", zeroline=False),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color="#5A6472")),
+        xaxis=dict(gridcolor="rgba(20,30,50,0.07)", zeroline=False),
+        yaxis=dict(gridcolor="rgba(20,30,50,0.07)", zeroline=False),
     )
     return fig
 
@@ -1321,12 +1318,12 @@ def sortable_table(columns, rows, height=420):
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap">
 <style>
   body{{margin:0;font-family:'Noto Sans KR',-apple-system,sans-serif;background:transparent;}}
-  table{{width:100%;border-collapse:collapse;font-size:13px;color:#E8E4DA;}}
+  table{{width:100%;border-collapse:collapse;font-size:13px;color:#14213D;}}
   th,td{{padding:9px 12px;border-bottom:1px solid #2A2A26;text-align:right;white-space:nowrap;}}
   th:first-child,td:first-child{{text-align:left;}}
-  th{{color:#D2AA50;cursor:pointer;user-select:none;background:#1a1a17;position:sticky;top:0;font-weight:600;}}
+  th{{color:#2E63E6;cursor:pointer;user-select:none;background:#F1F4F8;position:sticky;top:0;font-weight:600;}}
   th:hover{{background:#262621;}}
-  tr:hover td{{background:rgba(210,170,80,.06);}}
+  tr:hover td{{background:rgba(46,99,230,.06);}}
   .ar{{font-size:11px;margin-left:5px;color:#9a9a90;}}
 </style>
 <table id="kt"><thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>
@@ -1481,7 +1478,7 @@ def period_selector(key, dmin, dmax, default="이번달", title="기간별 조�
     else:
         lab = f"{start.year}년 {kday(start)} ~ {end.year}년 {kday(end)}"
     st.caption(f"📅 {lab}")
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.25);margin:14px 0 20px;">',
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.25);margin:14px 0 20px;">',
                 unsafe_allow_html=True)
     return start, end
 
@@ -1534,13 +1531,13 @@ def cmp_caption(text):
                 f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:11px;"></i> 화살표 = {text} 증감</div>',
                 unsafe_allow_html=True)
 
-def tab_header(icon_fa, title, sub, color="#D2AA50", rgb="210,170,80"):
+def tab_header(icon_fa, title, sub, color="#2E63E6", rgb="46,99,230"):
     st.markdown(
         f'<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
         f'background:linear-gradient(90deg,rgba({rgb},.16),rgba({rgb},.02));'
         f'border-left:5px solid {color};border-radius:12px;">'
         f'<div style="width:46px;height:46px;border-radius:11px;background:{color};display:flex;'
-        f'align-items:center;justify-content:center;font-size:22px;color:#1a1a17;'
+        f'align-items:center;justify-content:center;font-size:22px;color:#FFFFFF;'
         f'box-shadow:0 4px 12px rgba({rgb},.4);"><i class="fa-solid {icon_fa}"></i></div>'
         f'<div><div style="font-size:22px;font-weight:700;color:{color};letter-spacing:-.5px;">{title}</div>'
         f'<div style="font-size:12px;color:{MUTED};margin-top:2px;">{sub}</div></div></div>',
@@ -1593,17 +1590,17 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True, paid=
     period_txt = (' · ' + period) if period else ''
     # ⚠️ HTML은 반드시 '한 줄'로 — 줄바꿈·들여쓰기가 있으면 Streamlit 마크다운이 코드블록으로 오인해 태그가 글자로 노출됨
     html = (
-        f'<div class="kb-card" style="border:1px solid rgba(210,170,80,.45);'
+        f'<div class="kb-card" style="border:1px solid rgba(46,99,230,.45);'
         f'display:flex;justify-content:space-between;align-items:center;padding:16px 24px;margin:6px 0 16px;flex-wrap:wrap;gap:14px;">'
         f'<div><div style="font-size:12px;color:{MUTED};letter-spacing:1px;">'
         f'<i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{period_txt}{basis_tag}</div>'
         f'<div style="margin-top:5px;line-height:1;">'
         f'<span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>'
-        f'<span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(210,170,80,.14);color:{gc};">{grade}</span>{chg_html}</div>'
+        f'<span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(46,99,230,.14);color:{gc};">{grade}</span>{chg_html}</div>'
         f'{cash_html}</div>'
         f'<div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">'
-        f'{rev_lbl} <b style="color:#E8E6DE;">{money(rev)}</b>원<br>'
-        f'광고비 <b style="color:#E8E6DE;">{money(ad)}</b>원{profit_row}</div></div>'
+        f'{rev_lbl} <b style="color:#14213D;">{money(rev)}</b>원<br>'
+        f'광고비 <b style="color:#14213D;">{money(ad)}</b>원{profit_row}</div></div>'
     )
     st.markdown(html, unsafe_allow_html=True)
 
@@ -1703,18 +1700,18 @@ def render_brief():
         _tot = sum(_mvals)
         st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 매체별 어제 광고비</div>', unsafe_allow_html=True)
         pie = go.Figure(go.Pie(labels=_mlabels, values=_mvals, hole=0.62, sort=False,
-                               marker=dict(colors=_cols, line=dict(color="#1a1a17", width=2)),
-                               textinfo="label+percent", textfont=dict(size=12, color="#E8E6DE"),
+                               marker=dict(colors=_cols, line=dict(color="#FFFFFF", width=2)),
+                               textinfo="label+percent", textfont=dict(size=12, color="#14213D"),
                                hovertemplate="%{label}: %{value:,.0f}원 (%{percent})<extra></extra>"))
         pie.update_layout(showlegend=False, margin=dict(t=14, b=14, l=14, r=14),
                           annotations=[dict(text=f"어제 합계<br><b>{money(_tot)}원</b>",
                                             x=0.5, y=0.5, showarrow=False,
-                                            font=dict(size=14, color="#E8E6DE"))])
+                                            font=dict(size=14, color="#14213D"))])
         st.plotly_chart(fig_theme(pie, 260), use_container_width=True, config={"displayModeBar": False})
 
     # ═══ HERO: 이번 달 목표 달성 ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(100% 초과=초과달성 그대로)
-    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(210,170,80,.35);">
+    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(46,99,230,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
         <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
         <div style="display:flex;align-items:baseline;gap:10px;">
@@ -1759,13 +1756,13 @@ def render_brief():
             rr = float(r["rate"]); cc = CORAL if rr >= 100 else (GOLD_B if rr >= 70 else MUTED)
             sp = float(r["spent"] or 0); bg = float(r["daily_budget"] or 0)
             rows += (f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">'
-                     f'<span style="width:150px;color:#E8E6DE;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["campaign_name"]}</span>'
-                     f'<div style="flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden;">'
+                     f'<span style="width:150px;color:#14213D;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["campaign_name"]}</span>'
+                     f'<div style="flex:1;height:8px;background:#EEF1F6;border-radius:4px;overflow:hidden;">'
                      f'<div style="width:{min(rr,100):.0f}%;height:100%;background:{cc};"></div></div>'
                      f'<span style="width:120px;text-align:right;color:{MUTED};font-size:11px;">{money(sp)} / {money(bg)}원</span>'
                      f'<span style="width:46px;text-align:right;color:{cc};font-weight:600;">{rr:.0f}%</span></div>')
         st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.07);">
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #E6E9EF;">
             <div><span style="font-size:12px;color:{MUTED};">전체 소진률</span>
             <span class="serif" style="font-size:28px;font-weight:600;color:{rc};margin-left:10px;">{rate:.0f}<small style="font-size:14px;">%</small></span></div>
             <span style="font-size:12px;color:{MUTED};">소진 {money(ts)} / 예산 {money(tb)}원</span></div>
@@ -1792,10 +1789,10 @@ def render_brief():
                 q = int(r["문의"]); s = int(r["상담"]); w = int(r["수임"])
                 wpct = q / mx * 100
                 rows2 += (f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">'
-                          f'<span style="width:150px;color:#E8E6DE;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["category"]}</span>'
-                          f'<div style="flex:1;height:8px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden;">'
+                          f'<span style="width:150px;color:#14213D;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["category"]}</span>'
+                          f'<div style="flex:1;height:8px;background:#EEF1F6;border-radius:4px;overflow:hidden;">'
                           f'<div style="width:{wpct:.0f}%;height:100%;background:{TEAL};"></div></div>'
-                          f'<span style="width:140px;text-align:right;color:{MUTED};">문의 <b style="color:#E8E6DE;">{q}</b> · 상담 {s} · 수임 {w}</span></div>')
+                          f'<span style="width:140px;text-align:right;color:{MUTED};">문의 <b style="color:#14213D;">{q}</b> · 상담 {s} · 수임 {w}</span></div>')
             st.markdown(f'<div class="kb-card" style="margin-bottom:16px;">{rows2}</div>', unsafe_allow_html=True)
     end_day = yday if (yday.year == today.year and yday.month == today.month) else today
     days = [today.replace(day=d) for d in range(1, end_day.day + 1)]
@@ -1838,7 +1835,7 @@ def render_brief():
     fig_theme(fig, 260)
     fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, color=TEAL),
                       legend=dict(orientation="h", y=1.16, x=0),
-                      xaxis=dict(title="일", dtick=1, gridcolor="rgba(255,255,255,0.05)"))
+                      xaxis=dict(title="일", dtick=1, gridcolor="rgba(20,30,50,0.06)"))
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     # ── 월 전체 일별 표 (매체별 · 주차 소계 · 전주대비) ──
@@ -1853,17 +1850,17 @@ def render_brief():
         col = "#7FB87F" if d >= 0 else CORAL
         return f'<span style="color:{col};font-size:11px;">{"▲" if d>=0 else "▼"} {abs(d):.1f}%</span>'
     heads = (f'<th style="padding:7px 8px;text-align:center;background:#2a2a26;color:{MUTED};position:sticky;left:0;">날짜</th>'
-             + "".join(f'<th style="padding:7px 8px;text-align:center;background:{mcolor.get(m, "#555")};color:#1a1a17;font-weight:700;">{m}</th>' for m in cols_m)
-             + f'<th style="padding:7px 8px;text-align:center;background:{GOLD_D};color:#1a1a17;font-weight:700;">총광고비</th>'
-             + '<th style="padding:7px 8px;text-align:center;background:#3a6b73;color:#E8E6DE;">문의</th>'
-             + '<th style="padding:7px 8px;text-align:center;background:#3a6b73;color:#E8E6DE;">CPI</th>'
-             + '<th style="padding:7px 8px;text-align:center;background:#7a5a4e;color:#E8E6DE;">상담</th>'
-             + '<th style="padding:7px 8px;text-align:center;background:#7a5a4e;color:#E8E6DE;">수임</th>')
+             + "".join(f'<th style="padding:7px 8px;text-align:center;background:{mcolor.get(m, "#555")};color:#FFFFFF;font-weight:700;">{m}</th>' for m in cols_m)
+             + f'<th style="padding:7px 8px;text-align:center;background:{GOLD_D};color:#FFFFFF;font-weight:700;">총광고비</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#3a6b73;color:#FFFFFF;">문의</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#3a6b73;color:#FFFFFF;">CPI</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#7a5a4e;color:#FFFFFF;">상담</th>'
+             + '<th style="padding:7px 8px;text-align:center;background:#7a5a4e;color:#FFFFFF;">수임</th>')
     # 월합계
     msum = {m: sum(daily[d].get(m, 0) for d in days) for m in cols_m}
     mtot = sum(msum.values()); mq = sum(iq[d][0] for d in days); ms = sum(iq[d][1] for d in days); mw = sum(iq[d][2] for d in days)
     mcpi = mtot / mq if mq else 0
-    total_row = (f'<tr style="background:rgba(210,170,80,.16);">'
+    total_row = (f'<tr style="background:rgba(46,99,230,.16);">'
                  f'<td style="padding:6px 8px;text-align:center;color:{GOLD_B};font-weight:700;position:sticky;left:0;background:#33301f;">{today.month}월 합계</td>'
                  + "".join(cell(fmt(msum[m]), GOLD_B, True) for m in cols_m)
                  + cell(fmt(mtot), GOLD_B, True) + cell(mq, GOLD_B, True) + cell(fmt(mcpi), GOLD_B, True)
@@ -1881,18 +1878,18 @@ def render_brief():
             body += (f'<tr>'
                      f'<td style="padding:5px 8px;text-align:center;color:{dcol};position:sticky;left:0;background:#1f1e1b;">{d.month:02d}/{d.day:02d}({dow})</td>'
                      + "".join(cell(fmt(daily[d].get(m, 0))) for m in cols_m)
-                     + cell(fmt(tt), "#E8E6DE") + cell(qd) + cell(fmt(cpi)) + cell(sd) + cell(wdd) + '</tr>')
+                     + cell(fmt(tt), "#14213D") + cell(qd) + cell(fmt(cpi)) + cell(sd) + cell(wdd) + '</tr>')
         wsum = {m: sum(daily[d].get(m, 0) for d in wd) for m in cols_m}
         wtot = sum(wsum.values()); wq = sum(iq[d][0] for d in wd); ws = sum(iq[d][1] for d in wd); ww = sum(iq[d][2] for d in wd)
         wcpi = wtot / wq if wq else 0
         body += (f'<tr style="background:rgba(91,180,196,.10);">'
                  f'<td style="padding:5px 8px;text-align:center;color:{TEAL};font-weight:700;position:sticky;left:0;background:#1c2a2c;">{wi+1}주차</td>'
-                 + "".join(cell(fmt(wsum[m]), "#E8E6DE", True) for m in cols_m)
-                 + cell(fmt(wtot), "#E8E6DE", True) + cell(wq, "#E8E6DE", True) + cell(fmt(wcpi), "#E8E6DE", True)
-                 + cell(ws, "#E8E6DE", True) + cell(ww, "#E8E6DE", True) + '</tr>')
+                 + "".join(cell(fmt(wsum[m]), "#14213D", True) for m in cols_m)
+                 + cell(fmt(wtot), "#14213D", True) + cell(wq, "#14213D", True) + cell(fmt(wcpi), "#14213D", True)
+                 + cell(ws, "#14213D", True) + cell(ww, "#14213D", True) + '</tr>')
         if prev_w is not None:
-            body += (f'<tr style="background:rgba(255,255,255,.02);">'
-                     f'<td style="padding:3px 8px;text-align:center;color:{MUTED};font-size:11px;position:sticky;left:0;background:#1a1a17;">전주대비</td>'
+            body += (f'<tr style="background:#F7F9FC;">'
+                     f'<td style="padding:3px 8px;text-align:center;color:{MUTED};font-size:11px;position:sticky;left:0;background:#F1F4F8;">전주대비</td>'
                      + "".join(f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wsum[m], prev_w["m"].get(m, 0))}</td>' for m in cols_m)
                      + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wtot, prev_w["tot"])}</td>'
                      + f'<td style="padding:3px 8px;text-align:right;">{wk_delta(wq, prev_w["q"])}</td>'
@@ -2036,7 +2033,7 @@ def render_summary():
 
     # ═══ HERO: 이번 달 목표 달성 (달성률·매출·잔여) ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(초과달성 그대로)
-    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(210,170,80,.35);">
+    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(46,99,230,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
         <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
         <div style="display:flex;align-items:baseline;gap:10px;">
@@ -2073,7 +2070,7 @@ def render_summary():
             marker=dict(color=[TEAL, GOLD, CORAL]),
             text=[f"{v}  ·  {p:.0f}%" for v, p in zip([n_inq, n_sang, n_suim], _pcts)],
             textposition="inside", insidetextanchor="start",
-            textfont=dict(color="#15140f", size=13), hoverinfo="skip", width=0.62))
+            textfont=dict(color="#FFFFFF", size=13), hoverinfo="skip", width=0.62))
         ff.update_layout(yaxis=dict(autorange="reversed"), bargap=0.3)
         ff.update_xaxes(showticklabels=False, showgrid=False, zeroline=False)
         st.plotly_chart(fig_theme(ff, 240), use_container_width=True, config={"displayModeBar": False})
@@ -2234,11 +2231,11 @@ def render_daily():
             pctv = v / total * 100 if total else 0
             rows_html += (f'<div style="display:flex;align-items:center;gap:13px;padding:9px 0;border-bottom:1px solid #232320;">'
                           f'<div style="width:13px;height:13px;border-radius:3px;background:{col};flex:none;"></div>'
-                          f'<div style="width:120px;font-size:13px;color:#E8E4DA;flex:none;">{m}</div>'
+                          f'<div style="width:120px;font-size:13px;color:#14213D;flex:none;">{m}</div>'
                           f'<div style="flex:1;background:#26261f;border-radius:5px;height:9px;overflow:hidden;">'
                           f'<div style="width:{pctv:.0f}%;background:{col};height:100%;"></div></div>'
-                          f'<div style="width:160px;text-align:right;font-size:13px;color:#E8E4DA;flex:none;">{money(v)}원 '
-                          f'<span style="color:#8a8a82;font-size:11px;">{pctv:.0f}%</span></div></div>')
+                          f'<div style="width:160px;text-align:right;font-size:13px;color:#14213D;flex:none;">{money(v)}원 '
+                          f'<span style="color:#5A6472;font-size:11px;">{pctv:.0f}%</span></div></div>')
         rows_html += (f'<div style="display:flex;align-items:center;gap:13px;padding:11px 0 4px;">'
                       f'<div style="width:13px;flex:none;"></div>'
                       f'<div style="width:120px;font-size:13px;color:{GOLD_B};font-weight:700;flex:none;">합계</div>'
@@ -2292,7 +2289,7 @@ def render_daily():
                     gauge = '<div style="flex:1;color:#777;font-size:11px;padding-left:2px;">예산 무제한</div>'
                     info = f'{money(tc)} 소진'
                 rows_html += (f'<div style="display:flex;align-items:center;gap:14px;padding:8px 0;border-bottom:1px solid #232320;">'
-                              f'<div style="width:170px;font-size:13px;color:#E8E4DA;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{r.campaign_name}</div>'
+                              f'<div style="width:170px;font-size:13px;color:#14213D;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{r.campaign_name}</div>'
                               f'{gauge}<div style="width:185px;text-align:right;font-size:12px;color:#9a9a90;">{info}</div></div>')
             st.markdown(f'<div class="kb-card" style="padding:6px 18px;">{rows_html}</div>', unsafe_allow_html=True)
 
@@ -2416,13 +2413,13 @@ def render_ad_tab(media, full):
             ys = (tr["cost"] / 1e4).reset_index(drop=True)
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=xs, y=ys, name="광고비", mode="lines+markers",
-            line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(210,170,80,0.1)"))
+            line=dict(color=GOLD, width=2), fill="tozeroy", fillcolor="rgba(46,99,230,0.1)"))
         fig.update_layout(yaxis=dict(ticksuffix="만원"), legend=dict(orientation="h", y=1.12))
         thin_xticks(fig, xs)
         st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
 
     # ── 일자별 상세 표 (헤더 클릭 정렬!!!) ──
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세 <span style="color:#8a8a82;font-size:12px;font-weight:400;">(헤더 클릭 → 정렬)</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세 <span style="color:#5A6472;font-size:12px;font-weight:400;">(헤더 클릭 → 정렬)</span></div>', unsafe_allow_html=True)
     dd = d.copy()
     dd["CTR"] = (dd.clk/dd.imp*100).fillna(0).round(2)
     dd["CPC"] = (dd.cost/dd.clk).replace([float("inf")], 0).fillna(0).round(0)
@@ -2575,7 +2572,7 @@ def render_inquiries():
 
     # ════ 대단락: 카테고리 분석 ════
     st.markdown('<div class="big-section"><i class="fa-solid fa-tags"></i> 카테고리 분석</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 · 수임 <span style="color:#8a8a82;font-size:12px;font-weight:400;">({start} ~ {end})</span></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 · 수임 <span style="color:#5A6472;font-size:12px;font-weight:400;">({start} ~ {end})</span></div>', unsafe_allow_html=True)
     bad = ["(미분류)", "nan", "", "종결", "수임완료", "문자남김"]
     catf = inqf[~inqf["category"].isin(bad)]
     if not catf.empty:
@@ -2671,7 +2668,7 @@ def render_welcome_splash(user):
     """로그인 직후 1회 — 검은 화면에 환영 문구가 페이드인되는 인트로."""
     logo = get_logo()
     logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:72px;margin-bottom:26px;">'
-                 if logo else '<div class="serif" style="font-size:30px;color:#D2AA50;margin-bottom:26px;">법무법인 KB</div>')
+                 if logo else '<div class="serif" style="font-size:30px;color:#2E63E6;margin-bottom:26px;">법무법인 KB</div>')
     import random
     msgs = [
         "안녕하세요, 법무법인 KB 담당자님 ☀️",
@@ -2691,13 +2688,13 @@ def render_welcome_splash(user):
       @keyframes fadeUp {{ from {{ opacity:0; transform:translateY(26px); }} to {{ opacity:1; transform:translateY(0); }} }}
       @keyframes glow {{ 0%,100% {{ opacity:.5; }} 50% {{ opacity:1; }} }}
     </style>
-    <div style="position:fixed;inset:0;background:radial-gradient(circle at 50% 38%,#16140f 0%,#0a0a08 70%);
+    <div style="position:fixed;inset:0;background:radial-gradient(circle at 50% 38%,#FFFFFF 0%,#EEF2F8 72%);
       display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:99999;">
       <div style="text-align:center;">
         <div style="animation:fadeUp .9s ease;">{logo_html}</div>
-        <div style="font-family:'Noto Serif KR',serif;font-size:27px;color:#F0C86E;font-weight:600;
+        <div style="font-family:'Noto Serif KR',serif;font-size:27px;color:#1E4FD0;font-weight:600;
           margin-bottom:16px;letter-spacing:-.5px;animation:fadeUp 1.3s ease;">{msg}</div>
-        <div style="font-size:13px;color:#8a8a82;animation:fadeUp 1.7s ease, glow 1.8s ease-in-out infinite 1.7s;">
+        <div style="font-size:13px;color:#5A6472;animation:fadeUp 1.7s ease, glow 1.8s ease-in-out infinite 1.7s;">
           데이터를 불러오는 중입니다…</div>
       </div>
     </div>
@@ -2741,12 +2738,12 @@ def _clear_login_url():
 def render_login():
     logo = get_logo()
     logo_html = (f'<img src="data:image/png;base64,{logo}" style="height:60px;margin-bottom:18px;">'
-                 if logo else '<div class="serif" style="font-size:28px;color:#D2AA50;margin-bottom:18px;">법무법인 KB</div>')
+                 if logo else '<div class="serif" style="font-size:28px;color:#2E63E6;margin-bottom:18px;">법무법인 KB</div>')
     c1, c2, c3 = st.columns([1, 1.2, 1])
     with c2:
         st.markdown(f'<div style="text-align:center;padding:40px 0 10px;">{logo_html}'
-                    f'<div class="serif" style="font-size:22px;color:#E8E4DA;">광고·매출 통합 대시보드</div>'
-                    f'<div style="font-size:13px;color:#8a8a82;margin-top:6px;">로그인이 필요합니다</div></div>',
+                    f'<div class="serif" style="font-size:22px;color:#14213D;">광고·매출 통합 대시보드</div>'
+                    f'<div style="font-size:13px;color:#5A6472;margin-top:6px;">로그인이 필요합니다</div></div>',
                     unsafe_allow_html=True)
         uid = st.text_input("아이디", key="login_id", placeholder="아이디")
         pw = st.text_input("비밀번호", type="password", key="login_pw", placeholder="비밀번호")
@@ -2795,8 +2792,8 @@ def render_ai_chat():
     for question, answer in st.session_state.chat_history:
         st.markdown(
             f'<div style="display:flex;justify-content:flex-end;margin:14px 0 6px;">'
-            f'<div style="background:rgba(210,170,80,.15);border:1px solid rgba(210,170,80,.3);'
-            f'border-radius:14px 14px 2px 14px;padding:10px 16px;max-width:75%;font-size:14px;color:#E8E4DA;">{question}</div></div>'
+            f'<div style="background:rgba(46,99,230,.15);border:1px solid rgba(46,99,230,.3);'
+            f'border-radius:14px 14px 2px 14px;padding:10px 16px;max-width:75%;font-size:14px;color:#14213D;">{question}</div></div>'
             f'<div style="display:flex;justify-content:flex-start;margin:0 0 10px;">'
             f'<div style="background:#1c1c19;border:1px solid #2a2a26;border-radius:14px 14px 14px 2px;'
             f'padding:12px 16px;max-width:80%;font-size:14px;color:#D8D4CA;line-height:1.6;">'
@@ -2855,7 +2852,7 @@ def render_admin_log():
                             f'🧹 [{_tl}] {r["user"]} — 대화 초기화</div>', unsafe_allow_html=True)
                 continue
             with st.expander(f"💬 [{_tl}] {r['user']} — {_q[:58]}"):
-                st.markdown(f'<div style="background:rgba(210,170,80,.10);border-radius:8px;'
+                st.markdown(f'<div style="background:rgba(46,99,230,.10);border-radius:8px;'
                             f'padding:9px 13px;font-size:13px;margin-bottom:8px;">'
                             f'<b>❓ 질문</b><br>{_q}</div>', unsafe_allow_html=True)
                 st.markdown(f'<div style="background:#1c1c19;border:1px solid #2a2a26;border-radius:8px;'
@@ -2960,8 +2957,8 @@ def render_contracts():
         hero_period = f"{cs.year}년 누적" if is_year else f"{cs.strftime('%Y.%m.%d')} ~ {ce.strftime('%Y.%m.%d')}"
         up = yoy >= 0
         yc = GOLD_B if up else CORAL
-        yrgb = "210,170,80" if up else "199,123,107"
-        st.markdown(f"""<div class="kb-card" style="margin-bottom:14px;border:1px solid rgba(210,170,80,.35);
+        yrgb = "46,99,230" if up else "199,123,107"
+        st.markdown(f"""<div class="kb-card" style="margin-bottom:14px;border:1px solid rgba(46,99,230,.35);
             display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;">
           <div>
             <div style="font-size:13px;color:{MUTED};margin-bottom:6px;">{hero_lbl} · {hero_period}</div>
@@ -3037,7 +3034,7 @@ def render_contracts():
             _bar = "".join(
                 f'<div style="flex:{max(v,1)};min-width:2px;background:{c};height:100%;" title="{lab} {money(v)}원"></div>'
                 for lab, v, c in _seg if v > 0)
-            _leg = "  ".join(f'<span style="color:{c};">●</span> {lab} <b style="color:#E8E6DE;">{money(v)}</b>원'
+            _leg = "  ".join(f'<span style="color:{c};">●</span> {lab} <b style="color:#14213D;">{money(v)}</b>원'
                              for lab, v, c in _seg)
             st.markdown(
                 f'<div style="margin:2px 0 12px;"><div style="display:flex;height:10px;border-radius:5px;'
@@ -3356,7 +3353,7 @@ def render_ga4():
     except Exception as e:
         st.caption(f"KPI 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ② 채널별 유입 → 전환 (핵심) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-diagram-project"></i> 획득 채널별 유입 → 전환</div>', unsafe_allow_html=True)
@@ -3401,7 +3398,7 @@ def render_ga4():
     except Exception as e:
         st.caption(f"채널 분석 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ③ 전환 퍼널 + ④ 전환 이벤트 상세 ──
     cf1, cf2 = st.columns([1, 1])
@@ -3435,7 +3432,7 @@ def render_ga4():
         except Exception as e:
             st.caption(f"전환 이벤트 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑤ 디바이스 + ⑥ 시간대별 유입 ──
     cd1, cd2 = st.columns([1, 1.4])
@@ -3477,7 +3474,7 @@ def render_ga4():
         except Exception as e:
             st.caption(f"시간대 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑦ 랜딩페이지 TOP + ⑧ 지역 ──
     cl1, cl2 = st.columns([1.5, 1])
@@ -3520,7 +3517,7 @@ def render_ga4():
         except Exception as e:
             st.caption(f"지역 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑧.5 랜딩페이지별 전환 (전환을 일으킨 페이지) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-bullseye"></i> 페이지별 전환 (어느 페이지가 전화·카톡·상담신청을 일으키나)</div>', unsafe_allow_html=True)
@@ -3570,7 +3567,7 @@ def render_ga4():
     except Exception as e:
         st.caption(f"페이지별 전환 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.18);margin:22px 0;">', unsafe_allow_html=True)
+    st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑨ 일별 추세 (쌓일수록 풍성) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-chart-line"></i> 일별 추세 (세션·전환)</div>', unsafe_allow_html=True)
@@ -4496,7 +4493,7 @@ def render_changelog():
             f'<div style="background:#171714;border:1px solid #26261f;border-left:3px solid {cc};'
             f'border-radius:10px;padding:13px 16px;margin:8px 0;">'
             f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-            f'<span style="font-size:14px;font-weight:600;color:#E8E4DA;">{row["title"]}</span>'
+            f'<span style="font-size:14px;font-weight:600;color:#14213D;">{row["title"]}</span>'
             f'<span style="font-size:11px;color:{MUTED};white-space:nowrap;margin-left:12px;">'
             f'{ts} · {row["user"]}</span></div>'
             f'{detail_html}{reason_html}</div>',
@@ -4522,7 +4519,7 @@ def main():
         render_welcome_splash(user)
         st.rerun()
     logo = get_logo()
-    logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#D2AA50;">법무법인 KB</span>'
+    logo_html = f'<img src="data:image/png;base64,{logo}" style="height:44px;">' if logo else '<span class="serif" style="font-size:22px;color:#2E63E6;">법무법인 KB</span>'
     today = datetime.now().strftime("%Y. %m. %d")
     # 수집 신선도 배지 (ad_budget 최신 수집시각) — '실시간'이 아니라 실제 경과시간을 정직하게 표기
     bdf = load_budget()
@@ -4534,7 +4531,7 @@ def main():
             if age_h <= 1.5:                       # 최근 수집 — 초록(실시간 표기는 이때만)
                 dot, lab = "#5FB98E", "실시간 수집 중"
             elif age_h <= 6:                       # 몇 시간 지남 — 금색
-                dot, lab = "#D2AA50", f"{int(age_h)}시간 전 수집"
+                dot, lab = "#2E63E6", f"{int(age_h)}시간 전 수집"
             else:                                  # 하루 가까이 밀림 — 경고
                 dot, lab = "#E0524E", f"{int(age_h)}시간 전 수집(지연)"
             live = (f'<div style="display:flex;align-items:center;gap:6px;justify-content:flex-end;margin-top:4px;">'
@@ -4597,7 +4594,7 @@ def main():
             _safe(render_brief, "일간 보고")
         else:
             _safe(render_summary, "월간 종합")
-            st.markdown('<hr style="border:none;border-top:1px solid rgba(210,170,80,.2);margin:28px 0;">', unsafe_allow_html=True)
+            st.markdown('<hr style="border:none;border-top:1px solid rgba(46,99,230,.2);margin:28px 0;">', unsafe_allow_html=True)
             _safe(render_daily, "일자별 요약")
 
     with top[1]:
