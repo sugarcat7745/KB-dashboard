@@ -69,7 +69,7 @@ st.markdown(f"""
 .stApp {{ background:{BG}; }}
 html, body, .stApp, .stMarkdown {{ font-family:var(--font); }}
 body {{ word-break:keep-all; }}
-table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
+table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .serif {{ font-family:var(--font); }}
 #MainMenu, footer, header {{ visibility:hidden; }}
 .block-container {{ padding-top:1.4rem; max-width:1120px; }}
@@ -94,8 +94,8 @@ table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
   min-height:104px; box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kpi:hover {{ border-color:#D1D6DB; }}
 .kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:11px; font-weight:600; }}
-.kpi .v {{ font-size:26px; font-weight:800; color:{TXT}; line-height:1.05; letter-spacing:-.6px; white-space:nowrap; }}
-.kpi .v small {{ font-size:13px; color:{MUTED}; font-weight:700; margin-left:1px; white-space:nowrap; }}
+.kpi .v {{ font-size:23px; font-weight:800; color:{TXT}; line-height:1.1; letter-spacing:-.6px; white-space:nowrap; }}
+.kpi .v small {{ font-size:12px; color:{MUTED}; font-weight:600; margin-left:1px; white-space:nowrap; }}
 .kpi .chg {{ display:inline-block; font-size:12px; margin-top:12px; font-weight:700;
   padding:3px 9px; border-radius:8px; }}
 .kpi .chg.up {{ color:{GOOD}; background:rgba(18,158,98,.12); }}
@@ -1621,7 +1621,7 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True, paid=
         f'<div><div style="font-size:12px;color:{MUTED};letter-spacing:1px;">'
         f'<i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{period_txt}{basis_tag}</div>'
         f'<div style="margin-top:5px;line-height:1;">'
-        f'<span class="serif" style="font-size:34px;font-weight:600;color:{gc};">{roas:.0f}<span style="font-size:15px;color:{MUTED};margin-left:2px;">%</span></span>'
+        f'<span class="tnum" style="font-size:32px;font-weight:800;color:{gc};letter-spacing:-1px;">{roas:.0f}<span style="font-size:15px;font-weight:600;color:{MUTED};margin-left:2px;">%</span></span>'
         f'<span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(49,130,246,.14);color:{gc};">{grade}</span>{chg_html}</div>'
         f'{cash_html}</div>'
         f'<div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">'
@@ -1682,18 +1682,17 @@ def render_brief():
              "차분하고 건설적으로 한 줄로 요약하라.")
     llm = ai_insight(summary, focus, tab="BRIEF", period=f"{yday}")
     if llm:
-        body, icol = llm, GOLD_B
+        body = llm
     else:
         grade = "효율 우수" if roas_m >= 300 else ("효율 양호" if roas_m >= 150 else "효율 점검 필요")
         body = f"어제 문의 {q_y}건·수임 {w_y}건 · 이번 달 목표 {revenue/MONTHLY_GOAL*100:.0f}% 달성 · ROAS {roas_m:.0f}% ({grade})"
-        icol = GOLD_B if roas_m >= 150 else CORAL
     tag = "AI 분석" if llm else "요약"
     st.markdown(
         f'<div style="background:linear-gradient(135deg,rgba(49,130,246,.10),rgba(49,130,246,.03));'
         f'border:1px solid rgba(49,130,246,.25);border-left:3px solid #3182F6;border-radius:12px;'
         f'padding:13px 18px;margin:4px 0 16px;font-size:14px;line-height:1.65;color:#141517;">'
         f'<span style="color:#1B64DA;font-weight:700;white-space:nowrap;">'
-        f'<i class="fa-solid fa-robot"></i> AI 분석</span>&nbsp;&nbsp;{body}</div>',
+        f'<i class="fa-solid fa-robot"></i> {tag}</span>&nbsp;&nbsp;{body}</div>',
         unsafe_allow_html=True)
 
     # ── 어제 성과 (전일 대비) ── ※ 수임은 보통 당일에 안 됨 → 제외
@@ -1725,30 +1724,38 @@ def render_brief():
                    "모비온": TEAL, "메타": "#5B6FC4"}
         _cols = [_mcolor.get(m, MUTED) for m in _mlabels]
         _tot = sum(_mvals)
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 매체별 어제 광고비</div>', unsafe_allow_html=True)
-        pie = go.Figure(go.Pie(labels=_mlabels, values=_mvals, hole=0.62, sort=False,
-                               marker=dict(colors=_cols, line=dict(color="#FFFFFF", width=2)),
-                               textinfo="label+percent", textfont=dict(size=12, color="#141517"),
-                               hovertemplate="%{label}: %{value:,.0f}원 (%{percent})<extra></extra>"))
-        pie.update_layout(showlegend=False, margin=dict(t=14, b=14, l=14, r=14),
-                          annotations=[dict(text=f"어제 합계<br><b>{money(_tot)}원</b>",
-                                            x=0.5, y=0.5, showarrow=False,
-                                            font=dict(size=14, color="#141517"))])
-        st.plotly_chart(fig_theme(pie, 260), use_container_width=True, config={"displayModeBar": False})
+        # 도넛 대신 컴팩트 구성 막대 + 범례 (단독 차트가 붕 뜨는 문제 해결)
+        seg = "".join(
+            f'<div style="width:{c/_tot*100:.2f}%;background:{col};height:100%;"></div>'
+            for (m, c), col in zip(parts, _cols))
+        leg = "".join(
+            f'<div style="display:flex;align-items:center;gap:7px;">'
+            f'<span style="width:9px;height:9px;border-radius:3px;background:{col};flex:none;"></span>'
+            f'<span style="font-size:13px;font-weight:600;color:{TXT};">{m}</span>'
+            f'<span class="tnum" style="font-size:13px;font-weight:700;color:{TXT};">{money(c)}</span>'
+            f'<span style="font-size:12px;color:{MUTED};">{c/_tot*100:.0f}%</span></div>'
+            for (m, c), col in zip(parts, _cols))
+        st.markdown(
+            f'<div class="kb-card"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;">'
+            f'<span style="font-size:15px;font-weight:700;color:{TXT};">매체별 어제 광고비</span>'
+            f'<span class="tnum" style="font-size:15px;font-weight:800;color:{TXT};">{money(_tot)}<small style="font-size:12px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></span></div>'
+            f'<div style="display:flex;height:14px;border-radius:99px;overflow:hidden;gap:2px;background:{BG};">{seg}</div>'
+            f'<div style="display:flex;flex-wrap:wrap;gap:16px 22px;margin-top:14px;">{leg}</div></div>',
+            unsafe_allow_html=True)
 
     # ═══ HERO: 이번 달 목표 달성 ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(100% 초과=초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(49,130,246,.35);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
-        <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:24px;flex-wrap:wrap;">
+        <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
         <div style="display:flex;align-items:baseline;gap:10px;">
-        <span class="serif" style="font-size:38px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
-        <span style="font-size:14px;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
-        <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">{rev_label}</div>
-        <div class="serif" style="font-size:22px;font-weight:600;color:{GOLD_B};">{money(revenue)}<small style="font-size:12px;">원</small></div>
-        <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
-        <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
-        <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
+        <span class="tnum" style="font-size:34px;font-weight:800;color:{GOLD};letter-spacing:-1px;line-height:1;">{pct:.1f}%</span>
+        <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">{rev_label}</div>
+        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
+        <div style="font-size:12px;font-weight:600;color:{MUTED};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
+        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">잔여</div>
+        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     # ── ROAS/효율은 '월간 종합'에서만 표시 (일간은 수임 시차로 효율 왜곡 → 제외) ──
@@ -2021,7 +2028,7 @@ def render_summary():
              "월 목표 2.5억 달성 페이스와 사건분류 의존도(다각화) 관점을 함께 짚어라.")
     llm = ai_insight(summary, focus, tab="SUMMARY", period=plabel)
     if llm:
-        body, icol = llm, GOLD_B
+        body = llm
     else:
         bits = []
         if ad_p:
@@ -2033,27 +2040,28 @@ def render_summary():
         grade = "효율 우수" if roas >= 300 else ("효율 양호" if roas >= 150 else "효율 점검 필요")
         msg = " · ".join(bits) if bits else "데이터 집계 중"
         body = f"{cmp_label} {msg} — ROAS {roas:.0f}% ({grade})"
-        icol = GOLD_B if roas >= 150 else CORAL
     tag = "AI 분석" if llm else "요약"
-    st.markdown(f"""<div class="kb-card" style="border-left:3px solid {icol};padding:14px 18px;margin-bottom:14px;">
-      <i class="fa-solid fa-robot" style="color:{icol};margin-right:8px;"></i>
-      <span style="font-size:11px;color:{MUTED};margin-right:6px;">[{tag}]</span>
-      <span style="font-size:14px;">{body}</span></div>""",
-      unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,rgba(49,130,246,.10),rgba(49,130,246,.03));'
+        f'border:1px solid rgba(49,130,246,.25);border-left:3px solid #3182F6;border-radius:12px;'
+        f'padding:13px 18px;margin:4px 0 16px;font-size:14px;line-height:1.65;color:#141517;">'
+        f'<span style="color:#1B64DA;font-weight:700;white-space:nowrap;">'
+        f'<i class="fa-solid fa-robot"></i> {tag}</span>&nbsp;&nbsp;{body}</div>',
+        unsafe_allow_html=True)
 
     # ═══ HERO: 이번 달 목표 달성 (달성률·매출·잔여) ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(49,130,246,.35);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;gap:18px;flex-wrap:wrap;">
-        <div><div style="font-size:12px;color:{MUTED};margin-bottom:8px;">이번 달 목표 달성 · 월 목표 2.5억원</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:24px;flex-wrap:wrap;">
+        <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
         <div style="display:flex;align-items:baseline;gap:10px;">
-        <span class="serif" style="font-size:38px;font-weight:600;color:{GOLD_B};">{pct:.1f}%</span>
-        <span style="font-size:14px;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
-        <div style="text-align:center;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">{rev_label}</div>
-        <div class="serif" style="font-size:22px;font-weight:600;color:{GOLD_B};">{money(revenue)}<small style="font-size:12px;">원</small></div>
-        <div style="font-size:11px;color:{MUTED};">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
-        <div style="text-align:right;"><div style="font-size:12px;color:{MUTED};margin-bottom:6px;">잔여</div>
-        <div class="serif" style="font-size:20px;font-weight:600;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}억</div></div>
+        <span class="tnum" style="font-size:34px;font-weight:800;color:{GOLD};letter-spacing:-1px;line-height:1;">{pct:.1f}%</span>
+        <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">{rev_label}</div>
+        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
+        <div style="font-size:12px;font-weight:600;color:{MUTED};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
+        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">잔여</div>
+        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
@@ -3369,7 +3377,7 @@ def render_ga4():
             colL, colR = st.columns([1.15, 1])
             # 좌: 세션 막대 (채널별, 색상매핑)
             with colL:
-                st.markdown(f'<div style="font-size:13px;color:{MUTED};margin-bottom:2px;">채널별 세션 (TOP10)</div>', unsafe_allow_html=True)
+                st.markdown(f'<div style="font-size:13px;color:{MUTED};margin-bottom:2px;">채널별 세션 (TOP6)</div>', unsafe_allow_html=True)
                 top = ch.head(6).iloc[::-1]
                 colors = [GA4_CH_COLOR.get(s, GOLD) for s in top["src"]]
                 bar = go.Figure(go.Bar(
