@@ -222,6 +222,32 @@ def get_extensions(owner_id):
     return e if isinstance(e, list) else []
 
 
+def get_neg_keywords(gid):
+    """그룹 제외키워드(제외검색어) 조회. GET /ncc/adgroups/{id}/restricted-keywords."""
+    n = _get(f"/ncc/adgroups/{gid}/restricted-keywords"); time.sleep(0.1)
+    return n if isinstance(n, list) else []
+
+
+def clone_neg_keywords(tgid, src_negs):
+    """원본 제외키워드를 대상 그룹에 복제(중복 제외). type 유지(보통 KEYWORD_PLUS_RESTRICT)."""
+    have = set(str(x.get("keyword", "")) for x in get_neg_keywords(tgid))
+    items = [{"nccAdgroupId": tgid, "keyword": x.get("keyword"),
+              "type": x.get("type", "KEYWORD_PLUS_RESTRICT")}
+             for x in src_negs if str(x.get("keyword", "")) not in have]
+    if not items:
+        return 0, []
+    made = 0; errs = []
+    for i in range(0, len(items), CHUNK):
+        batch = items[i:i + CHUNK]
+        ok, res, err = _post(f"/ncc/adgroups/{tgid}/restricted-keywords", batch)
+        if ok:
+            made += len(batch)
+        else:
+            errs.append(err)
+        time.sleep(0.3)
+    return made, errs
+
+
 # ── 모드: dump (읽기) ───────────────────────────────────────
 def mode_dump():
     print(f"=== 원본 캠페인 덤프 · 필터 '{SOURCE_CAMPAIGN}' (읽기 전용) ===\n")
@@ -538,6 +564,11 @@ def mode_align():
             mk, ek = clone_keywords(tgid, newk) if newk else (0, [])
             head += f" | 키워드 +{mk}"
             derrs += [f"키워드 {x}" for x in ek]
+        # 5) 제외키워드 복제
+        if os.environ.get("COPY_NEG", "1") == "1":
+            mn, en = clone_neg_keywords(tgid, get_neg_keywords(sgid))
+            head += f" | 제외kw +{mn}"
+            derrs += [f"제외kw {x}" for x in en]
         print(head)
         for x in ea: print(f"        ❌ 소재생성: {x}")
         for x in ee: print(f"        ❌ 확장생성: {x}")
@@ -598,31 +629,52 @@ def mode_audit():
         print("  ✅ 모든 그룹의 소재 제목이 그룹 죄목과 일치(확장은 위 나열로 육안 확인).")
 
 
-# ── 모드: negkw (제외키워드 엔드포인트 진단) ─────────────────
+# ── 모드: negkw (제외키워드 복제 / 진단) ────────────────────
 def mode_negkw():
-    """SOURCE_CAMPAIGN 첫 그룹에 대해 제외키워드 후보 엔드포인트들을 GET 해보고
-    원시 응답을 출력 — 어떤 경로·파라미터가 맞는지 확정하기 위함(읽기 전용)."""
-    srcs = _find_one(SOURCE_CAMPAIGN, exclude="신채널")
-    if not srcs:
-        print(f"원본 '{SOURCE_CAMPAIGN}' 없음"); return
-    groups = get_groups(srcs[0].get("nccCampaignId"))
-    if not groups:
-        print("원본 그룹 없음"); return
-    gid = groups[0].get("nccAdgroupId")
-    print(f"=== 제외키워드 엔드포인트 진단 · 원본 '{srcs[0].get('name')}' 첫 그룹 {gid} ===\n")
-    cands = [
-        (f"/ncc/adgroups/{gid}/restricted-keywords", None),
-        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "KEYWORD_PLUS_RESTRICT"}),
-        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "KEYWORD_RESTRICT"}),
-        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "PHRASE_KEYWORD_RESTRICT"}),
-        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "EXACT_KEYWORD_RESTRICT"}),
-        ("/ncc/restricted-keywords", {"nccAdgroupId": gid}),
-        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "KEYWORD_RESTRICT_QI"}),
-    ]
-    for uri, p in cands:
-        sc, body = _get_raw(uri, p)
-        print(f"[{sc}] GET {uri} {p or ''}\n    {body[:350]}\n")
-    print("→ 200 + 내용 있는 경로가 제외키워드 조회 엔드포인트다. 그걸로 복제 로직 붙인다.")
+    """apply=no: 엔드포인트 진단(첫 그룹 원시 응답).
+    apply=yes: SOURCE→TARGET 그룹에 제외키워드 복제(그룹은 이름으로 매칭, 소재 무변경)."""
+    if not APPLY:
+        srcs = _find_one(SOURCE_CAMPAIGN, exclude="신채널")
+        if not srcs:
+            print(f"원본 '{SOURCE_CAMPAIGN}' 없음"); return
+        groups = get_groups(srcs[0].get("nccCampaignId"))
+        if not groups:
+            print("원본 그룹 없음"); return
+        gid = groups[0].get("nccAdgroupId")
+        print(f"=== 제외키워드 엔드포인트 진단 · 원본 '{srcs[0].get('name')}' 첫 그룹 {gid} ===\n")
+        for uri, p in [(f"/ncc/adgroups/{gid}/restricted-keywords", None),
+                       (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "KEYWORD_PLUS_RESTRICT"})]:
+            sc, body = _get_raw(uri, p)
+            print(f"[{sc}] GET {uri} {p or ''}\n    {body[:350]}\n")
+        return
+
+    # apply=yes: 복제
+    miss = [n for n, v in [("SOURCE_CAMPAIGN", SOURCE_CAMPAIGN), ("TARGET_CAMPAIGN", TARGET_CAMPAIGN)] if not v]
+    if miss:
+        print("필수 입력 누락:", ", ".join(miss)); return
+    srcs = _find_one(SOURCE_CAMPAIGN, exclude="신채널"); tgts = _find_one(TARGET_CAMPAIGN)
+    if len(srcs) != 1 or len(tgts) != 1:
+        print(f"원본 {len(srcs)}개 / 대상 {len(tgts)}개 — 정확히 1개씩 되게 좁혀라"); return
+    src, tgt = srcs[0], tgts[0]
+    print(f"=== 제외키워드 복제 · {src.get('name')} → {tgt.get('name')} ===\n")
+    sgroups = get_groups(src.get("nccCampaignId"))
+    tgroups = get_groups(tgt.get("nccCampaignId"))
+    tbyname = {}
+    for g in tgroups:
+        tbyname.setdefault(str(g.get("name", "")), g)   # 같은 이름 여럿이면 첫 번째
+    total = 0
+    for sg in sorted(sgroups, key=lambda x: str(x.get("name", ""))):
+        sname = str(sg.get("name", ""))
+        tg = tbyname.get(sname)
+        negs = get_neg_keywords(sg.get("nccAdgroupId"))
+        if not tg:
+            print(f"  [{sname}] 대상에 같은 이름 그룹 없음 — 스킵 (원본 제외kw {len(negs)}개)")
+            continue
+        mn, en = clone_neg_keywords(tg.get("nccAdgroupId"), negs)
+        total += mn
+        print(f"  [{sname}] 제외kw 원본 {len(negs)} → 복제 +{mn}"
+              + (f"  ❌ {en}" if en else ""))
+    print(f"\n완료. 제외키워드 총 {total}개 복제. 소재·키워드·그룹은 무변경.")
 
 
 def main():
