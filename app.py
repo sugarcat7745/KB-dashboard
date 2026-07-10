@@ -3817,7 +3817,10 @@ def qna_law_match(law_text, verified):
 
 @st.cache_data(ttl=1800)
 def qna_perf(days=90):
-    """게시한 QnA 글별 유입(조회수·순방문자). GA4. 전환은 페이지 단위 기준이 애매해 제외."""
+    """게시한 QnA 글별 유입(조회수·순방문자). GA4. 전환은 페이지 단위 기준이 애매해 제외.
+    당사 내부 방문 제외: GA4 '내부 트래픽 정의'에 사무실 IP(예: 220.117.157.85)를 등록하면
+    해당 방문에 traffic_type=internal 태그가 붙고, 아래에서 그걸 빼 '순수 유입'만 센다.
+    (GA4 BigQuery export엔 원본 IP가 없어 IP 직접 필터는 불가 → GA4 태깅으로 처리)."""
     lo, hi = _ga4_suffix(days)
     return bq(f"""
       WITH pv AS (
@@ -3829,6 +3832,8 @@ def qna_perf(days=90):
         WHERE _TABLE_SUFFIX BETWEEN '{lo}' AND '{hi}'
           AND (SELECT value.string_value FROM UNNEST(event_params)
                WHERE key='page_location') LIKE '%bo_table=QnA%'
+          AND IFNULL((SELECT value.string_value FROM UNNEST(event_params)
+               WHERE key='traffic_type'), '') != 'internal'
       )
       SELECT wid,
              COUNTIF(event_name='page_view') views,
@@ -3856,7 +3861,8 @@ def _qna_perf_panel(corpus):
         df.rename(columns={"views": "조회수", "visitors": "순방문자"})[["성과", "제목", "조회수", "순방문자"]],
         use_container_width=True, hide_index=True)
     st.caption("유입(조회) 기준. 전환은 페이지 단위로 집계 기준이 애매해 제외했습니다. "
-               "🔥 고성과 = 조회 상위권 → 이 주제·형식을 더 밀면 됩니다. (순방문자=중복 제외 실제 사람 수)")
+               "🔥 고성과 = 조회 상위권 → 이 주제·형식을 더 밀면 됩니다. (순방문자=중복 제외 실제 사람 수) "
+               "· GA4 '내부 트래픽 정의'에 사무실 IP를 등록하면 당사 방문은 자동 제외되어 순수 유입만 집계됩니다.")
 
 
 @st.cache_data(ttl=600)
