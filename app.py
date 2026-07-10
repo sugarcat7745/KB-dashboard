@@ -1553,15 +1553,11 @@ def cmp_caption(text):
                 unsafe_allow_html=True)
 
 def tab_header(icon_fa, title, sub, color="#3182F6", rgb="49,130,246"):
+    # 단촐한 제목 — 장식(배경 바·컬러 테두리·발광 아이콘 배지) 없이 진한 제목 + 회색 부제.
     st.markdown(
-        f'<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
-        f'background:linear-gradient(90deg,rgba({rgb},.16),rgba({rgb},.02));'
-        f'border-left:5px solid {color};border-radius:12px;">'
-        f'<div style="width:46px;height:46px;border-radius:11px;background:{color};display:flex;'
-        f'align-items:center;justify-content:center;font-size:22px;color:#FFFFFF;'
-        f'box-shadow:0 4px 12px rgba({rgb},.4);"><i class="fa-solid {icon_fa}"></i></div>'
-        f'<div><div style="font-size:22px;font-weight:700;color:{color};letter-spacing:-.5px;">{title}</div>'
-        f'<div style="font-size:12px;color:{MUTED};margin-top:2px;">{sub}</div></div></div>',
+        f'<div style="margin:2px 0 20px;">'
+        f'<div style="font-size:22px;font-weight:700;color:{TXT};letter-spacing:-.5px;">{title}</div>'
+        f'<div style="font-size:13px;color:{MUTED};margin-top:3px;font-weight:500;">{sub}</div></div>',
         unsafe_allow_html=True)
 
 def deriv_toggle(wkey):
