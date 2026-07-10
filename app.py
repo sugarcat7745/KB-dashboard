@@ -94,7 +94,8 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
   min-height:104px; box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kpi:hover {{ border-color:#D1D6DB; }}
 .kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:11px; font-weight:600; }}
-.kpi .v {{ font-size:23px; font-weight:800; color:{TXT}; line-height:1.1; letter-spacing:-.6px; white-space:nowrap; }}
+.kpi .v {{ font-size:clamp(21px,2vw,25px); font-weight:700; color:{TXT}; line-height:1.1; letter-spacing:0;
+  display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 .kpi .v small {{ font-size:12px; color:{MUTED}; font-weight:600; margin-left:1px; white-space:nowrap; }}
 .kpi .chg {{ display:inline-block; font-size:12px; margin-top:12px; font-weight:700;
   padding:3px 9px; border-radius:8px; }}
@@ -114,12 +115,27 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .goalbar > div {{ height:100%; background:{GOLD}; border-radius:99px; }}
 /* 표 */
 .kb-tbl {{ width:100%; border-collapse:collapse; }}
-.kb-tbl th {{ font-size:12px; color:{MUTED}; font-weight:600; text-align:right; padding:10px; border-bottom:1px solid {LINE}; }}
+.kb-tbl th {{ font-size:12px; color:{MUTED}; font-weight:600; text-align:right; padding:10px; background:{BG}; border-bottom:1px solid {LINE}; }}
+.kb-tbl th:first-child {{ border-top-left-radius:10px; border-bottom-left-radius:10px; }}
+.kb-tbl th:last-child {{ border-top-right-radius:10px; border-bottom-right-radius:10px; }}
 .kb-tbl th:first-child, .kb-tbl td:first-child {{ text-align:left; }}
 .kb-tbl td {{ font-size:14px; font-weight:500; padding:12px 10px; border-bottom:1px solid {LINE}; color:{TXT}; }}
 .kb-tbl tbody tr:hover td {{ background:{SURF2}; }}
 .kb-tbl td.num {{ color:{TXT}; font-weight:600; }}
 .placeholder {{ text-align:center; padding:70px 20px; color:{MUTED}; }}
+/* 순위 리스트(insightad 스타일) — 번호 배지 + 라벨 + 진행바 + 값 */
+.rank-row {{ display:grid; grid-template-columns:30px minmax(0,1fr) auto; align-items:center; gap:12px;
+  border:1px solid #EDF0F3; border-radius:14px; padding:11px 12px; }}
+.rank-row + .rank-row {{ margin-top:8px; }}
+.rank-row:hover {{ background:{BG}; }}
+.rank-badge {{ display:inline-flex; align-items:center; justify-content:center; width:30px; height:30px;
+  border-radius:999px; background:#F2F4F6; color:{FAINT}; font-size:12px; font-weight:700; font-variant-numeric:tabular-nums; }}
+.rank-main {{ min-width:0; }}
+.rank-label {{ font-size:13px; font-weight:700; color:{TXT}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.rank-track {{ height:5px; background:#EDF0F3; border-radius:999px; overflow:hidden; margin-top:7px; }}
+.rank-track > span {{ display:block; height:100%; background:{GOLD}; border-radius:inherit; }}
+.rank-val {{ font-size:14px; font-weight:700; color:{TXT}; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }}
+.rank-sub {{ font-size:12px; font-weight:500; color:{FAINT}; margin-top:2px; text-align:right; white-space:nowrap; }}
 /* 타이포 위계 */
 .big-section {{ font-size:18px; font-weight:700; color:{TXT};
     margin:32px 0 8px; display:flex; align-items:center; gap:9px; }}
@@ -1564,7 +1580,7 @@ def tab_header(icon_fa, title, sub="", color="#3182F6", rgb="49,130,246"):
         f'<div style="width:46px;height:46px;border-radius:11px;background:{color};display:flex;'
         f'align-items:center;justify-content:center;font-size:21px;color:#fff;'
         f'box-shadow:0 4px 12px rgba({rgb},.28);"><i class="fa-solid {icon_fa}"></i></div>'
-        f'<div><div style="font-size:20px;font-weight:800;color:{color};letter-spacing:-.5px;">{title}</div>'
+        f'<div><div style="font-size:20px;font-weight:700;color:{color};letter-spacing:0;">{title}</div>'
         + (f'<div style="font-size:12px;color:{MUTED};margin-top:2px;">{sub}</div>' if sub else '')
         + '</div></div>',
         unsafe_allow_html=True)
@@ -1621,7 +1637,7 @@ def roas_card(rev, ad, rev_p=None, ad_p=None, period="", show_profit=True, paid=
         f'<div><div style="font-size:12px;color:{MUTED};letter-spacing:1px;">'
         f'<i class="fa-solid fa-arrow-trend-up" style="color:{gc};margin-right:7px;"></i>ROAS · 광고 효율{period_txt}{basis_tag}</div>'
         f'<div style="margin-top:5px;line-height:1;">'
-        f'<span class="tnum" style="font-size:32px;font-weight:800;color:{gc};letter-spacing:-1px;">{roas:.0f}<span style="font-size:15px;font-weight:600;color:{MUTED};margin-left:2px;">%</span></span>'
+        f'<span class="tnum" style="font-size:32px;font-weight:700;color:{gc};letter-spacing:0;">{roas:.0f}<span style="font-size:15px;font-weight:600;color:{MUTED};margin-left:2px;">%</span></span>'
         f'<span style="font-size:13px;margin-left:10px;padding:3px 10px;border-radius:8px;background:rgba(49,130,246,.14);color:{gc};">{grade}</span>{chg_html}</div>'
         f'{cash_html}</div>'
         f'<div style="text-align:right;font-size:13px;color:{MUTED};line-height:2;">'
@@ -1738,7 +1754,7 @@ def render_brief():
         st.markdown(
             f'<div class="kb-card"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;">'
             f'<span style="font-size:15px;font-weight:700;color:{TXT};">매체별 어제 광고비</span>'
-            f'<span class="tnum" style="font-size:15px;font-weight:800;color:{TXT};">{money(_tot)}<small style="font-size:12px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></span></div>'
+            f'<span class="tnum" style="font-size:16px;font-weight:700;color:{TXT};">{money(_tot)}<small style="font-size:12px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></span></div>'
             f'<div style="display:flex;height:14px;border-radius:99px;overflow:hidden;gap:2px;background:{BG};">{seg}</div>'
             f'<div style="display:flex;flex-wrap:wrap;gap:16px 22px;margin-top:14px;">{leg}</div></div>',
             unsafe_allow_html=True)
@@ -1749,13 +1765,13 @@ def render_brief():
       <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:24px;flex-wrap:wrap;">
         <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
         <div style="display:flex;align-items:baseline;gap:10px;">
-        <span class="tnum" style="font-size:34px;font-weight:800;color:{GOLD};letter-spacing:-1px;line-height:1;">{pct:.1f}%</span>
+        <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};letter-spacing:0;line-height:1;">{pct:.1f}%</span>
         <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
         <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">{rev_label}</div>
-        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
+        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
         <div style="font-size:12px;font-weight:600;color:{MUTED};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
         <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">잔여</div>
-        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
+        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     # ── ROAS/효율은 '월간 종합'에서만 표시 (일간은 수임 시차로 효율 왜곡 → 제외) ──
@@ -1786,19 +1802,19 @@ def render_brief():
         bb["rate"] = bb.apply(lambda r: (float(r["spent"]) / float(r["daily_budget"]) * 100) if r["daily_budget"] else 0, axis=1)
         bb = bb.sort_values("rate", ascending=False).head(7)
         rows = ""
-        for _, r in bb.iterrows():
+        for i, (_, r) in enumerate(bb.iterrows(), 1):
             rr = float(r["rate"]); cc = CORAL if rr >= 100 else (GOLD_B if rr >= 70 else MUTED)
             sp = float(r["spent"] or 0); bg = float(r["daily_budget"] or 0)
-            rows += (f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">'
-                     f'<span style="width:150px;color:#141517;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["campaign_name"]}</span>'
-                     f'<div style="flex:1;height:8px;background:#EEF1F6;border-radius:4px;overflow:hidden;">'
-                     f'<div style="width:{min(rr,100):.0f}%;height:100%;background:{cc};"></div></div>'
-                     f'<span style="width:120px;text-align:right;color:{MUTED};font-size:11px;">{money(sp)} / {money(bg)}원</span>'
-                     f'<span style="width:46px;text-align:right;color:{cc};font-weight:600;">{rr:.0f}%</span></div>')
+            rows += (f'<div class="rank-row">'
+                     f'<span class="rank-badge">{i}</span>'
+                     f'<div class="rank-main"><div class="rank-label">{r["campaign_name"]}</div>'
+                     f'<div class="rank-track"><span style="width:{min(rr,100):.0f}%;background:{cc};"></span></div></div>'
+                     f'<div><div class="rank-val" style="color:{cc};">{rr:.0f}%</div>'
+                     f'<div class="rank-sub">{money(sp)} / {money(bg)}</div></div></div>')
         st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #E9ECEF;">
             <div><span style="font-size:12px;color:{MUTED};">전체 소진률</span>
-            <span class="serif" style="font-size:28px;font-weight:600;color:{rc};margin-left:10px;">{rate:.0f}<small style="font-size:14px;">%</small></span></div>
+            <span class="tnum" style="font-size:26px;font-weight:700;color:{rc};margin-left:10px;">{rate:.0f}<small style="font-size:14px;font-weight:600;color:{MUTED};">%</small></span></div>
             <span style="font-size:12px;color:{MUTED};">소진 {money(ts)} / 예산 {money(tb)}원</span></div>
           {rows}</div>""", unsafe_allow_html=True)
 
@@ -1818,14 +1834,15 @@ def render_brief():
             mx = float(g["문의"].max() or 1)
             st.markdown('<div class="sec-title"><i class="fa-solid fa-bullhorn"></i> 이번 달 캠페인별 문의 수</div>', unsafe_allow_html=True)
             rows2 = ""
-            for _, r in g.iterrows():
+            for i, (_, r) in enumerate(g.iterrows(), 1):
                 q = int(r["문의"]); s = int(r["상담"]); w = int(r["수임"])
                 wpct = q / mx * 100
-                rows2 += (f'<div style="display:flex;align-items:center;gap:10px;margin:6px 0;font-size:12px;">'
-                          f'<span style="width:150px;color:#141517;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{r["category"]}</span>'
-                          f'<div style="flex:1;height:8px;background:#EEF1F6;border-radius:4px;overflow:hidden;">'
-                          f'<div style="width:{wpct:.0f}%;height:100%;background:{TEAL};"></div></div>'
-                          f'<span style="width:140px;text-align:right;color:{MUTED};">문의 <b style="color:#141517;">{q}</b> · 상담 {s} · 수임 {w}</span></div>')
+                rows2 += (f'<div class="rank-row">'
+                          f'<span class="rank-badge">{i}</span>'
+                          f'<div class="rank-main"><div class="rank-label">{r["category"]}</div>'
+                          f'<div class="rank-track"><span style="width:{wpct:.0f}%;"></span></div></div>'
+                          f'<div><div class="rank-val">{q}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">건</small></div>'
+                          f'<div class="rank-sub">상담 {s} · 수임 {w}</div></div></div>')
             st.markdown(f'<div class="kb-card" style="margin-bottom:16px;">{rows2}</div>', unsafe_allow_html=True)
     end_day = yday if (yday.year == today.year and yday.month == today.month) else today
     days = [today.replace(day=d) for d in range(1, end_day.day + 1)]
@@ -2055,13 +2072,13 @@ def render_summary():
       <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:24px;flex-wrap:wrap;">
         <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
         <div style="display:flex;align-items:baseline;gap:10px;">
-        <span class="tnum" style="font-size:34px;font-weight:800;color:{GOLD};letter-spacing:-1px;line-height:1;">{pct:.1f}%</span>
+        <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};letter-spacing:0;line-height:1;">{pct:.1f}%</span>
         <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
         <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">{rev_label}</div>
-        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
+        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
         <div style="font-size:12px;font-weight:600;color:{MUTED};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
         <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">잔여</div>
-        <div class="tnum" style="font-size:28px;font-weight:800;color:{TXT};letter-spacing:-.6px;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
+        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
@@ -2974,7 +2991,7 @@ def render_contracts():
           <div>
             <div style="font-size:13px;color:{MUTED};margin-bottom:6px;">{hero_lbl} · {hero_period}</div>
             <div style="display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;">
-              <span class="serif" style="font-size:44px;font-weight:600;color:{GOLD_B};line-height:1;">{won(hero_sum)}</span>
+              <span class="tnum" style="font-size:40px;font-weight:700;color:{TXT};line-height:1;letter-spacing:0;">{won(hero_sum)}</span>
               <span style="font-size:14px;padding:5px 12px;border-radius:8px;background:rgba({yrgb},.16);color:{yc};white-space:nowrap;">
                 {'▲' if up else '▼'} {abs(yoy):.1f}% <span style="color:{MUTED};">전년 동기</span></span>
             </div>
