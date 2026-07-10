@@ -94,8 +94,8 @@ table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
   min-height:104px; box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kpi:hover {{ border-color:#D1D6DB; }}
 .kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:11px; font-weight:600; }}
-.kpi .v {{ font-size:30px; font-weight:800; color:{TXT}; line-height:1; letter-spacing:-.7px; }}
-.kpi .v small {{ font-size:15px; color:{MUTED}; font-weight:700; margin-left:2px; }}
+.kpi .v {{ font-size:26px; font-weight:800; color:{TXT}; line-height:1.05; letter-spacing:-.6px; white-space:nowrap; }}
+.kpi .v small {{ font-size:13px; color:{MUTED}; font-weight:700; margin-left:1px; white-space:nowrap; }}
 .kpi .chg {{ display:inline-block; font-size:12px; margin-top:12px; font-weight:700;
   padding:3px 9px; border-radius:8px; }}
 .kpi .chg.up {{ color:{GOOD}; background:rgba(18,158,98,.12); }}
@@ -1697,7 +1697,7 @@ def render_brief():
         unsafe_allow_html=True)
 
     # ── 어제 성과 (전일 대비) ── ※ 수임은 보통 당일에 안 됨 → 제외
-    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 어제({yday:%m/%d}) 성과</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 전일 성과</div>', unsafe_allow_html=True)
     c = st.columns(3)
     kpi(c[0], "fa-won-sign", "광고비", money(ad_y), "원", *delta_str(ad_y, ad_d, "money"))
     kpi(c[1], "fa-comment-dots", "문의", f"{q_y}", "건", *delta_str(q_y, q_d, "cnt"))
@@ -3370,7 +3370,7 @@ def render_ga4():
             # 좌: 세션 막대 (채널별, 색상매핑)
             with colL:
                 st.markdown(f'<div style="font-size:13px;color:{MUTED};margin-bottom:2px;">채널별 세션 (TOP10)</div>', unsafe_allow_html=True)
-                top = ch.head(10).iloc[::-1]
+                top = ch.head(6).iloc[::-1]
                 colors = [GA4_CH_COLOR.get(s, GOLD) for s in top["src"]]
                 bar = go.Figure(go.Bar(
                     x=top["sessions"], y=top["채널"], orientation="h",
@@ -3379,7 +3379,7 @@ def render_ga4():
             # 우: 전환율 표
             with colR:
                 rows = ""
-                for _, r in ch.head(10).iterrows():
+                for _, r in ch.head(6).iterrows():
                     cvr_v = r["전환율"]
                     if pd.isna(cvr_v):
                         cvr_txt, cvr_col = "0%", MUTED
@@ -3402,170 +3402,26 @@ def render_ga4():
         st.caption(f"채널 분석 불러오지 못했습니다 · 새로고침 요망: {e}")
 
 
-    # ── ③ 전환 퍼널 + ④ 전환 이벤트 상세 ──
-    cf1, cf2 = st.columns([1, 1])
-    with cf1:
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널</div>', unsafe_allow_html=True)
-        try:
-            stages = [("세션", sess, MUTED), ("폼 제출", forms, GOLD),
-                      ("전화 클릭", phone, TEAL), ("카톡 클릭", kakao, GOLD_B)]
-            stages = [s for s in stages if s[1] >= 0]
-            ff = go.Figure(go.Bar(
-                x=[s[1] for s in stages][::-1], y=[s[0] for s in stages][::-1],
-                orientation="h", marker_color=[s[2] for s in stages][::-1],
-                text=[f"{s[1]:,}" for s in stages][::-1], textposition="auto"))
-            st.plotly_chart(fig_theme(ff, 240), use_container_width=True, config={"displayModeBar": False})
-        except Exception as e:
-            st.caption(f"퍼널 불러오지 못했습니다 · 새로고침 요망: {e}")
-    with cf2:
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-phone-volume"></i> 전환 이벤트 상세 (센터별)</div>', unsafe_allow_html=True)
-        try:
-            ce = ga4_conv_events(lo, hi)
-            if ce is not None and not ce.empty:
-                rows = ""
-                for _, r in ce.iterrows():
-                    rows += (f'<tr><td style="text-align:left;">{_kr_event(r["event_name"])}</td>'
-                             f'<td class="num">{int(r["cnt"])}</td></tr>')
-                st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
-                            f'<th style="text-align:left;">전환 이벤트</th><th>건수</th>'
-                            f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-            else:
-                st.caption("전환 이벤트가 아직 없습니다.")
-        except Exception as e:
-            st.caption(f"전환 이벤트 불러오지 못했습니다 · 새로고침 요망: {e}")
-
-
-    # ── ⑤ 디바이스 + ⑥ 시간대별 유입 ──
-    cd1, cd2 = st.columns([1, 1.4])
-    with cd1:
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-mobile-screen"></i> 디바이스</div>', unsafe_allow_html=True)
-        try:
-            dv = ga4_device(lo, hi)
-            if dv is not None and not dv.empty:
-                dmap = {"mobile": "모바일", "desktop": "PC", "tablet": "태블릿"}
-                labels = [dmap.get(x, x) for x in dv["cat"]]
-                dcolors = [TEAL, GOLD, CORAL, MUTED][:len(dv)]
-                pie = go.Figure(go.Pie(labels=labels, values=dv["sessions"], hole=0.6,
-                                       marker_colors=dcolors, sort=False,
-                                       textinfo="label+percent"))
-                pie.update_layout(showlegend=False)
-                st.plotly_chart(fig_theme(pie, 240), use_container_width=True, config={"displayModeBar": False})
-            else:
-                st.caption("디바이스 데이터 없음")
-        except Exception as e:
-            st.caption(f"디바이스 불러오지 못했습니다 · 새로고침 요망: {e}")
-    with cd2:
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-clock"></i> 시간대별 유입·전환 (KST)</div>', unsafe_allow_html=True)
-        try:
-            hh = ga4_hourly(lo, hi)
-            if hh is not None and not hh.empty:
-                full = pd.DataFrame({"hr": range(24)}).merge(hh, on="hr", how="left").fillna(0)
-                fh = go.Figure()
-                fh.add_bar(x=full["hr"], y=full["sessions"], name="세션", marker_color=GOLD)
-                fh.add_trace(go.Scatter(x=full["hr"], y=full["conversions"], name="전환",
-                                        mode="lines+markers", line=dict(color=TEAL, width=2), yaxis="y2"))
-                fh.update_layout(
-                    xaxis=dict(title="시", dtick=2),
-                    yaxis2=dict(overlaying="y", side="right", showgrid=False),
-                    legend=dict(orientation="h", y=1.15))
-                st.plotly_chart(fig_theme(fh, 240), use_container_width=True, config={"displayModeBar": False})
-                st.caption("※ 유입 많은 시간대 → 광고 예산·입찰 강화 시간 참고")
-            else:
-                st.caption("시간대 데이터 없음")
-        except Exception as e:
-            st.caption(f"시간대 불러오지 못했습니다 · 새로고침 요망: {e}")
-
-
-    # ── ⑦ 랜딩페이지 TOP + ⑧ 지역 ──
-    cl1, cl2 = st.columns([1.5, 1])
-    with cl1:
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-file-lines"></i> 랜딩페이지 TOP (어느 페이지로 들어오나)</div>', unsafe_allow_html=True)
-        try:
-            lp = ga4_landing(lo, hi)
-            if lp is not None and not lp.empty:
-                rows = ""
-                for _, r in lp.iterrows():
-                    page = str(r["page"]).replace("https://www.lawfirmkb.com", "")
-                    page = page.replace("https://www.", "").replace("https://", "")
-                    page = page or "/"
-                    if len(page) > 50:
-                        page = page[:50] + "…"
-                    rows += (f'<tr><td style="text-align:left;font-size:12px;">{page}</td>'
-                             f'<td class="num">{int(r["views"]):,}</td>'
-                             f'<td class="num">{int(r["users"]):,}</td></tr>')
-                st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
-                            f'<th style="text-align:left;">페이지</th><th>조회수</th><th>방문자</th>'
-                            f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-            else:
-                st.caption("랜딩페이지 데이터 없음")
-        except Exception as e:
-            st.caption(f"랜딩페이지 불러오지 못했습니다 · 새로고침 요망: {e}")
-    with cl2:
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-location-dot"></i> 지역별 방문자</div>', unsafe_allow_html=True)
-        try:
-            rg = ga4_region(lo, hi)
-            if rg is not None and not rg.empty:
-                rows = ""
-                for _, r in rg.iterrows():
-                    rows += (f'<tr><td style="text-align:left;">{_kr_region(r["region"])}</td>'
-                             f'<td class="num">{int(r["users"]):,}</td></tr>')
-                st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
-                            f'<th style="text-align:left;">지역</th><th>방문자</th>'
-                            f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-            else:
-                st.caption("지역 데이터 없음")
-        except Exception as e:
-            st.caption(f"지역 불러오지 못했습니다 · 새로고침 요망: {e}")
-
-
-    # ── ⑧.5 랜딩페이지별 전환 (전환을 일으킨 페이지) ──
-    st.markdown(f'<div class="big-section"><i class="fa-solid fa-bullseye"></i> 페이지별 전환 (어느 페이지가 전화·카톡·상담신청을 일으키나)</div>', unsafe_allow_html=True)
+    # ── 랜딩페이지 TOP (상위 8개) ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-file-lines"></i> 랜딩페이지 TOP</div>', unsafe_allow_html=True)
     try:
-        pc = ga4_page_conv(lo, hi)
-        if pc is not None and not pc.empty:
-            pc = pc.copy()
-            pc["전환율"] = (pc["conversions"] / pc["views"].replace(0, pd.NA) * 100).round(1)
-            pcol1, pcol2 = st.columns([1.5, 1])
-            with pcol1:
-                rows = ""
-                for _, r in pc.iterrows():
-                    page = str(r["page"]).replace("https://www.lawfirmkb.com", "")
-                    page = page.replace("https://www.", "").replace("https://", "") or "/"
-                    if len(page) > 46:
-                        page = page[:46] + "…"
-                    cvr_v = r["전환율"]
-                    if pd.isna(cvr_v):
-                        cvr_txt, cvr_col = "—", MUTED
-                    elif cvr_v > 100:
-                        cvr_txt, cvr_col = f"{cvr_v:.0f}%*", MUTED
-                    elif cvr_v >= 5:
-                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", GOLD_B
-                    else:
-                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", MUTED
-                    rows += (f'<tr><td style="text-align:left;font-size:12px;">{page}</td>'
-                             f'<td class="num">{int(r["views"]):,}</td>'
-                             f'<td class="num" style="color:{GOLD_B};">{int(r["conversions"])}</td>'
-                             f'<td style="color:{cvr_col};font-weight:600;">{cvr_txt}</td></tr>')
-                st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
-                            f'<th style="text-align:left;">페이지</th><th>조회수</th><th>전환</th><th>전환율</th>'
-                            f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
-            with pcol2:
-                st.markdown(f'<div style="font-size:12px;color:{MUTED};margin-bottom:2px;">전환 일으킨 페이지 TOP8</div>', unsafe_allow_html=True)
-                topc = pc.head(8).iloc[::-1].copy()
-                topc["lab"] = topc["page"].apply(
-                    lambda x: (str(x).replace("https://www.lawfirmkb.com", "")
-                               .replace("https://www.", "").replace("https://", "") or "/")[:24])
-                pbar = go.Figure(go.Bar(
-                    x=topc["conversions"], y=topc["lab"], orientation="h",
-                    marker_color=GOLD, text=topc["conversions"], textposition="auto"))
-                st.plotly_chart(fig_theme(pbar, 300), use_container_width=True, config={"displayModeBar": False})
-            st.caption("※ 전환이 **발생한 페이지** 기준(전화/카톡/상담신청 버튼을 누른 그 페이지). "
-                       "전환율 = 전환 ÷ 조회수. 어느 콘텐츠가 상담을 끌어내는지 = 광고 랜딩·콘텐츠 개선 포인트.")
+        lp = ga4_landing(lo, hi)
+        if lp is not None and not lp.empty:
+            rows = ""
+            for _, r in lp.head(8).iterrows():
+                page = str(r["page"]).replace("https://www.lawfirmkb.com", "").replace("https://www.", "").replace("https://", "") or "/"
+                if len(page) > 46:
+                    page = page[:46] + "…"
+                rows += (f'<tr><td style="text-align:left;">{page}</td>'
+                         f'<td class="num">{int(r["views"]):,}</td>'
+                         f'<td class="num">{int(r["users"]):,}</td></tr>')
+            st.markdown('<table class="kb-tbl" style="width:100%;"><thead><tr>'
+                        '<th style="text-align:left;">페이지</th><th>조회수</th><th>방문자</th>'
+                        f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
         else:
-            st.caption("아직 전환이 발생한 페이지 데이터가 없습니다 (데이터 쌓이면 표시).")
+            st.caption("랜딩페이지 데이터 없음")
     except Exception as e:
-        st.caption(f"페이지별 전환 불러오지 못했습니다 · 새로고침 요망: {e}")
-
+        st.caption(f"랜딩페이지 불러오지 못했습니다: {e}")
 
     # ── ⑨ 일별 추세 (쌓일수록 풍성) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-chart-line"></i> 일별 추세 (세션·전환)</div>', unsafe_allow_html=True)
