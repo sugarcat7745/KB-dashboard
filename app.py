@@ -1554,12 +1554,10 @@ def cmp_caption(text):
                 f'<i class="fa-solid fa-arrow-right-arrow-left" style="font-size:11px;"></i> 화살표 = {text} 증감</div>',
                 unsafe_allow_html=True)
 
-def tab_header(icon_fa, title, sub, color="#3182F6", rgb="49,130,246"):
-    # 단촐한 제목 — 장식(배경 바·컬러 테두리·발광 아이콘 배지) 없이 진한 제목 + 회색 부제.
+def tab_header(icon_fa, title, sub="", color="#3182F6", rgb="49,130,246"):
+    # 단촐한 제목 — 부제·장식 없이 진한 제목 한 줄만.
     st.markdown(
-        f'<div style="margin:2px 0 20px;">'
-        f'<div style="font-size:22px;font-weight:700;color:{TXT};letter-spacing:-.5px;">{title}</div>'
-        f'<div style="font-size:13px;color:{MUTED};margin-top:3px;font-weight:500;">{sub}</div></div>',
+        f'<div style="font-size:22px;font-weight:700;color:{TXT};letter-spacing:-.5px;margin:2px 0 18px;">{title}</div>',
         unsafe_allow_html=True)
 
 def deriv_toggle(wkey):
@@ -1633,8 +1631,6 @@ def render_brief():
     mstart = today.replace(day=1)
     pl_last = mstart - timedelta(days=1); pl_first = pl_last.replace(day=1)
     ps, pe = pl_first, pl_first.replace(day=min(today.day, pl_last.day))
-    st.caption(f"📅 어제 {yday:%m월 %d일} · 이번 달 {mstart.month}월 1일~{today.day}일 · 🔄 전월 동기 대비")
-    st.caption("※ 광고 금액은 충전 금액이 아닌 실제 광고비 소진 금액 기준입니다")
 
     def spend(s, e):
         try:
@@ -1689,7 +1685,7 @@ def render_brief():
       <span style="font-size:14px;">{body}</span></div>""", unsafe_allow_html=True)
 
     # ── 어제 성과 (전일 대비) ── ※ 수임은 보통 당일에 안 됨 → 제외
-    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 어제({yday:%m/%d}) 성과 · 전일 대비</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 어제({yday:%m/%d}) 성과</div>', unsafe_allow_html=True)
     c = st.columns(3)
     kpi(c[0], "fa-won-sign", "광고비", money(ad_y), "원", *delta_str(ad_y, ad_d, "money"))
     kpi(c[1], "fa-comment-dots", "문의", f"{q_y}", "건", *delta_str(q_y, q_d, "cnt"))
@@ -1802,7 +1798,6 @@ def render_brief():
                    .sort_values("문의", ascending=False)).head(10)
             mx = float(g["문의"].max() or 1)
             st.markdown('<div class="sec-title"><i class="fa-solid fa-bullhorn"></i> 이번 달 캠페인별 문의 수</div>', unsafe_allow_html=True)
-            st.caption("※ 광고 캠페인(카테고리) 기준 유입 — 문의·상담·수임 건수 (사건 매출과 별개 축)")
             rows2 = ""
             for _, r in g.iterrows():
                 q = int(r["문의"]); s = int(r["상담"]); w = int(r["수임"])
@@ -1841,21 +1836,6 @@ def render_brief():
         for d0, r in g2.iterrows():
             if d0 in iq: iq[d0] = (int(r["q"]), int(r["s"]), int(r["w"]))
     cols_m = [m for m in order if m in seen] + [m for m in sorted(seen) if m not in order]
-
-    # ── 일별 추세 그래프 (총광고비 막대 + 문의 선) ──
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 이번 달 일별 추세 (광고비 · 문의)</div>', unsafe_allow_html=True)
-    xs = [d.day for d in days]
-    tot_series = [sum(daily[d].values()) for d in days]
-    q_series = [iq[d][0] for d in days]
-    fig = go.Figure()
-    fig.add_bar(x=xs, y=tot_series, name="총광고비", marker_color=GOLD, opacity=.85)
-    fig.add_trace(go.Scatter(x=xs, y=q_series, name="문의", yaxis="y2", mode="lines+markers",
-                             line=dict(color=TEAL, width=2), marker=dict(size=5)))
-    fig_theme(fig, 260)
-    fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False, color=TEAL),
-                      legend=dict(orientation="h", y=1.16, x=0),
-                      xaxis=dict(title="일", dtick=1, gridcolor="rgba(20,30,50,0.06)"))
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     # ── 월 전체 일별 표 (매체별 · 주차 소계 · 전주대비) ──
     st.markdown(f'<div class="sec-title"><i class="fa-solid fa-table"></i> {today.month}월 일자별 전체</div>', unsafe_allow_html=True)
@@ -1936,7 +1916,6 @@ def render_summary():
     pe = pl_first.replace(day=min(today.day, pl_last.day))    # 전월 동기(같은 일자까지)
     cmp_label = "전월 동기 대비"
     plabel = f"{start.year}년 {start.month}월"
-    st.caption(f"📅 이번 달 ({start.month}월 1일 ~ {today.month}월 {today.day}일) · 🔄 {cmp_label}")
 
     # ── 기간(start~end)이 걸친 (연,월) 집합 → 연간요약 시트 합산 헬퍼 ──
     #    period_selector(start~end) 방식으로 통일하면서, 연간요약(월 단위)도
@@ -2082,7 +2061,7 @@ def render_summary():
 
     # ── 전환 퍼널 (문의→상담→수임) · 문의 시트 기준 (6KPI와 동일 소스!!) ──
     if n_inq > 0:
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {plabel} (문의 시트 기준)</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-filter"></i> 전환 퍼널 · {plabel}</div>', unsafe_allow_html=True)
         _pcts = [100.0, n_sang / n_inq * 100, n_suim / n_inq * 100]
         ff = go.Figure(go.Bar(
             y=["문의", "상담", "수임"], x=[n_inq, n_sang, n_suim], orientation="h",
@@ -2591,7 +2570,7 @@ def render_inquiries():
 
     # ════ 대단락: 카테고리 분석 ════
     st.markdown('<div class="big-section"><i class="fa-solid fa-tags"></i> 카테고리 분석</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 · 수임 <span style="color:#4E5968;font-size:12px;font-weight:400;">({start} ~ {end})</span></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 · 수임</div>', unsafe_allow_html=True)
     bad = ["(미분류)", "nan", "", "종결", "수임완료", "문자남김"]
     catf = inqf[~inqf["category"].isin(bad)]
     if not catf.empty:
@@ -2644,9 +2623,6 @@ def render_inquiries():
             ])
         sortable_table(["카테고리", "광고비", "문의", "문의당비용", "수임", "수임건당 광고비", "전환율"],
                        _rows, height=min(560, 70 + len(_rows) * 37))
-        st.caption("※ 광고비는 네이버·구글 키워드 데이터 기준(브랜드검색 월정액·기타매체 제외). "
-                   "'—'는 자연·미확인 유입 등 광고비가 매칭되지 않는 카테고리입니다. "
-                   "수임건당 광고비가 낮을수록 효율적 — 예산 재배분 판단에 활용하세요.")
     else:
         st.caption("이 기간 카테고리별 효율 데이터가 없습니다.")
 
