@@ -67,7 +67,7 @@ st.markdown(f"""
 @import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css");
 :root {{ --font:'Pretendard','Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif; }}
 .stApp {{ background:{BG}; }}
-html, body, [class*="css"], .stMarkdown, .stApp p, .stApp span, .stApp li {{ font-family:var(--font); }}
+html, body, .stApp, .stMarkdown, .stApp p, .stApp span, .stApp li {{ font-family:var(--font); }}
 body {{ word-break:keep-all; }}
 table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
 .serif {{ font-family:var(--font); }}
@@ -103,8 +103,9 @@ table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
 /* 카드 */
 .kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:20px 22px; margin-bottom:16px;
   box-shadow:0 1px 3px rgba(20,21,23,.04); }}
-.kb-card h3 {{ font-size:16px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:10px; }}
-.kb-card h3 i {{ color:{GOLD}; font-size:15px; }}
+.kb-card h3 {{ font-size:16px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:9px; }}
+.kb-card h3 i {{ display:none; }}
+.kb-card h3::before {{ content:""; width:6px; height:6px; border-radius:50%; background:{GOLD}; flex:none; }}
 /* 목표바 */
 .goalbar {{ height:10px; background:#EEF1F6; border-radius:99px; overflow:hidden; }}
 .goalbar > div {{ height:100%; background:{GOLD}; border-radius:99px; }}
@@ -118,20 +119,21 @@ table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
 .placeholder {{ text-align:center; padding:70px 20px; color:{MUTED}; }}
 /* 타이포 위계 */
 .big-section {{ font-size:18px; font-weight:700; color:{TXT};
-    margin:32px 0 8px; padding-bottom:0; border-bottom:none;
-    display:flex; align-items:center; gap:10px; }}
-.big-section i {{ color:{GOLD}; font-size:16px; }}
+    margin:32px 0 8px; display:flex; align-items:center; gap:9px; }}
+.big-section i {{ display:none; }}
+.big-section::before {{ content:""; width:7px; height:7px; border-radius:50%; background:{GOLD}; flex:none; }}
 .sec-title {{ font-size:15px; font-weight:700; margin:20px 0 11px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
-.sec-title i {{ color:{GOLD}; font-size:14px; }}
+.sec-title i {{ display:none; }}
+.sec-title::before {{ content:""; width:6px; height:6px; border-radius:50%; background:{GOLD}; flex:none; }}
 .placeholder i {{ font-size:40px; color:{GOLD}; margin-bottom:16px; }}
-/* 탭 */
-.stTabs [data-baseweb="tab-list"] {{ gap:6px; border-bottom:none; flex-wrap:wrap; padding:2px 0 6px; }}
+/* 탭 — 밑줄 스타일(단촐) */
+.stTabs [data-baseweb="tab-list"] {{ gap:2px; border-bottom:1px solid {LINE}; flex-wrap:wrap; }}
 .stTabs [data-baseweb="tab-highlight"], .stTabs [data-baseweb="tab-border"] {{ display:none !important; }}
-.stTabs [data-baseweb="tab"] {{ color:{MUTED}; font-size:14px; font-weight:600; padding:8px 16px;
-    background:{SURF}; border:1px solid {LINE}; border-radius:10px; transition:all .15s; }}
-.stTabs [data-baseweb="tab"]:hover {{ background:{PRIMSOFT}; color:{GOLD_D}; border-color:#CFE0FB; }}
-.stTabs [aria-selected="true"] {{ color:#fff !important;
-    background:{GOLD}; border-color:{GOLD}; box-shadow:none; }}
+.stTabs [data-baseweb="tab"] {{ color:{MUTED}; font-size:14px; font-weight:600; padding:10px 15px;
+    background:transparent; border:none; border-bottom:2px solid transparent; border-radius:0; transition:color .15s; }}
+.stTabs [data-baseweb="tab"]:hover {{ color:{TXT}; background:transparent; }}
+.stTabs [aria-selected="true"] {{ color:{GOLD} !important;
+    background:transparent; border-bottom:2px solid {GOLD}; box-shadow:none; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2314,7 +2316,7 @@ def render_daily():
     if s == e:
         inq_day = load_inq_for_date(s)
         if len(inq_day):
-            with st.expander(f"💬 {s} 문의 내용 — {len(inq_day)}건 (클릭하여 펼치기)"):
+            with st.expander(f"💬 {s} 문의 내용 — {len(inq_day)}건"):
                 name_c = next((cc for cc in inq_day.columns if "이름" in cc), None)
                 way_c  = next((cc for cc in inq_day.columns if "접수" in cc or "방식" in cc), None)
                 cont_c = next((cc for cc in inq_day.columns if "문의내용" in cc or "내용" in cc), None)
@@ -2326,7 +2328,7 @@ def render_daily():
                 st.markdown(f'<table class="kb-tbl"><thead><tr><th>이름</th><th>접수방식</th>'
                     f'<th style="text-align:left;">문의내용</th></tr></thead><tbody>{rr}</tbody></table>', unsafe_allow_html=True)
         if n_con:
-            with st.expander(f"📑 {s} 계약 내역 — {n_con}건 (클릭하여 펼치기)"):
+            with st.expander(f"📑 {s} 계약 내역 — {n_con}건"):
                 rr = "".join(f"<tr><td>{r._type}</td><td style='text-align:left;'>{r.get('사건','')}</td>"
                     f"<td class='num'>{r._amt:,.0f}원</td><td>{r._inflow}</td></tr>" for _, r in cf.iterrows())
                 st.markdown(f'<table class="kb-tbl"><thead><tr><th>계약유형</th><th style="text-align:left;">사건</th>'
@@ -2436,7 +2438,7 @@ def render_ad_tab(media, full):
         st.plotly_chart(fig_theme(fig, 280), use_container_width=True, config={"displayModeBar": False})
 
     # ── 일자별 상세 표 (헤더 클릭 정렬!!!) ──
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세 <span style="color:#4E5968;font-size:12px;font-weight:400;">(헤더 클릭 → 정렬)</span></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-days"></i> 일자별 상세</div>', unsafe_allow_html=True)
     dd = d.copy()
     dd["CTR"] = (dd.clk/dd.imp*100).fillna(0).round(2)
     dd["CPC"] = (dd.cost/dd.clk).replace([float("inf")], 0).fillna(0).round(0)
@@ -2644,7 +2646,7 @@ def render_inquiries():
                        _rows, height=min(560, 70 + len(_rows) * 37))
         st.caption("※ 광고비는 네이버·구글 키워드 데이터 기준(브랜드검색 월정액·기타매체 제외). "
                    "'—'는 자연·미확인 유입 등 광고비가 매칭되지 않는 카테고리입니다. "
-                   "수임건당 광고비가 낮을수록 효율적 — 예산 재배분 판단에 활용하세요. (헤더 클릭 → 정렬)")
+                   "수임건당 광고비가 낮을수록 효율적 — 예산 재배분 판단에 활용하세요.")
     else:
         st.caption("이 기간 카테고리별 효율 데이터가 없습니다.")
 
@@ -3010,7 +3012,7 @@ def render_contracts():
         ad_period = float(_a or 0) + float(_b or 0)
         roas_card(hero_sum, ad_period, period=hero_period, paid=float(hero_paid or 0))
         if len(cf):
-            with st.expander(f"📋 계약 내역 — {len(cf)}건 (클릭하여 펼치기)"):
+            with st.expander(f"📋 계약 내역 — {len(cf)}건"):
                 rows = "".join(
                     f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td><td>{r['_type']}</td>"
                     f"<td>{'신건' if r['_is_new'] else '파생'}</td><td class='num'>{money(r['_amt'])}</td>"
@@ -3030,7 +3032,7 @@ def render_contracts():
         kpi(ci[0], "fa-circle-check", "입금 완료", money(t_paid), "원")
         # 미수율은 화살표(증감)로 오해되지 않게 desc로 라벨 표기
         kpi(ci[1], "fa-circle-exclamation", "미수금", money(t_unpaid), "원",
-            desc=f"미수율 {unpaid_ratio:.1f}% (계약액 대비)")
+            )
         kpi(ci[2], "fa-percent", "수금률", f"{rate:.1f}", "%")
 
         # 미수금 에이징 (경과기간별) — 오래된 미수일수록 회수 난이도↑, 수금 우선순위 판단용
@@ -3055,7 +3057,7 @@ def render_contracts():
                 f'<div style="font-size:12px;color:{MUTED};margin-top:7px;">{_leg}'
                 f'<span style="margin-left:8px;color:{CORAL};">← 오래될수록 회수 난이도↑</span></div></div>',
                 unsafe_allow_html=True)
-        with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원  (클릭하여 펼치기)"):
+        with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원 "):
             if unpaid.empty:
                 st.success("미수금이 없습니다 · 전액 수금 완료")
             else:
@@ -4584,9 +4586,9 @@ def main():
 
     is_admin = (user == "admin")
     can_qna = qna_can_see(user)
-    top_labels = ["📊 요약", "📈 광고", "💼 실적", "🌐 유입", "📝 변경", "🤖 AI"]
+    top_labels = ["요약", "광고", "실적", "유입", "변경", "AI"]
     if can_qna:
-        top_labels = top_labels + ["📚 QnA"]
+        top_labels = top_labels + ["QnA"]
     top = st.tabs(top_labels)
 
     def _safe(fn, label):
