@@ -4,7 +4,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
-import base64, urllib.request, time, random, hmac, hashlib, json, re
+import base64, urllib.request, time, random, hmac, hashlib, json, re, os
 from datetime import datetime, date, timedelta
 
 try:
@@ -153,6 +153,10 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .stTabs [data-baseweb="tab"]:hover {{ color:{TXT}; background:transparent; }}
 .stTabs [aria-selected="true"] {{ color:{GOLD} !important;
     background:transparent; border-bottom:2px solid {GOLD}; box-shadow:none; }}
+/* 버튼 — 누름 반응(레퍼런스 scale 0.98) + 라운드 통일 */
+.stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {{
+    border-radius:12px; transition:transform .1s ease-out, background-color .15s, border-color .15s, color .15s; }}
+.stButton > button:active, .stDownloadButton > button:active, .stFormSubmitButton > button:active {{ transform:scale(.98); }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -679,18 +683,30 @@ def ai_banner(summary, tab, period, focus=""):
         unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data
 def get_logo():
+    """검정 로고(법무법인 KB 공식 로고 검정버전) — 로컬 파일 base64 임베드. 밝은 배경용."""
     try:
-        url = "https://raw.githubusercontent.com/sugarcat7745/KB-dashboard/main/%ED%99%94%EC%9D%B4%ED%8A%B8.png"
-        with urllib.request.urlopen(url) as r:
-            return base64.b64encode(r.read()).decode()
-    except:
+        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "검정.png")
+        with open(p, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except Exception:
         return None
 
 def brand_html(size="md"):
-    """라이트 테마 워드마크(네이비 KB 배지 + 이름). 기존 로고 PNG가 흰색(다크용)이라 대체."""
-    if size == "lg":   # 로그인·인트로 중앙 큰 버전
+    """공식 로고(검정버전) 이미지. 파일 없으면 KB 배지로 폴백."""
+    b = get_logo()
+    if b:
+        h = 44 if size == "lg" else 30
+        img = (f'<img src="data:image/png;base64,{b}" alt="법무법인 KB" '
+               f'style="height:{h}px;width:auto;display:block;" />')
+        if size == "lg":
+            return f'<div style="display:inline-flex;align-items:center;">{img}</div>'
+        return (f'<div style="display:flex;align-items:center;gap:13px;">{img}'
+                f'<span style="font-size:12px;color:{FAINT};font-weight:500;'
+                f'border-left:1px solid {LINE};padding-left:13px;">광고·매출 통합 대시보드</span></div>')
+    # 폴백: 이미지 로드 실패 시 KB 배지
+    if size == "lg":
         return ('<div style="display:inline-flex;align-items:center;gap:13px;">'
                 '<span style="display:grid;place-items:center;width:52px;height:52px;border-radius:13px;'
                 'background:#141517;color:#fff;font-weight:800;font-size:22px;letter-spacing:.5px;">KB</span>'
@@ -1939,17 +1955,30 @@ def render_brief():
 
 
 def render_summary():
-    tab_header("fa-chart-pie", "월간 종합", "이번 달 종합 — 목표 · 효율 · 매체 · 사건분류")
+    tab_header("fa-chart-pie", "월간 종합", "월별 종합 — 목표 · 효율 · 매체 · 사건분류")
     con = load_contracts()
     today = date.today()
-    # 월간 종합: 기간설정 없이 '이번 달' 고정 · 전월 동기간과 비교
-    start = today.replace(day=1)
-    end = today
+    # ── 월 선택 (기본 이번 달) · 최근 12개월 ──
+    _months, _y, _m = [], today.year, today.month
+    for _ in range(12):
+        _months.append((_y, _m))
+        _m -= 1
+        if _m < 1:
+            _m, _y = 12, _y - 1
+    def _mlab(ym):
+        y, m = ym
+        return f"{y}년 {m}월" + ("  (이번 달)" if ym == (today.year, today.month) else "")
+    _msel = st.columns([1.5, 3])[0].selectbox("월 선택", _months, format_func=_mlab, key="summary_month")
+    sel_y, sel_m = _msel
+    start = date(sel_y, sel_m, 1)
+    _is_cur = (sel_y, sel_m) == (today.year, today.month)
+    _nxt = date(sel_y + (1 if sel_m == 12 else 0), 1 if sel_m == 12 else sel_m + 1, 1)
+    end = today if _is_cur else (_nxt - timedelta(days=1))    # 지난달은 말일까지, 이번 달은 어제(오늘 미수집)까지
     span = (end - start).days + 1
     pl_last = start - timedelta(days=1)                       # 전월 말일
     pl_first = pl_last.replace(day=1)                         # 전월 1일
     ps = pl_first
-    pe = pl_first.replace(day=min(today.day, pl_last.day))    # 전월 동기(같은 일자까지)
+    pe = pl_first.replace(day=min(end.day, pl_last.day))      # 전월 동기(같은 일자까지)
     cmp_label = "전월 동기 대비"
     plabel = f"{start.year}년 {start.month}월"
 
@@ -2154,12 +2183,15 @@ def render_summary():
     if not cat.empty and cat.sum() > 0:
         st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 사건분류별 신건 매출</div>', unsafe_allow_html=True)
         tot = cat.sum()
-        fcat = go.Figure(go.Bar(
-            y=[str(t) for t in cat.index[::-1]], x=cat.values[::-1] / 1e8, orientation="h",
-            marker=dict(color=GOLD), text=[f"{v/1e8:.2f}억 ({v/tot*100:.0f}%)" for v in cat.values[::-1]],
-            textposition="outside"))
-        fcat.update_xaxes(ticksuffix="억")
-        st.plotly_chart(fig_theme(fcat, max(200, len(cat) * 34)), use_container_width=True, config={"displayModeBar": False})
+        mxa = float(cat.max() or 1)
+        rows = ""
+        for i, (t, v) in enumerate(cat.items(), 1):
+            rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                     f'<div class="rank-main"><div class="rank-label">{t}</div>'
+                     f'<div class="rank-track"><span style="width:{v/mxa*100:.0f}%;"></span></div></div>'
+                     f'<div><div class="rank-val tnum">{v/1e8:.2f}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">억</small></div>'
+                     f'<div class="rank-sub">{v/tot*100:.0f}%</div></div></div>')
+        st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
 
 def render_daily():
     tab_header("fa-calendar-day", "일자별 요약", "선택 기간의 일자별 광고 · 문의 · 계약")
@@ -3391,36 +3423,30 @@ def render_ga4():
             ch = ch.copy()
             ch["채널"] = ch.apply(lambda r: _kr_channel(r["src"], r["med"]), axis=1)
             ch["전환율"] = (ch["conversions"] / ch["sessions"].replace(0, pd.NA) * 100).round(1)
-            colL, colR = st.columns([1.15, 1])
-            # 좌: 세션 막대 (채널별, 색상매핑)
-            with colL:
-                st.markdown(f'<div style="font-size:13px;color:{MUTED};margin-bottom:2px;">채널별 세션 (TOP6)</div>', unsafe_allow_html=True)
-                top = ch.head(6).iloc[::-1]
-                colors = [GA4_CH_COLOR.get(s, GOLD) for s in top["src"]]
-                bar = go.Figure(go.Bar(
-                    x=top["sessions"], y=top["채널"], orientation="h",
-                    marker_color=colors, text=top["sessions"], textposition="auto"))
-                st.plotly_chart(fig_theme(bar, 320), use_container_width=True, config={"displayModeBar": False})
-            # 우: 전환율 표
-            with colR:
-                rows = ""
-                for _, r in ch.head(6).iterrows():
-                    cvr_v = r["전환율"]
-                    if pd.isna(cvr_v):
-                        cvr_txt, cvr_col = "0%", MUTED
-                    elif cvr_v > 100:
-                        cvr_txt, cvr_col = f"{cvr_v:.0f}%*", MUTED   # 첫유입 기준 재방문 전환
-                    elif cvr_v >= 5:
-                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", GOLD_B
-                    else:
-                        cvr_txt, cvr_col = f"{cvr_v:.1f}%", MUTED
-                    rows += (f'<tr><td style="text-align:left;">{r["채널"]}</td>'
-                             f'<td class="num">{int(r["sessions"]):,}</td>'
-                             f'<td class="num">{int(r["conversions"])}</td>'
-                             f'<td style="color:{cvr_col};font-weight:600;">{cvr_txt}</td></tr>')
-                st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
-                            f'<th style="text-align:left;">채널(소스/매체)</th><th>세션</th><th>전환</th><th>전환율</th>'
-                            f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+            ch6 = ch.head(6)
+            mxs = float(ch6["sessions"].max() or 1)
+            has_star = False
+            rows = ""
+            for i, (_, r) in enumerate(ch6.iterrows(), 1):
+                sess = int(r["sessions"]); conv = int(r["conversions"])
+                fill = GA4_CH_COLOR.get(r["src"], GOLD)
+                cvr_v = r["전환율"]
+                if pd.isna(cvr_v):
+                    cvr_txt, cvr_col = "0%", MUTED
+                elif cvr_v > 100:
+                    cvr_txt, cvr_col = f"{cvr_v:.0f}%*", MUTED; has_star = True   # 첫유입 기준 재방문 전환
+                elif cvr_v >= 5:
+                    cvr_txt, cvr_col = f"{cvr_v:.1f}%", GOOD
+                else:
+                    cvr_txt, cvr_col = f"{cvr_v:.1f}%", MUTED
+                rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                         f'<div class="rank-main"><div class="rank-label">{r["채널"]}</div>'
+                         f'<div class="rank-track"><span style="width:{sess/mxs*100:.0f}%;background:{fill};"></span></div></div>'
+                         f'<div><div class="rank-val tnum">{sess:,}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">세션</small></div>'
+                         f'<div class="rank-sub">전환 {conv} · <span style="color:{cvr_col};font-weight:700;">{cvr_txt}</span></div></div></div>')
+            st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
+            if has_star:
+                st.markdown(f'<div style="font-size:11px;color:{FAINT};margin-top:-8px;">* 전환율 100% 초과 = 첫 유입 후 재방문해 전환한 경우(세션 기준 특성)</div>', unsafe_allow_html=True)
         else:
             st.caption("채널 데이터가 아직 없습니다.")
     except Exception as e:
@@ -3432,17 +3458,20 @@ def render_ga4():
     try:
         lp = ga4_landing(lo, hi)
         if lp is not None and not lp.empty:
+            lp8 = lp.head(8)
+            mxv = float(lp8["views"].max() or 1)
             rows = ""
-            for _, r in lp.head(8).iterrows():
+            for i, (_, r) in enumerate(lp8.iterrows(), 1):
                 page = str(r["page"]).replace("https://www.lawfirmkb.com", "").replace("https://www.", "").replace("https://", "") or "/"
-                if len(page) > 46:
-                    page = page[:46] + "…"
-                rows += (f'<tr><td style="text-align:left;">{page}</td>'
-                         f'<td class="num">{int(r["views"]):,}</td>'
-                         f'<td class="num">{int(r["users"]):,}</td></tr>')
-            st.markdown('<table class="kb-tbl" style="width:100%;"><thead><tr>'
-                        '<th style="text-align:left;">페이지</th><th>조회수</th><th>방문자</th>'
-                        f'</tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+                if len(page) > 44:
+                    page = page[:44] + "…"
+                vw = int(r["views"]); us = int(r["users"])
+                rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                         f'<div class="rank-main"><div class="rank-label">{page}</div>'
+                         f'<div class="rank-track"><span style="width:{vw/mxv*100:.0f}%;"></span></div></div>'
+                         f'<div><div class="rank-val tnum">{vw:,}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">조회</small></div>'
+                         f'<div class="rank-sub">방문자 {us:,}</div></div></div>')
+            st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
         else:
             st.caption("랜딩페이지 데이터 없음")
     except Exception as e:
