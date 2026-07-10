@@ -3989,13 +3989,30 @@ def qna_summary_html(intro3):
 
 def _qna_clean_sub(keyword, sub):
     """모델이 소제목에 키워드를 이미 붙인 경우 제거 → '키워드 | 소제목' 중복 방지.
-    첫 구분자(| - — – : ·)로 나눠 왼쪽이 키워드(공백 무시 비교)면 오른쪽만 남긴다.
-    예: '재건축 조합원 제명 대응 — 핵심 사항' → '핵심 사항' (키워드 공백이 달라도 처리)."""
+    ① 구분자(| - — – : ·)로 붙인 경우, ② 구분자 없이 공백으로 붙인 경우 모두 처리.
+    공백 차이는 무시하되, '사기'→'사기죄'처럼 단어 중간은 건드리지 않음(경계 확인).
+    예: '울산 건설분쟁 핵심 사항' → '핵심 사항', '재건축 제명 — 핵심 사항' → '핵심 사항'."""
     s = str(sub).strip()
     kw_ns = re.sub(r"\s+", "", str(keyword))
+    if not kw_ns:
+        return s
+    # ① 구분자로 나눠 왼쪽이 키워드면 오른쪽만
     m = re.match(r"^(.*?)\s*[|\-—–:·]+\s*(.+)$", s)
-    if m and kw_ns and re.sub(r"\s+", "", m.group(1)) == kw_ns:
+    if m and re.sub(r"\s+", "", m.group(1)) == kw_ns:
         return m.group(2).strip()
+    # ② 구분자 없이 키워드가 접두(공백 무시). 경계(공백/구분자/끝)에서만 제거
+    ns = ""
+    for i, ch in enumerate(s):
+        if not ch.isspace():
+            ns += ch
+        if ns == kw_ns:
+            nxt = s[i + 1] if i + 1 < len(s) else ""
+            if nxt == "" or nxt.isspace() or nxt in "|-—–:·":
+                rest = s[i + 1:].lstrip(" \t|-—–:·")
+                return rest.strip() or s
+            break
+        if len(ns) > len(kw_ns):
+            break
     return s
 
 
@@ -4079,6 +4096,8 @@ def qna_gen_answer(title, keyword, cat, client=None, verified=None):
             "목록에 없는 조문은 쓰지 마라.** 목록으로 충분히 답할 수 있으면 목록 밖 조문은 절대 쓰지 마라. "
             "정말 목록에 없는 조문이 꼭 필요할 때만 laws 항목 맨 앞에 '★미검증:'을 붙여라(그 외에는 ★를 쓰지 마라). "
             "형량·개정의 최신 수치는 확정적으로 단정하지 말고 '~에 처해질 수 있습니다'처럼 서술하라. "
+            "sections의 'sub'는 스키마의 5개 라벨(핵심 사항·필수 주의 사항·실제 대응 순서·"
+            "변호사 선임이 필요한 이유·법무법인 KB의 강점) 그대로만 쓰고, 키워드를 앞에 붙이지 마라. "
             "각 문단은 3~4문장 존댓말 서술형으로 쓴다.")
     usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}" + vtxt
     try:
