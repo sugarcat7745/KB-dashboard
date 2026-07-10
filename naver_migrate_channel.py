@@ -84,6 +84,15 @@ def _get(uri, params=None):
     return []
 
 
+def _get_raw(uri, params=None):
+    """GET 후 (status_code, 응답본문텍스트) — 엔드포인트 진단용."""
+    try:
+        r = requests.get(BASE + uri, headers=_hdr("GET", uri), params=params or {}, timeout=30)
+        return r.status_code, r.text
+    except Exception as e:
+        return -1, f"요청예외 {e}"
+
+
 def _post(uri, body, params=None):
     h = _hdr("POST", uri); h["Content-Type"] = "application/json; charset=UTF-8"
     try:
@@ -589,17 +598,46 @@ def mode_audit():
         print("  ✅ 모든 그룹의 소재 제목이 그룹 죄목과 일치(확장은 위 나열로 육안 확인).")
 
 
+# ── 모드: negkw (제외키워드 엔드포인트 진단) ─────────────────
+def mode_negkw():
+    """SOURCE_CAMPAIGN 첫 그룹에 대해 제외키워드 후보 엔드포인트들을 GET 해보고
+    원시 응답을 출력 — 어떤 경로·파라미터가 맞는지 확정하기 위함(읽기 전용)."""
+    srcs = _find_one(SOURCE_CAMPAIGN, exclude="신채널")
+    if not srcs:
+        print(f"원본 '{SOURCE_CAMPAIGN}' 없음"); return
+    groups = get_groups(srcs[0].get("nccCampaignId"))
+    if not groups:
+        print("원본 그룹 없음"); return
+    gid = groups[0].get("nccAdgroupId")
+    print(f"=== 제외키워드 엔드포인트 진단 · 원본 '{srcs[0].get('name')}' 첫 그룹 {gid} ===\n")
+    cands = [
+        (f"/ncc/adgroups/{gid}/restricted-keywords", None),
+        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "KEYWORD_PLUS_RESTRICT"}),
+        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "KEYWORD_RESTRICT"}),
+        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "PHRASE_KEYWORD_RESTRICT"}),
+        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "EXACT_KEYWORD_RESTRICT"}),
+        ("/ncc/restricted-keywords", {"nccAdgroupId": gid}),
+        (f"/ncc/adgroups/{gid}/restricted-keywords", {"type": "KEYWORD_RESTRICT_QI"}),
+    ]
+    for uri, p in cands:
+        sc, body = _get_raw(uri, p)
+        print(f"[{sc}] GET {uri} {p or ''}\n    {body[:350]}\n")
+    print("→ 200 + 내용 있는 경로가 제외키워드 조회 엔드포인트다. 그걸로 복제 로직 붙인다.")
+
+
 def main():
     if MODE == "dump":
         mode_dump()
     elif MODE == "audit":
         mode_audit()
+    elif MODE == "negkw":
+        mode_negkw()
     elif MODE == "migrate":
         mode_migrate()
     elif MODE == "align":
         mode_align()
     else:
-        print(f"알 수 없는 MODE='{MODE}'. dump / migrate / align 중 하나.")
+        print(f"알 수 없는 MODE='{MODE}'. dump / audit / negkw / migrate / align 중 하나.")
 
 
 if __name__ == "__main__":
