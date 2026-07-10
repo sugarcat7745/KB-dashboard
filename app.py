@@ -90,8 +90,8 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
   margin:18px 0 12px; display:flex; align-items:center; gap:12px; }}
 .eyebrow::after {{ content:""; flex:1; height:1px; background:{LINE}; }}
 /* KPI */
-.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:18px 18px 16px;
-  min-height:104px; box-shadow:0 1px 3px rgba(20,21,23,.04); }}
+.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:16px 18px 15px;
+  box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kpi:hover {{ border-color:#D1D6DB; }}
 .kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:11px; font-weight:600; }}
 .kpi .v {{ font-size:clamp(21px,2vw,25px); font-weight:700; color:{TXT}; line-height:1.1; letter-spacing:0;
@@ -1789,16 +1789,18 @@ def render_brief():
     # ═══ HERO: 이번 달 목표 달성 ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(100% 초과=초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(49,130,246,.35);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:24px;flex-wrap:wrap;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:20px;flex-wrap:wrap;">
         <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
-        <div style="display:flex;align-items:baseline;gap:10px;">
-        <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};letter-spacing:0;line-height:1;">{pct:.1f}%</span>
-        <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
-        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">{rev_label}</div>
-        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
-        <div style="font-size:12px;font-weight:600;color:{MUTED};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
-        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">잔여</div>
-        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
+          <div style="display:flex;align-items:baseline;gap:10px;">
+            <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};line-height:1;">{pct:.1f}%</span>
+            <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+        <div style="display:flex;gap:34px;">
+          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">{rev_label}</div>
+            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{money(revenue)}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
+            <div style="font-size:12px;font-weight:500;color:{FAINT};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
+          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">잔여</div>
+            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
+        </div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     # ── ROAS/효율은 '월간 종합'에서만 표시 (일간은 수임 시차로 효율 왜곡 → 제외) ──
@@ -2109,16 +2111,18 @@ def render_summary():
     # ═══ HERO: 이번 달 목표 달성 (달성률·매출·잔여) ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(49,130,246,.35);">
-      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:24px;flex-wrap:wrap;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:20px;flex-wrap:wrap;">
         <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
-        <div style="display:flex;align-items:baseline;gap:10px;">
-        <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};letter-spacing:0;line-height:1;">{pct:.1f}%</span>
-        <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
-        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">{rev_label}</div>
-        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{money(revenue)}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
-        <div style="font-size:12px;font-weight:600;color:{MUTED};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
-        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:8px;">잔여</div>
-        <div class="tnum" style="font-size:28px;font-weight:700;color:{TXT};letter-spacing:0;line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:14px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
+          <div style="display:flex;align-items:baseline;gap:10px;">
+            <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};line-height:1;">{pct:.1f}%</span>
+            <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
+        <div style="display:flex;gap:34px;">
+          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">{rev_label}</div>
+            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{money(revenue)}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
+            <div style="font-size:12px;font-weight:500;color:{FAINT};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
+          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">잔여</div>
+            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
+        </div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
@@ -3079,17 +3083,7 @@ def render_contracts():
         kpi(c[2], "fa-rotate", "파생 매출", won(deriv_sum))
         kpi(c[3], "fa-star", "신건 비중", f"{new_ratio:.0f}", "%")
 
-        # ── ROAS · 영업이익 (이 기간 광고비 불러와서 계산) ──
-        try:
-            _a = bq(f"SELECT SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
-                    f"WHERE date BETWEEN '{cs}' AND '{ce}'")["c"].iloc[0]
-        except Exception:
-            _a = 0
-        _etc = load_etc()
-        _b = (_etc[(_etc["date"].dt.date >= cs) & (_etc["date"].dt.date <= ce)]["cost"].sum()
-              if (_etc is not None and not _etc.empty) else 0)
-        ad_period = float(_a or 0) + float(_b or 0)
-        roas_card(hero_sum, ad_period, period=hero_period, paid=float(hero_paid or 0))
+        # ROAS·광고효율은 '요약(월간 종합)'에서만 표시 — 계약 탭은 매출·수금에 집중
         if len(cf):
             with st.expander(f"📋 계약 내역 — {len(cf)}건"):
                 rows = ""
@@ -3122,23 +3116,25 @@ def render_contracts():
         if not unpaid.empty:
             _today = pd.Timestamp(date.today())
             _age = (_today - unpaid["_date"]).dt.days
-            _b_recent = unpaid.loc[_age < 90, "_unpaid"].sum()
-            _b_3to6   = unpaid.loc[(_age >= 90) & (_age < 180), "_unpaid"].sum()
-            _b_6to12  = unpaid.loc[(_age >= 180) & (_age < 365), "_unpaid"].sum()
-            _b_over1y = unpaid.loc[_age >= 365, "_unpaid"].sum()
-            _seg = [("3개월 미만", _b_recent, MUTED), ("3~6개월", _b_3to6, GOLD),
-                    ("6~12개월", _b_6to12, "#D99A5B"), ("1년 이상", _b_over1y, CORAL)]
-            _bar = "".join(
-                f'<div style="flex:{max(v,1)};min-width:2px;background:{c};height:100%;" title="{lab} {money(v)}원"></div>'
-                for lab, v, c in _seg if v > 0)
-            _leg = "  ".join(f'<span style="color:{c};">●</span> {lab} <b style="color:#141517;">{money(v)}</b>원'
-                             for lab, v, c in _seg)
-            st.markdown(
-                f'<div style="margin:2px 0 12px;"><div style="display:flex;height:10px;border-radius:5px;'
-                f'overflow:hidden;border:1px solid {LINE};">{_bar}</div>'
-                f'<div style="font-size:12px;color:{MUTED};margin-top:7px;">{_leg}'
-                f'<span style="margin-left:8px;color:{CORAL};">← 오래될수록 회수 난이도↑</span></div></div>',
-                unsafe_allow_html=True)
+            _tot_un = float(unpaid["_unpaid"].sum() or 1)
+            _seg = [
+                ("3개월 미만", unpaid.loc[_age < 90, "_unpaid"].sum(), int((_age < 90).sum()), "#8B94A0"),
+                ("3~6개월",   unpaid.loc[(_age >= 90) & (_age < 180), "_unpaid"].sum(), int(((_age >= 90) & (_age < 180)).sum()), GOLD),
+                ("6~12개월",  unpaid.loc[(_age >= 180) & (_age < 365), "_unpaid"].sum(), int(((_age >= 180) & (_age < 365)).sum()), "#D99A5B"),
+                ("1년 이상",  unpaid.loc[_age >= 365, "_unpaid"].sum(), int((_age >= 365).sum()), CORAL),
+            ]
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-hourglass-half"></i> 미수금 경과기간별 (오래될수록 회수 난이도↑)</div>', unsafe_allow_html=True)
+            _rows = ""
+            for lab, v, cnt, col in _seg:
+                _p = v / _tot_un * 100
+                _vc = CORAL if lab == "1년 이상" and v > 0 else TXT
+                _rows += (f'<div class="rank-row" style="grid-template-columns:minmax(0,1fr) auto;">'
+                          f'<div class="rank-main"><div class="rank-label" style="display:flex;align-items:center;gap:8px;">'
+                          f'<span style="width:9px;height:9px;border-radius:3px;background:{col};flex:none;"></span>{lab}'
+                          f'<span style="font-size:12px;font-weight:500;color:{FAINT};">{cnt}건 · {_p:.0f}%</span></div>'
+                          f'<div class="rank-track"><span style="width:{_p:.0f}%;background:{col};"></span></div></div>'
+                          f'<div class="rank-val tnum" style="color:{_vc};">{money(v)}<small style="font-size:11px;font-weight:600;color:{MUTED};">원</small></div></div>')
+            st.markdown(f'<div class="kb-card">{_rows}</div>', unsafe_allow_html=True)
         with st.expander(f"💰 미수금 리스트 — {len(unpaid)}건 · 총 {money(unpaid['_unpaid'].sum())}원 "):
             if unpaid.empty:
                 st.success("미수금이 없습니다 · 전액 수금 완료")
@@ -3172,35 +3168,30 @@ def render_contracts():
         fig.update_yaxes(ticksuffix="억")
         st.plotly_chart(fig_theme(fig), use_container_width=True, config={"displayModeBar": False})
 
-        cc = st.columns(2)
+        cc = st.columns([1, 1.5])
         # 신건/파생 도넛
         with cc[0]:
             st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-pie"></i> 신건 vs 파생</div>', unsafe_allow_html=True)
             fig2 = go.Figure(go.Pie(labels=["신건", "파생"], values=[new_sum, deriv_sum],
                 hole=0.62, marker=dict(colors=[GOLD, GRAY]), textinfo="label+percent"))
-            st.plotly_chart(fig_theme(fig2, 230), use_container_width=True, config={"displayModeBar": False})
-        # 계약유형별 (전체기간)
+            st.plotly_chart(fig_theme(fig2, 250), use_container_width=True, config={"displayModeBar": False})
+        # 계약유형별 신건매출 — 순위 리스트(합계순) + 연도별 내역
         with cc[1]:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 신건 매출 (전체기간)</div>', unsafe_allow_html=True)
-            tg = df[df["_is_new"]].groupby("_type")["_amt"].sum().sort_values(ascending=True).tail(6)
-            fig3 = go.Figure(go.Bar(x=tg.values/1e8, y=tg.index, orientation="h",
-                marker=dict(color=GOLD)))
-            fig3.update_xaxes(ticksuffix="억")
-            st.plotly_chart(fig_theme(fig3, 230), use_container_width=True, config={"displayModeBar": False})
-
-        # 계약유형 × 연도 표
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-table-list"></i> 계약유형별 신건 매출 (연도별)</div>', unsafe_allow_html=True)
-        pv = df[df["_is_new"]].pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
-        pv["합계"] = pv.sum(axis=1)
-        pv = pv.sort_values("합계", ascending=False)
-        ys = [c for c in pv.columns if c != "합계"]
-        rows = ""
-        for typ, row in pv.iterrows():
-            tds = "".join(f"<td>{won(row[y])}</td>" for y in ys)
-            rows += f"<tr><td>{typ}</td>{tds}<td class='num'>{won(row['합계'])}</td></tr>"
-        head = "".join(f"<th>{y}</th>" for y in ys)
-        st.markdown(f"""<table class="kb-tbl"><thead><tr><th>계약유형</th>{head}<th>합계</th></tr></thead>
-          <tbody>{rows}</tbody></table>""", unsafe_allow_html=True)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 신건 매출 (연도별 내역)</div>', unsafe_allow_html=True)
+            pv = df[df["_is_new"]].pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
+            pv["합계"] = pv.sum(axis=1)
+            pv = pv.sort_values("합계", ascending=False).head(8)
+            ys = [c for c in pv.columns if c != "합계"]
+            mx = float(pv["합계"].max() or 1)
+            rows = ""
+            for i, (typ, row) in enumerate(pv.iterrows(), 1):
+                yr = " · ".join(f"{int(y)} {won(row[y])}" for y in ys if row[y] > 0)
+                rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                         f'<div class="rank-main"><div class="rank-label">{typ}</div>'
+                         f'<div class="rank-track"><span style="width:{row["합계"]/mx*100:.0f}%;"></span></div>'
+                         f'<div style="font-size:11px;font-weight:500;color:{FAINT};margin-top:5px;white-space:normal;line-height:1.5;">{yr}</div></div>'
+                         f'<div class="rank-val tnum">{won(row["합계"])}<small style="font-size:11px;font-weight:600;color:{MUTED};">원</small></div></div>')
+            st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════
 #  GA4 (analytics_457680288) — 유입·행동·전환 분석 모듈
