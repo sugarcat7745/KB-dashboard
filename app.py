@@ -136,6 +136,17 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .rank-track > span {{ display:block; height:100%; background:{GOLD}; border-radius:inherit; }}
 .rank-val {{ font-size:14px; font-weight:700; color:{TXT}; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }}
 .rank-sub {{ font-size:12px; font-weight:500; color:{FAINT}; margin-top:2px; text-align:right; white-space:nowrap; }}
+/* 레코드 리스트(번호·막대 없이 라벨+메타+값) — 계약·문의 내역용 */
+.li-row {{ display:flex; justify-content:space-between; align-items:center; gap:12px;
+  border:1px solid #EDF0F3; border-radius:14px; padding:11px 14px; }}
+.li-row + .li-row {{ margin-top:7px; }}
+.li-row:hover {{ background:{BG}; }}
+.li-main {{ min-width:0; }}
+.li-label {{ font-size:14px; font-weight:700; color:{TXT}; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.li-sub {{ font-size:12px; font-weight:500; color:{FAINT}; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+.li-right {{ text-align:right; white-space:nowrap; flex:none; }}
+.li-val {{ font-size:14px; font-weight:700; color:{TXT}; font-variant-numeric:tabular-nums; }}
+.li-tag {{ display:inline-block; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:7px; }}
 /* 타이포 위계 */
 .big-section {{ font-size:18px; font-weight:700; color:{TXT};
     margin:32px 0 8px; display:flex; align-items:center; gap:9px; }}
@@ -2377,10 +2388,15 @@ def render_daily():
                     f'<th style="text-align:left;">문의내용</th></tr></thead><tbody>{rr}</tbody></table>', unsafe_allow_html=True)
         if n_con:
             with st.expander(f"📑 {s} 계약 내역 — {n_con}건"):
-                rr = "".join(f"<tr><td>{r._type}</td><td style='text-align:left;'>{r.get('사건','')}</td>"
-                    f"<td class='num'>{r._amt:,.0f}원</td><td>{r._inflow}</td></tr>" for _, r in cf.iterrows())
-                st.markdown(f'<table class="kb-tbl"><thead><tr><th>계약유형</th><th style="text-align:left;">사건</th>'
-                    f'<th>금액</th><th>구분</th></tr></thead><tbody>{rr}</tbody></table>', unsafe_allow_html=True)
+                rr = ""
+                for _, r in cf.iterrows():
+                    _case = str(r.get('사건', '') or '').strip()
+                    _sub = f'{r._inflow}' + (f' · {_case}' if _case else '')
+                    rr += (f'<div class="li-row"><div class="li-main">'
+                           f'<div class="li-label">{r._type}</div>'
+                           f'<div class="li-sub">{_sub}</div></div>'
+                           f'<div class="li-right"><div class="li-val tnum">{r._amt:,.0f}<small style="font-size:11px;font-weight:600;color:{MUTED};">원</small></div></div></div>')
+                st.markdown(rr, unsafe_allow_html=True)
 
 def brand_header(media):
     if media == "네이버":
@@ -2505,10 +2521,18 @@ def render_ad_tab(media, full):
             f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` WHERE media='{media}' AND keyword NOT IN ('-','','(월 합계)') "
             f"AND date BETWEEN '{sd}' AND '{ed}' GROUP BY keyword ORDER BY cost DESC LIMIT 10")
     st.markdown('<div class="sec-title"><i class="fa-solid fa-magnifying-glass"></i> 키워드 TOP 10 (광고비순)</div>', unsafe_allow_html=True)
-    rows = "".join(f"<tr><td>{r.keyword}</td><td class='num'>{r.cost:,.0f}원</td><td>{int(r.clk):,}</td>"
-        f"<td>{int(r.imp):,}</td></tr>" for _, r in kw.iterrows())
-    st.markdown(f'<table class="kb-tbl"><thead><tr><th>키워드</th><th>광고비</th><th>클릭</th>'
-        f'<th>노출</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+    if not kw.empty:
+        mxc = float(kw["cost"].max() or 1)
+        rows = ""
+        for i, (_, r) in enumerate(kw.iterrows(), 1):
+            rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                     f'<div class="rank-main"><div class="rank-label">{r.keyword}</div>'
+                     f'<div class="rank-track"><span style="width:{r.cost/mxc*100:.0f}%;"></span></div></div>'
+                     f'<div><div class="rank-val tnum">{r.cost:,.0f}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">원</small></div>'
+                     f'<div class="rank-sub">클릭 {int(r.clk):,} · 노출 {int(r.imp):,}</div></div></div>')
+        st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
+    else:
+        st.caption("키워드 데이터 없음")
 
 
 # ══════════════════════════════════════════════
@@ -2560,15 +2584,18 @@ def render_etc():
     st.plotly_chart(fig_theme(f, 260), use_container_width=True, config={"displayModeBar": False})
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 매체별 요약</div>', unsafe_allow_html=True)
-    g = df.groupby("media").agg(c=("cost", "sum"), i=("impressions", "sum"),
-                                k=("clicks", "sum"))
-    rows = "".join(
-        f"<tr><td>{m}</td><td class='num'>{money(r.c)}</td><td>{int(r.i):,}</td>"
-        f"<td>{int(r.k):,}</td><td class='num'>{r.k/r.i*100 if r.i else 0:.2f}%</td></tr>"
-        for m, r in g.iterrows())
-    st.markdown(f'<table class="kb-tbl"><thead><tr><th>매체</th><th>광고비</th><th>노출</th>'
-                f'<th>클릭</th><th>CTR</th></tr></thead><tbody>{rows}</tbody></table>',
-                unsafe_allow_html=True)
+    g = (df.groupby("media").agg(c=("cost", "sum"), i=("impressions", "sum"),
+                                 k=("clicks", "sum")).sort_values("c", ascending=False))
+    mxc = float(g["c"].max() or 1)
+    rows = ""
+    for i, (m, r) in enumerate(g.iterrows(), 1):
+        ctr_m = r.k / r.i * 100 if r.i else 0
+        rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                 f'<div class="rank-main"><div class="rank-label">{m}</div>'
+                 f'<div class="rank-track"><span style="width:{r.c/mxc*100:.0f}%;background:{cmap.get(m, GOLD)};"></span></div></div>'
+                 f'<div><div class="rank-val tnum">{money(r.c)}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">원</small></div>'
+                 f'<div class="rank-sub">노출 {int(r.i):,} · 클릭 {int(r.k):,} · CTR {ctr_m:.2f}%</div></div></div>')
+    st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
 
 
 def render_inquiries():
@@ -2707,23 +2734,30 @@ def render_inquiries():
         with cols[0]:
             st.markdown(f"**📞 문의 {len(qi)}건**")
             if not qi.empty:
-                rows = "".join(
-                    f"<tr><td>{r['date'].strftime('%y-%m-%d')}</td><td>{r['name']}</td>"
-                    f"<td>{r['category']}</td><td>{'✅' if r['contracted'] else ''}</td></tr>"
-                    for _, r in qi.sort_values("date").head(30).iterrows())
-                st.markdown(f'<table class="kb-tbl"><thead><tr><th>문의일</th><th>이름</th><th>카테고리</th><th>수임</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+                rows = ""
+                for _, r in qi.sort_values("date").head(30).iterrows():
+                    won_tag = (f'<span class="li-tag" style="color:{GOOD};background:rgba(18,158,98,.12);">수임</span>'
+                               if r['contracted'] else f'<span class="li-sub">문의</span>')
+                    rows += (f'<div class="li-row"><div class="li-main">'
+                             f'<div class="li-label">{r["name"] or "이름미상"}</div>'
+                             f'<div class="li-sub">{r["date"].strftime("%y.%m.%d")} · {r["category"] or "미분류"}</div></div>'
+                             f'<div class="li-right">{won_tag}</div></div>')
+                st.markdown(rows, unsafe_allow_html=True)
             else:
                 st.caption("문의 기록 없음")
         with cols[1]:
             tot_un = qc["_unpaid"].sum() if not qc.empty else 0
             st.markdown(f"**📑 계약 {len(qc)}건 · 미수금 {money(tot_un)}원**")
             if not qc.empty:
-                rows = "".join(
-                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td>"
-                    f"<td class='num'>{money(r['_amt'])}</td>"
-                    f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
-                    for _, r in qc.sort_values("_date").iterrows())
-                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+                rows = ""
+                for _, r in qc.sort_values("_date").iterrows():
+                    unp = (f'<div class="li-sub" style="color:{CORAL};">미수 {money(r["_unpaid"])}원</div>'
+                           if r['_unpaid'] > 0 else f'<div class="li-sub" style="color:{GOOD};">완납</div>')
+                    rows += (f'<div class="li-row"><div class="li-main">'
+                             f'<div class="li-label">{r["_name"]}</div>'
+                             f'<div class="li-sub">{r["_date"].strftime("%y.%m.%d")} 계약</div></div>'
+                             f'<div class="li-right"><div class="li-val tnum">{money(r["_amt"])}<small style="font-size:11px;font-weight:600;color:{MUTED};">원</small></div>{unp}</div></div>')
+                st.markdown(rows, unsafe_allow_html=True)
             else:
                 st.caption("계약 기록 없음")
 
@@ -3058,13 +3092,16 @@ def render_contracts():
         roas_card(hero_sum, ad_period, period=hero_period, paid=float(hero_paid or 0))
         if len(cf):
             with st.expander(f"📋 계약 내역 — {len(cf)}건"):
-                rows = "".join(
-                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%y-%m-%d')}</td><td>{r['_type']}</td>"
-                    f"<td>{'신건' if r['_is_new'] else '파생'}</td><td class='num'>{money(r['_amt'])}</td>"
-                    f"<td class='num' style='color:{CORAL if r['_unpaid']>0 else MUTED}'>{money(r['_unpaid'])}</td></tr>"
-                    for _, r in cf.sort_values("_date").iterrows())
-                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th><th>유형</th>'
-                            f'<th>구분</th><th>계약금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+                rows = ""
+                for _, r in cf.sort_values("_date").iterrows():
+                    kind = "신건" if r['_is_new'] else "파생"
+                    unp = (f'<div class="li-sub" style="color:{CORAL};">미수 {money(r["_unpaid"])}원</div>'
+                           if r['_unpaid'] > 0 else f'<div class="li-sub" style="color:{GOOD};">완납</div>')
+                    rows += (f'<div class="li-row"><div class="li-main">'
+                             f'<div class="li-label">{r["_name"]}</div>'
+                             f'<div class="li-sub">{r["_date"].strftime("%y.%m.%d")} · {r["_type"]} · {kind}</div></div>'
+                             f'<div class="li-right"><div class="li-val tnum">{money(r["_amt"])}<small style="font-size:11px;font-weight:600;color:{MUTED};">원</small></div>{unp}</div></div>')
+                st.markdown(rows, unsafe_allow_html=True)
         else:
             st.caption("이 기간 계약이 없습니다.")
 
@@ -3106,14 +3143,14 @@ def render_contracts():
             if unpaid.empty:
                 st.success("미수금이 없습니다 · 전액 수금 완료")
             else:
-                rows = "".join(
-                    f"<tr><td>{r['_name']}</td><td>{r['_date'].strftime('%Y-%m-%d')}</td>"
-                    f"<td class='num'>{money(r['_amt'])}</td><td class='num'>{money(r['_paid'])}</td>"
-                    f"<td class='num' style='color:{CORAL};font-weight:600;'>{money(r['_unpaid'])}</td></tr>"
-                    for _, r in unpaid.iterrows())
-                st.markdown(f'<table class="kb-tbl"><thead><tr><th>위임인</th><th>계약일</th>'
-                    f'<th>기본보수</th><th>입금</th><th>미수금</th></tr></thead><tbody>{rows}</tbody></table>',
-                    unsafe_allow_html=True)
+                rows = ""
+                for _, r in unpaid.iterrows():
+                    rows += (f'<div class="li-row"><div class="li-main">'
+                             f'<div class="li-label">{r["_name"]}</div>'
+                             f'<div class="li-sub">{r["_date"].strftime("%y.%m.%d")} · 보수 {money(r["_amt"])} · 입금 {money(r["_paid"])}</div></div>'
+                             f'<div class="li-right"><div class="li-val tnum" style="color:{CORAL};">{money(r["_unpaid"])}<small style="font-size:11px;font-weight:600;color:{CORAL};">원</small></div>'
+                             f'<div class="li-sub">미수</div></div></div>')
+                st.markdown(rows, unsafe_allow_html=True)
 
         st.write("")
         # 월별 추세 (YoY)
