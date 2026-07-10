@@ -1555,9 +1555,17 @@ def cmp_caption(text):
                 unsafe_allow_html=True)
 
 def tab_header(icon_fa, title, sub="", color="#3182F6", rgb="49,130,246"):
-    # 단촐한 제목 — 부제·장식 없이 진한 제목 한 줄만.
+    # 브랜드 배너 스타일(네이버/구글 광고 헤더와 동일) — 아이콘 배지 + 제목 + 부제.
     st.markdown(
-        f'<div style="font-size:22px;font-weight:700;color:{TXT};letter-spacing:-.5px;margin:2px 0 18px;">{title}</div>',
+        f'<div style="display:flex;align-items:center;gap:14px;padding:15px 20px;margin-bottom:18px;'
+        f'background:linear-gradient(90deg,rgba({rgb},.14),rgba({rgb},.02));'
+        f'border-left:5px solid {color};border-radius:12px;">'
+        f'<div style="width:46px;height:46px;border-radius:11px;background:{color};display:flex;'
+        f'align-items:center;justify-content:center;font-size:21px;color:#fff;'
+        f'box-shadow:0 4px 12px rgba({rgb},.28);"><i class="fa-solid {icon_fa}"></i></div>'
+        f'<div><div style="font-size:20px;font-weight:800;color:{color};letter-spacing:-.5px;">{title}</div>'
+        + (f'<div style="font-size:12px;color:{MUTED};margin-top:2px;">{sub}</div>' if sub else '')
+        + '</div></div>',
         unsafe_allow_html=True)
 
 def deriv_toggle(wkey):
@@ -2503,7 +2511,7 @@ def render_etc():
 
 
 def render_inquiries():
-    tab_header("fa-comments", "문의 분석", "문의 · 상담 · 수임 · 이름 대조")
+    tab_header("fa-comments", "문의 분석", "문의 · 상담 · 수임 · 이름 대조", color="#7C3AED", rgb="124,58,237")
     inq = load_inquiries()
     if inq.empty:
         st.info("문의 데이터를 읽지 못했습니다. 시트 공유·탭 구조를 확인해주세요."); return
@@ -2754,7 +2762,7 @@ def render_login():
 
 
 def render_ai_chat():
-    tab_header("fa-robot", "AI 데이터 질의", "데이터에 대해 궁금한 점을 자유롭게 물어보세요", color="#5BB4C4", rgb="91,180,196")
+    tab_header("fa-robot", "AI 데이터 질의", "데이터에 대해 궁금한 점을 자유롭게 물어보세요", color="#6366F1", rgb="99,102,241")
     st.caption("⚠️ AI 답변은 참고용입니다. 정확하지 않을 수 있으니 중요한 수치는 각 탭에서 확인하세요.")
     user = st.session_state.get("auth_user", "익명")
     if "chat_history" not in st.session_state:
@@ -2898,7 +2906,7 @@ def render_contracts():
         df = None
 
     if df is not None and len(df):
-        tab_header("fa-file-contract", "계약 매출 분석", "신건 · 파생 · 입금 · 미수금")
+        tab_header("fa-file-contract", "계약 매출 분석", "신건 · 파생 · 입금 · 미수금", color="#7C3AED", rgb="124,58,237")
 
         cmin = df["_date"].min().date()
         cmax = date.today()   # 달력 기준 통일: 기준일=오늘
@@ -3272,7 +3280,8 @@ def _ga4_int(df, col):
 
 def render_ga4():
     tab_header("fa-globe", "유입 분석 (GA4)",
-               "홈페이지 방문 → 행동 → 전환(전화·카톡·상담신청) · 광고 채널별 효율")
+               "홈페이지 방문 → 행동 → 전환(전화·카톡·상담신청) · 광고 채널별 효율",
+               color="#0EA5B7", rgb="14,165,183")
 
     info = ga4_available()
     # ── 권한/데이터 가드 ──
@@ -4159,7 +4168,8 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
 
 
 def render_qna():
-    st.markdown(f"<h3 style='color:{GOLD};margin:.2rem 0'>QnA 원고 생성</h3>", unsafe_allow_html=True)
+    tab_header("fa-feather-pointed", "QnA 원고 생성", "실수요 기반 질문·답변 생성 · 검수 · 업로드",
+               color="#CA8A04", rgb="202,138,4")
     st.caption("게시판 분류를 고르면 실수요 기반으로 '모자란 키워드' 10개를 추천합니다. "
                "확인 한 번에 10개 전부 질문·답변·완성본이 만들어지고, 붉게 표시된 부분은 반드시 검수 후 업로드하세요.")
     corpus = qna_corpus()
@@ -4375,7 +4385,8 @@ def render_qna():
 
 def render_changelog():
     tab_header("fa-clipboard-list", "변경사항",
-               "대시보드 · 광고 · 전략 — 무엇을 언제 왜 바꿨는지 기록")
+               "대시보드 · 광고 · 전략 — 무엇을 언제 왜 바꿨는지 기록",
+               color="#64748B", rgb="100,116,139")
 
     user = st.session_state.get("auth_user", "익명")
     is_admin = (user == "admin")
