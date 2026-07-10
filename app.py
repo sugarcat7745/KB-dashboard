@@ -90,16 +90,19 @@ table, .kpi .v, .kb-tbl td.num {{ font-variant-numeric:tabular-nums; }}
   margin:18px 0 12px; display:flex; align-items:center; gap:12px; }}
 .eyebrow::after {{ content:""; flex:1; height:1px; background:{LINE}; }}
 /* KPI */
-.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:17px 18px;
-  position:relative; min-height:92px; box-shadow:0 1px 3px rgba(20,21,23,.04); }}
+.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:18px 18px 16px;
+  min-height:104px; box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kpi:hover {{ border-color:#D1D6DB; }}
-.kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:9px; font-weight:600; }}
-.kpi .v {{ font-size:27px; font-weight:700; color:{TXT}; line-height:1; letter-spacing:-.4px; }}
-.kpi .v small {{ font-size:14px; color:{MUTED}; font-weight:600; margin-left:2px; }}
-.kpi .chg {{ font-size:12px; margin-top:9px; font-weight:600; }}
-.kpi .chg.up {{ color:{GOOD}; }} .kpi .chg.down {{ color:{CORAL}; }}
-.kpi .d {{ font-size:11px; margin-top:3px; color:{FAINT}; }}
-.kpi-ic {{ position:absolute; top:16px; right:16px; font-size:17px; color:rgba(49,130,246,0.3); }}
+.kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:11px; font-weight:600; }}
+.kpi .v {{ font-size:30px; font-weight:800; color:{TXT}; line-height:1; letter-spacing:-.7px; }}
+.kpi .v small {{ font-size:15px; color:{MUTED}; font-weight:700; margin-left:2px; }}
+.kpi .chg {{ display:inline-block; font-size:12px; margin-top:12px; font-weight:700;
+  padding:3px 9px; border-radius:8px; }}
+.kpi .chg.up {{ color:{GOOD}; background:rgba(18,158,98,.12); }}
+.kpi .chg.down {{ color:{CORAL}; background:rgba(208,73,73,.12); }}
+.kpi .d {{ display:inline-block; font-size:12px; margin-top:12px; font-weight:600;
+  color:{MUTED}; background:#F1F4F8; padding:3px 9px; border-radius:8px; }}
+.kpi-ic {{ display:none; }}
 /* 카드 */
 .kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:20px 22px; margin-bottom:16px;
   box-shadow:0 1px 3px rgba(20,21,23,.04); }}
@@ -1501,8 +1504,6 @@ def period_selector(key, dmin, dmax, default="이번달", title="기간별 조�
     else:
         lab = f"{start.year}년 {kday(start)} ~ {end.year}년 {kday(end)}"
     st.caption(f"📅 {lab}")
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.25);margin:14px 0 20px;">',
-                unsafe_allow_html=True)
     return start, end
 
 def trend_window(unit, end):
@@ -1687,10 +1688,13 @@ def render_brief():
         body = f"어제 문의 {q_y}건·수임 {w_y}건 · 이번 달 목표 {revenue/MONTHLY_GOAL*100:.0f}% 달성 · ROAS {roas_m:.0f}% ({grade})"
         icol = GOLD_B if roas_m >= 150 else CORAL
     tag = "AI 분석" if llm else "요약"
-    st.markdown(f"""<div class="kb-card" style="border-left:3px solid {icol};padding:14px 18px;margin-bottom:14px;">
-      <i class="fa-solid fa-robot" style="color:{icol};margin-right:8px;"></i>
-      <span style="font-size:11px;color:{MUTED};margin-right:6px;">[{tag}]</span>
-      <span style="font-size:14px;">{body}</span></div>""", unsafe_allow_html=True)
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,rgba(49,130,246,.10),rgba(49,130,246,.03));'
+        f'border:1px solid rgba(49,130,246,.25);border-left:3px solid #3182F6;border-radius:12px;'
+        f'padding:13px 18px;margin:4px 0 16px;font-size:14px;line-height:1.65;color:#141517;">'
+        f'<span style="color:#1B64DA;font-weight:700;white-space:nowrap;">'
+        f'<i class="fa-solid fa-robot"></i> AI 분석</span>&nbsp;&nbsp;{body}</div>',
+        unsafe_allow_html=True)
 
     # ── 어제 성과 (전일 대비) ── ※ 수임은 보통 당일에 안 됨 → 제외
     st.markdown(f'<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 어제({yday:%m/%d}) 성과</div>', unsafe_allow_html=True)
@@ -1771,7 +1775,7 @@ def render_brief():
         ts = ts_actual if ts_actual > 0 else float(bb["spent"].sum() or 0)
         rate = ts / tb * 100 if tb else 0
         rc = CORAL if rate >= 100 else (GOLD_B if rate >= 70 else GOLD)
-        st.markdown(f'<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 어제({yday:%m/%d}) 네이버 캠페인 예산 대비 소진률</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-gauge-high"></i> 전일 네이버 캠페인</div>', unsafe_allow_html=True)
         bb["rate"] = bb.apply(lambda r: (float(r["spent"]) / float(r["daily_budget"]) * 100) if r["daily_budget"] else 0, axis=1)
         bb = bb.sort_values("rate", ascending=False).head(7)
         rows = ""
@@ -3353,7 +3357,6 @@ def render_ga4():
     except Exception as e:
         st.caption(f"KPI 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ② 채널별 유입 → 전환 (핵심) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-diagram-project"></i> 획득 채널별 유입 → 전환</div>', unsafe_allow_html=True)
@@ -3398,7 +3401,6 @@ def render_ga4():
     except Exception as e:
         st.caption(f"채널 분석 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ③ 전환 퍼널 + ④ 전환 이벤트 상세 ──
     cf1, cf2 = st.columns([1, 1])
@@ -3432,7 +3434,6 @@ def render_ga4():
         except Exception as e:
             st.caption(f"전환 이벤트 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑤ 디바이스 + ⑥ 시간대별 유입 ──
     cd1, cd2 = st.columns([1, 1.4])
@@ -3474,7 +3475,6 @@ def render_ga4():
         except Exception as e:
             st.caption(f"시간대 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑦ 랜딩페이지 TOP + ⑧ 지역 ──
     cl1, cl2 = st.columns([1.5, 1])
@@ -3517,7 +3517,6 @@ def render_ga4():
         except Exception as e:
             st.caption(f"지역 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑧.5 랜딩페이지별 전환 (전환을 일으킨 페이지) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-bullseye"></i> 페이지별 전환 (어느 페이지가 전화·카톡·상담신청을 일으키나)</div>', unsafe_allow_html=True)
@@ -3567,7 +3566,6 @@ def render_ga4():
     except Exception as e:
         st.caption(f"페이지별 전환 불러오지 못했습니다 · 새로고침 요망: {e}")
 
-    st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.18);margin:22px 0;">', unsafe_allow_html=True)
 
     # ── ⑨ 일별 추세 (쌓일수록 풍성) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-chart-line"></i> 일별 추세 (세션·전환)</div>', unsafe_allow_html=True)
@@ -4595,8 +4593,6 @@ def main():
             _safe(render_brief, "일간 보고")
         else:
             _safe(render_summary, "월간 종합")
-            st.markdown('<hr style="border:none;border-top:1px solid rgba(49,130,246,.2);margin:28px 0;">', unsafe_allow_html=True)
-            _safe(render_daily, "일자별 요약")
 
     with top[1]:
         m = st.radio("매체", ["네이버", "구글", "기타"], horizontal=True,
