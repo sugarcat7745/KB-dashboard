@@ -1,8 +1,8 @@
-name: collect-naver-master-weekly
+name: collect-naver-master-daily
 
 on:
   schedule:
-    - cron: "0 20 * * 0"   # UTC 일요일 20:00 = KST 월요일 05:00 (주1회)
+    - cron: "0 20 * * *"   # UTC 매일 20:00 = KST 매일 05:00 (매일 — 새 키워드 이름이 하루 안에 붙게)
   workflow_dispatch: {}
 
 jobs:
