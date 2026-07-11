@@ -4037,7 +4037,8 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
     usr = (f"키워드: {keyword} (분류: {cat})\n"
            f"[이미 있는 제목 일부]\n" + "\n".join(existing_titles[:60]))
     try:
-        m = cli.messages.create(model=MODEL_CHAT, max_tokens=1500,
+        # 질문(제목) 생성은 단순 작업 → 저렴한 Haiku (법률 정확도 필요한 '답변'만 Sonnet)
+        m = cli.messages.create(model=MODEL_INSIGHT, max_tokens=700,
               system=sysp, messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
         arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
@@ -4130,7 +4131,8 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
     usr = (f"분류: {cat}\n[이미 있는 키워드]\n" + "\n".join(covered[:80])
            + "\n\n[실검색어(수요 상위)]\n" + ", ".join(demand_kws))
     try:
-        m = _qna_client().messages.create(model=MODEL_CHAT, max_tokens=900,
+        # 키워드 추천도 단순 작업 → 저렴한 Haiku
+        m = _qna_client().messages.create(model=MODEL_INSIGHT, max_tokens=600,
               system=sysp, messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
         arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
@@ -4152,7 +4154,9 @@ def render_qna():
     tab_header("fa-feather-pointed", "QnA 원고 생성", "실수요 기반 질문·답변 생성 · 검수 · 업로드",
                color="#CA8A04", rgb="202,138,4")
     st.caption("게시판 분류를 고르면 실수요 기반으로 '모자란 키워드' 10개를 추천합니다. "
-               "확인 한 번에 10개 전부 질문·답변·완성본이 만들어지고, 붉게 표시된 부분은 반드시 검수 후 업로드하세요.")
+               "생성 개수를 골라 질문·답변·완성본을 만들고(필요한 만큼만 = 비용 절약), "
+               "붉게 표시된 부분은 반드시 검수 후 업로드하세요. "
+               "※ 답변만 Sonnet, 키워드·질문은 저렴한 Haiku로 생성됩니다.")
     corpus = qna_corpus()
     if corpus.empty:
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
@@ -4197,26 +4201,31 @@ def render_qna():
         return
     st.markdown("추천 키워드 " + "  ·  ".join(f"`{k}`" for k in reco))
 
-    # ── 3) 확인 → 10개 전부 질문·답변·완성본 (병렬 생성) ──
-    if st.button("✅ 확인 — 추천 10개 전부 질문·답변·완성본 생성", key="qna_make", type="primary"):
+    # ── 3) 생성 개수 선택 → 질문·답변·완성본 (병렬 생성) ──
+    #    비용 = 개수 × (답변 1회 Sonnet). 필요한 만큼만 생성해 코인 절약.
+    n_gen = st.columns([1.4, 2.6])[0].slider(
+        "생성 개수", 1, len(reco), min(5, len(reco)),
+        help="1건당 Sonnet 답변 1회(약 60~90원). 필요한 만큼만 생성하면 비용이 줄어듭니다.")
+    use = reco[:n_gen]
+    if st.button(f"✅ 확인 — 추천 {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
         from concurrent.futures import ThreadPoolExecutor
         try:
             client = _qna_client()
         except Exception:
             client = None
-        with st.spinner(f"{len(reco)}개 원고 동시 생성 중… (1분 내외)"):
+        with st.spinner(f"{len(use)}개 원고 동시 생성 중… (1분 내외)"):
             with ThreadPoolExecutor(max_workers=5) as ex:
-                items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client), reco))
+                items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client), use))
                 # 실패(None)한 키워드는 1회 재시도 — 일시적 생성 실패로 개수가 줄지 않게
                 fail_idx = [i for i, it in enumerate(items) if not it]
                 if fail_idx:
-                    retry = list(ex.map(lambda i: qna_make_one(reco[i], sel, existing, client), fail_idx))
+                    retry = list(ex.map(lambda i: qna_make_one(use[i], sel, existing, client), fail_idx))
                     for i, it in zip(fail_idx, retry):
                         items[i] = it
         ok = [it for it in items if it]
         st.session_state["qna_full"] = {"cat": sel, "items": ok}
-        if len(ok) < len(reco):
-            st.warning(f"{len(reco)}개 중 {len(reco) - len(ok)}개는 생성에 실패했습니다. "
+        if len(ok) < len(use):
+            st.warning(f"{len(use)}개 중 {len(use) - len(ok)}개는 생성에 실패했습니다. "
                        "‘확인’을 한 번 더 누르면 재시도합니다.")
 
     full = st.session_state.get("qna_full")
