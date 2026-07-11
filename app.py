@@ -45,8 +45,10 @@ MONTHLY_GOAL = 250_000_000  # 월 목표 2.5억
 BQ_PROJECT, BQ_DATASET = "kb-dashboard-499704", "kb_ads"
 # AI 모델 — 배너(짧고 잦음·캐시)는 저렴한 Haiku, 채팅(추론·DB조회)은 똑똑한 Sonnet
 MODEL_INSIGHT = "claude-haiku-4-5-20251001"
-MODEL_CHAT    = "claude-sonnet-4-6"
-#   ⚠️ Sonnet 문자열이 SDK에서 에러나면 이 줄만 교체 (대안: "claude-sonnet-4-5-20250929")
+MODEL_CHAT    = "claude-sonnet-4-5-20250929"
+#   ⚠️ "claude-sonnet-4-6"은 유효하지 않은 모델 ID라 404로 QnA·AI질의가 전부 실패했음
+#      → 검증된 스냅샷 claude-sonnet-4-5-20250929로 교체. 더 최신은 "claude-sonnet-5" 시도 가능.
+#      단가표(log_ai_usage의 "sonnet" 키)는 Sonnet 4.5도 $3/$15로 동일 → 변경 불필요.
 
 # 라이트(Toss/insightad 스타일) 팔레트. 변수명 유지(GOLD=포인트 블루로 의미 전환).
 GOLD   = "#3182F6"; GOLD_B = "#141517"; GOLD_D = "#1B64DA"   # 포인트 블루 / 강조숫자(진회색) / 진블루
