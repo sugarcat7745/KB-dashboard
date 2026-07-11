@@ -90,16 +90,18 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .kb-brand .nm span {{ display:block; font-size:11.5px; font-weight:500; color:{FAINT}; }}
 /* eyebrow */
 .eyebrow {{ font-size:12px; letter-spacing:.5px; color:{FAINT}; font-weight:600;
-  margin:18px 0 12px; display:flex; align-items:center; gap:12px; }}
+  margin:16px 0 12px; display:flex; align-items:center; gap:12px; }}
 .eyebrow::after {{ content:""; flex:1; height:1px; background:{LINE}; }}
 /* KPI */
-.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:16px 18px 15px;
+.kpi {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:16px;
   box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kpi:hover {{ border-color:#D1D6DB; }}
-.kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:11px; font-weight:600; }}
+.kpi .l {{ font-size:13px; color:{MUTED}; margin-bottom:8px; font-weight:600; }}
 .kpi .v {{ font-size:clamp(21px,2vw,25px); font-weight:700; color:{TXT}; line-height:1.1; letter-spacing:0;
   display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
 .kpi .v small {{ font-size:12px; color:{MUTED}; font-weight:600; margin-left:1px; white-space:nowrap; }}
+.kpi-foot {{ display:flex; align-items:flex-end; justify-content:space-between; gap:8px; margin-top:12px; }}
+.kpi-foot .chg {{ margin-top:0; }}
 .kpi .chg {{ display:inline-block; font-size:12px; margin-top:12px; font-weight:700;
   padding:3px 9px; border-radius:8px; }}
 .kpi .chg.up {{ color:{GOOD}; background:rgba(18,158,98,.12); }}
@@ -108,7 +110,7 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
   color:{MUTED}; background:#F1F4F8; padding:3px 9px; border-radius:8px; }}
 .kpi-ic {{ display:none; }}
 /* 카드 */
-.kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:20px 22px; margin-bottom:16px;
+.kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:20px 24px; margin-bottom:16px;
   box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kb-card h3 {{ font-size:16px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:9px; }}
 .kb-card h3 i {{ display:none; }}
@@ -152,10 +154,10 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .li-tag {{ display:inline-block; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:7px; }}
 /* 타이포 위계 */
 .big-section {{ font-size:18px; font-weight:700; color:{TXT};
-    margin:32px 0 8px; display:flex; align-items:center; gap:9px; }}
+    margin:32px 0 8px; display:flex; align-items:center; gap:8px; }}
 .big-section i {{ display:none; }}
 .big-section::before {{ content:""; width:7px; height:7px; border-radius:50%; background:{GOLD}; flex:none; }}
-.sec-title {{ font-size:15px; font-weight:700; margin:20px 0 11px; display:flex; align-items:center; gap:9px; color:{TXT}; }}
+.sec-title {{ font-size:15px; font-weight:700; margin:24px 0 12px; display:flex; align-items:center; gap:8px; color:{TXT}; }}
 .sec-title i {{ display:none; }}
 .sec-title::before {{ content:""; width:6px; height:6px; border-radius:50%; background:{GOLD}; flex:none; }}
 .placeholder i {{ font-size:40px; color:{GOLD}; margin-bottom:16px; }}
@@ -1610,15 +1612,34 @@ def trend_unit(key):
     u = st.session_state.get(f"{key}_unit", "month")
     return u if u in ("day", "week", "month", "year") else "month"
 
-def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc=""):
-    extra = ""
-    if chg:
-        extra += f'<div class="chg {chg_dir}">{chg}</div>'
-    if desc:
-        extra += f'<div class="d">{desc}</div>'
+def _spark_svg(vals, color, w=72, h=22):
+    """KPI용 미니 추세선(스파크라인) SVG. vals=최근 N일 값 리스트."""
+    try:
+        vals = [float(v or 0) for v in vals]
+    except Exception:
+        return ""
+    if len(vals) < 2:
+        return ""
+    lo, hi = min(vals), max(vals)
+    rng = (hi - lo) or 1
+    n, pad = len(vals), 2
+    pts = [(i / (n - 1) * w, h - pad - ((v - lo) / rng) * (h - 2 * pad)) for i, v in enumerate(vals)]
+    line = " ".join(f"{x:.1f},{y:.1f}" for x, y in pts)
+    area = f"{line} {w:.1f},{h:.1f} 0,{h:.1f}"
+    ex, ey = pts[-1]
+    return (f'<svg width="{w}" height="{h}" viewBox="0 0 {w} {h}" style="display:block;overflow:visible" aria-hidden="true">'
+            f'<polygon points="{area}" fill="{color}" fill-opacity="0.10"/>'
+            f'<polyline points="{line}" fill="none" stroke="{color}" stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>'
+            f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="2.2" fill="{color}"/></svg>')
+
+def kpi(col, icon, label, value, unit="", chg=None, chg_dir="up", desc="", spark=None, spark_dir="up"):
+    chg_html = f'<div class="chg {chg_dir}">{chg}</div>' if chg else ''
+    spark_html = _spark_svg(spark, {"up": GOOD, "down": CORAL}.get(spark_dir, GRAY)) if spark else ''
+    foot = f'<div class="kpi-foot">{chg_html or "<span></span>"}{spark_html}</div>' if (chg_html or spark_html) else ''
+    desc_html = f'<div class="d">{desc}</div>' if desc else ''
     col.markdown(f"""<div class="kpi"><i class="kpi-ic fa-solid {icon}"></i>
       <div class="l">{label}</div><div class="v">{value}<small>{unit}</small></div>
-      {extra}</div>""", unsafe_allow_html=True)
+      {foot}{desc_html}</div>""", unsafe_allow_html=True)
 
 def cmp_caption(text):
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
@@ -1767,10 +1788,33 @@ def render_brief():
 
     # ── 어제 성과 (전일 대비) ── ※ 수임은 보통 당일에 안 됨 → 제외
     st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 전일 성과</div>', unsafe_allow_html=True)
+    # 최근 7일 스파크라인 시리즈(어제 기준) — 데이터는 이미 있음, 추가 수집 없음
+    _d7 = yday - timedelta(days=6)
+    try:
+        _ak = bq(f"SELECT date, SUM(cost) c FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                 f"WHERE date BETWEEN '{_d7}' AND '{yday}' GROUP BY date")
+        _admap = {str(r["date"]): float(r["c"] or 0) for _, r in _ak.iterrows()}
+    except Exception:
+        _admap = {}
+    _etc7 = load_etc()
+    if _etc7 is not None and not _etc7.empty:
+        _em = _etc7[(_etc7["date"].dt.date >= _d7) & (_etc7["date"].dt.date <= yday)]
+        for _d, _cst in _em.groupby(_em["date"].dt.date)["cost"].sum().items():
+            _admap[str(_d)] = _admap.get(str(_d), 0) + float(_cst or 0)
+    ad_spark = [_admap.get(str(_d7 + timedelta(days=i)), 0) for i in range(7)]
+    if inq_all is not None and not inq_all.empty:
+        _t7 = inq_all.copy(); _t7["_d"] = pd.to_datetime(_t7["date"]).dt.date
+        q_spark = [len(_t7[_t7["_d"] == _d7 + timedelta(days=i)]) for i in range(7)]
+        s_spark = [int(_t7[_t7["_d"] == _d7 + timedelta(days=i)]["consulted"].sum()) for i in range(7)]
+    else:
+        q_spark = s_spark = [0] * 7
+    ad_c, ad_dir = delta_str(ad_y, ad_d, "money")
+    q_c, q_dir = delta_str(q_y, q_d, "cnt")
+    s_c, s_dir = delta_str(s_y, s_d, "cnt")
     c = st.columns(3)
-    kpi(c[0], "fa-won-sign", "광고비", money(ad_y), "원", *delta_str(ad_y, ad_d, "money"))
-    kpi(c[1], "fa-comment-dots", "문의", f"{q_y}", "건", *delta_str(q_y, q_d, "cnt"))
-    kpi(c[2], "fa-headset", "상담", f"{s_y}", "건", *delta_str(s_y, s_d, "cnt"))
+    kpi(c[0], "fa-won-sign", "광고비", money(ad_y), "원", chg=ad_c, chg_dir=ad_dir, spark=ad_spark, spark_dir=ad_dir)
+    kpi(c[1], "fa-comment-dots", "문의", f"{q_y}", "건", chg=q_c, chg_dir=q_dir, spark=q_spark, spark_dir=q_dir)
+    kpi(c[2], "fa-headset", "상담", f"{s_y}", "건", chg=s_c, chg_dir=s_dir, spark=s_spark, spark_dir=s_dir)
 
     # ── 어제 매체별 광고비 한 줄 ──
     parts = []
