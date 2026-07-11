@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 import plotly.graph_objects as go
 import base64, urllib.request, time, random, hmac, hashlib, json, re, os
 from datetime import datetime, date, timedelta
+from decimal import Decimal
 
 try:
     import anthropic
@@ -204,13 +205,27 @@ def get_bq():
     creds = Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/bigquery"])
     return bigquery.Client(project=sa["project_id"], credentials=creds)
 
+def _bq_to_df(job):
+    """BigQuery 결과 → DataFrame (pyarrow 미사용).
+       pyarrow의 Arrow→pandas 변환이 특정 Python/pyarrow 버전에서 Segmentation fault를
+       내므로(앱 전체가 죽음), 순수 파이썬 행 순회로 안전하게 구성한다.
+       숫자·날짜 dtype은 pandas 추론 + NUMERIC(Decimal)만 숫자로 강제 변환."""
+    it = job.result()
+    names = [f.name for f in it.schema]
+    data = [dict(row) for row in it]
+    df = pd.DataFrame(data, columns=names)
+    for c in df.columns:
+        if len(df) and df[c].map(lambda v: isinstance(v, Decimal)).any():
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
 @st.cache_data(ttl=3600)
 def bq(sql):
-    return get_bq().query(sql).to_dataframe()
+    return _bq_to_df(get_bq().query(sql))
 
 def bq_fresh(sql):
     """캐시 없이 즉시 조회 — 로그처럼 방금 쌓인 내역이 바로 보여야 하는 곳 전용."""
-    return get_bq().query(sql).to_dataframe()
+    return _bq_to_df(get_bq().query(sql))
 
 def get_client_ip():
     """클라이언트 IP 추출. Streamlit Cloud(프록시 뒤)에서는 unknown일 수 있음 — best effort."""
@@ -525,7 +540,7 @@ def run_safe_sql(sql):
     s2 = re.sub(r"`?ad_keyword`?", full, s, flags=re.IGNORECASE)
     try:
         cfg = bigquery.QueryJobConfig(maximum_bytes_billed=500 * 1024 * 1024)  # 500MB 상한
-        df = get_bq().query(s2, job_config=cfg).result().to_dataframe()
+        df = _bq_to_df(get_bq().query(s2, job_config=cfg))   # pyarrow 우회(세그폴트 방지)
     except Exception as e:
         return {"error": f"쿼리 실행 오류: {str(e)[:200]}"}
     truncated = len(df) > 100
@@ -3801,9 +3816,19 @@ def _qna_perf_panel(corpus):
     c1.metric("추적된 QnA 글", f"{len(df):,}개")
     c2.metric("총 조회수(90일)", f"{int(df['views'].sum()):,}")
     c3.metric("글당 평균 조회", f"{df['views'].mean():.0f}")
-    st.dataframe(
-        df.rename(columns={"views": "조회수", "visitors": "순방문자"})[["성과", "제목", "조회수", "순방문자"]],
-        use_container_width=True, hide_index=True)
+    rows = ""
+    for _, r in df.iterrows():
+        title = str(r["제목"])
+        if len(title) > 50:
+            title = title[:50] + "…"
+        rows += (f'<tr><td style="text-align:left;">{r["성과"] or ""}</td>'
+                 f'<td style="text-align:left;">{title}</td>'
+                 f'<td class="num">{int(r["views"]):,}</td>'
+                 f'<td class="num">{int(r["visitors"]):,}</td></tr>')
+    st.markdown(f'<table class="kb-tbl" style="width:100%;"><thead><tr>'
+                f'<th style="text-align:left;">성과</th><th style="text-align:left;">제목</th>'
+                f'<th>조회수</th><th>순방문자</th></tr></thead><tbody>{rows}</tbody></table>',
+                unsafe_allow_html=True)
     st.caption("유입(조회) 기준. 전환은 페이지 단위로 집계 기준이 애매해 제외했습니다. "
                "🔥 고성과 = 조회 상위권 → 이 주제·형식을 더 밀면 됩니다. (순방문자=중복 제외 실제 사람 수) "
                "· GA4 '내부 트래픽 정의'에 사무실 IP를 등록하면 당사 방문은 자동 제외되어 순수 유입만 집계됩니다.")
