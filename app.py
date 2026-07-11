@@ -1022,6 +1022,16 @@ def load_inquiries():
 _CONTRACT_COLS = ["_amt", "_paid", "_unpaid", "_date", "_y", "_m", "_ym",
                   "_type_raw", "_inflow", "_is_new", "_name", "_type", "_cid", "_split_n"]
 
+def _empty_contracts():
+    """빈 계약 DF — _date를 datetime dtype으로 보장(빈 DF에 .dt.date 써도 안 깨지게).
+       object dtype 빈 컬럼에 .dt 접근 시 'Can only use .dt accessor…' 예외가 나므로 필수."""
+    e = pd.DataFrame(columns=_CONTRACT_COLS)
+    e["_date"] = pd.to_datetime(e["_date"], errors="coerce")
+    for c in ("_amt", "_paid", "_unpaid", "_y", "_m", "_split_n"):
+        e[c] = pd.to_numeric(e[c], errors="coerce")
+    e["_is_new"] = e["_is_new"].astype(bool)
+    return e
+
 @st.cache_data(ttl=600)
 def load_contracts():
     """계약 시트 → 사건유형 분리(explode)된 매출 데이터(축2).
@@ -1031,9 +1041,9 @@ def load_contracts():
         ws = get_gc().open_by_key(CONTRACT_SHEET_ID).sheet1
         df = pd.DataFrame(ws.get_all_records())
     except Exception:
-        return pd.DataFrame(columns=_CONTRACT_COLS)
+        return _empty_contracts()
     if df.empty:
-        return pd.DataFrame(columns=_CONTRACT_COLS)
+        return _empty_contracts()
     df.columns = [str(c).strip() for c in df.columns]
     def find(*keys, default=None):
         for c in df.columns:
@@ -1050,7 +1060,7 @@ def load_contracts():
 
     # 필수 컬럼(계약일·금액·유형·유입)이 시트 헤더 변경으로 사라졌으면 빈 DF로 (예외 대신)
     if any(c not in df.columns for c in (date_col, amt_col, typ_col, inflow_col)):
-        return pd.DataFrame(columns=_CONTRACT_COLS)
+        return _empty_contracts()
 
     def num(col):
         return pd.to_numeric(
@@ -1063,7 +1073,7 @@ def load_contracts():
     df["_date"] = pd.to_datetime(df[date_col], errors="coerce")
     df = df.dropna(subset=["_date"])
     if df.empty:                       # 유효한 계약일이 한 건도 없으면 빈 DF(컬럼 보유)로
-        return pd.DataFrame(columns=_CONTRACT_COLS)
+        return _empty_contracts()
     df["_y"] = df["_date"].dt.year
     df["_m"] = df["_date"].dt.month
     df["_ym"] = df["_date"].dt.to_period("M").astype(str)
@@ -2172,8 +2182,9 @@ def render_summary():
     cc = st.columns([3, 2])
     with cc[0]:
         st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
-        yrs = sorted(con["_y"].unique())[-3:]
-        colors = {yrs[-1]: GOLD}
+        yrs = sorted(con["_y"].dropna().unique())[-3:]
+        colors = {}
+        if len(yrs) >= 1: colors[yrs[-1]] = GOLD
         if len(yrs) >= 2: colors[yrs[-2]] = TEAL
         if len(yrs) >= 3: colors[yrs[-3]] = GRAY
         f1 = go.Figure()
