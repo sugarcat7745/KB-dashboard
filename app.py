@@ -4155,10 +4155,7 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
 def render_qna():
     tab_header("fa-feather-pointed", "QnA 원고 생성", "실수요 기반 질문·답변 생성 · 검수 · 업로드",
                color="#CA8A04", rgb="202,138,4")
-    st.caption("게시판 분류를 고르면 실수요 기반으로 '모자란 키워드' 10개를 추천합니다. "
-               "생성 개수를 골라 질문·답변·완성본을 만들고(필요한 만큼만 = 비용 절약), "
-               "붉게 표시된 부분은 반드시 검수 후 업로드하세요. "
-               "※ 답변만 Sonnet, 키워드·질문은 저렴한 Haiku로 생성됩니다.")
+    st.caption("게시판 분류를 고르면 실수요 기반으로 '모자란 키워드' 10개를 추천합니다.")
     corpus = qna_corpus()
     if corpus.empty:
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
