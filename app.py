@@ -76,6 +76,10 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .serif {{ font-family:var(--font); }}
 #MainMenu, footer, header {{ visibility:hidden; }}
 .block-container {{ padding-top:1.4rem; max-width:1120px; }}
+/* 네모(블록) 사이 간격 통일 — 카드 자체 margin과 Streamlit 기본 gap이 겹쳐 들쭉날쭉하던 문제 해결.
+   세로 블록은 16px 하나로, 열(컬럼) 사이는 12px로 고정. 카드 자체 margin-bottom은 0으로(아래 .kb-card). */
+[data-testid="stVerticalBlock"] {{ gap:16px !important; }}
+[data-testid="stHorizontalBlock"] {{ gap:12px !important; }}
 /* 헤더 */
 .kb-top {{ display:flex; justify-content:space-between; align-items:center;
   padding:14px 2px 16px; border-bottom:1px solid {LINE}; margin-bottom:14px; }}
@@ -110,7 +114,7 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
   color:{MUTED}; background:#F1F4F8; padding:3px 9px; border-radius:8px; }}
 .kpi-ic {{ display:none; }}
 /* 카드 */
-.kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:20px 24px; margin-bottom:16px;
+.kb-card {{ background:{SURF}; border:1px solid {LINE}; border-radius:16px; padding:20px 24px; margin-bottom:0;
   box-shadow:0 1px 3px rgba(20,21,23,.04); }}
 .kb-card h3 {{ font-size:16px; font-weight:700; margin-bottom:16px; display:flex; align-items:center; gap:9px; }}
 .kb-card h3 i {{ display:none; }}
@@ -1859,7 +1863,7 @@ def render_brief():
 
     # ═══ HERO: 이번 달 목표 달성 ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(100% 초과=초과달성 그대로)
-    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(49,130,246,.35);">
+    st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(49,130,246,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:20px;flex-wrap:wrap;">
         <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
           <div style="display:flex;align-items:baseline;gap:10px;">
@@ -1911,7 +1915,7 @@ def render_brief():
                      f'<div class="rank-track"><span style="width:{min(rr,100):.0f}%;background:{cc};"></span></div></div>'
                      f'<div><div class="rank-val" style="color:{cc};">{rr:.0f}%</div>'
                      f'<div class="rank-sub">{money(sp)} / {money(bg)}</div></div></div>')
-        st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;">
+        st.markdown(f"""<div class="kb-card">
           <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid #E9ECEF;">
             <div><span style="font-size:12px;color:{MUTED};">전체 소진률</span>
             <span class="tnum" style="font-size:26px;font-weight:700;color:{rc};margin-left:10px;">{rate:.0f}<small style="font-size:14px;font-weight:600;color:{MUTED};">%</small></span></div>
@@ -1943,7 +1947,7 @@ def render_brief():
                           f'<div class="rank-track"><span style="width:{wpct:.0f}%;"></span></div></div>'
                           f'<div><div class="rank-val">{q}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">건</small></div>'
                           f'<div class="rank-sub">상담 {s} · 수임 {w}</div></div></div>')
-            st.markdown(f'<div class="kb-card" style="margin-bottom:16px;">{rows2}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="kb-card">{rows2}</div>', unsafe_allow_html=True)
     end_day = yday if (yday.year == today.year and yday.month == today.month) else today
     days = [today.replace(day=d) for d in range(1, end_day.day + 1)]
     order = ["네이버", "구글", "카카오모먼트", "모비온", "메타"]
@@ -2181,7 +2185,7 @@ def render_summary():
 
     # ═══ HERO: 이번 달 목표 달성 (달성률·매출·잔여) ═══
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(초과달성 그대로)
-    st.markdown(f"""<div class="kb-card" style="margin-bottom:16px;border:1px solid rgba(49,130,246,.35);">
+    st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(49,130,246,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:20px;flex-wrap:wrap;">
         <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
           <div style="display:flex;align-items:baseline;gap:10px;">
@@ -3128,7 +3132,7 @@ def render_contracts():
         up = yoy >= 0
         yc = GOLD_B if up else CORAL
         yrgb = "49,130,246" if up else "199,123,107"
-        st.markdown(f"""<div class="kb-card" style="margin-bottom:14px;border:1px solid rgba(49,130,246,.35);
+        st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(49,130,246,.35);
             display:flex;justify-content:space-between;align-items:center;gap:24px;flex-wrap:wrap;">
           <div>
             <div style="font-size:13px;color:{MUTED};margin-bottom:6px;">{hero_lbl} · {hero_period}</div>
