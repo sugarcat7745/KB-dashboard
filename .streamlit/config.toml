@@ -1,3 +1,7 @@
+# 오류 시 상세 트레이스백 표시(일시 진단용) — 문제 해결 후 원복 가능.
+[client]
+showErrorDetails = true
+
 # 밝은·모던(Toss/insightad) 테마 — 기본 위젯(라디오·표·입력·차트)도 이 톤으로.
 [theme]
 base = "light"

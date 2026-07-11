@@ -4583,4 +4583,9 @@ def main():
             _safe(render_qna, "QnA 관리")
 
 
-main()
+try:
+    main()
+except Exception as _e:
+    import traceback as _tb
+    st.error("⚠️ 앱 실행 중 오류가 발생했습니다. 아래 빨간 상자를 통째로 캡처해서 보내주세요.")
+    st.code(_tb.format_exc(), language="text")
