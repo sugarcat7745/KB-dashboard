@@ -4109,7 +4109,16 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
               system=sysp, messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
         arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
-        return [str(x) for x in arr][:n]
+        out = [str(x).strip() for x in arr if str(x).strip()]
+        # LLM이 10개 요청에 9개만 주는 경우가 잦음 → 실수요 키워드로 정확히 n개까지 보충
+        if len(out) < n:
+            seen = set(out) | set(covered)
+            for k in demand_kws:
+                if len(out) >= n:
+                    break
+                if k and k not in seen:
+                    out.append(k); seen.add(k)
+        return out[:n]
     except Exception as e:
         return (demand_kws[:n] or [f"(추천 오류: {e})"])
 
@@ -4173,7 +4182,17 @@ def render_qna():
         with st.spinner(f"{len(reco)}개 원고 동시 생성 중… (1분 내외)"):
             with ThreadPoolExecutor(max_workers=5) as ex:
                 items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client), reco))
-        st.session_state["qna_full"] = {"cat": sel, "items": [it for it in items if it]}
+                # 실패(None)한 키워드는 1회 재시도 — 일시적 생성 실패로 개수가 줄지 않게
+                fail_idx = [i for i, it in enumerate(items) if not it]
+                if fail_idx:
+                    retry = list(ex.map(lambda i: qna_make_one(reco[i], sel, existing, client), fail_idx))
+                    for i, it in zip(fail_idx, retry):
+                        items[i] = it
+        ok = [it for it in items if it]
+        st.session_state["qna_full"] = {"cat": sel, "items": ok}
+        if len(ok) < len(reco):
+            st.warning(f"{len(reco)}개 중 {len(reco) - len(ok)}개는 생성에 실패했습니다. "
+                       "‘확인’을 한 번 더 누르면 재시도합니다.")
 
     full = st.session_state.get("qna_full")
     if not full or full.get("cat") != sel:
