@@ -1,0 +1,20 @@
+name: fix-changelog
+
+# change_log 문구 순화(1회성 수동 실행). 기존 행 보존, detail만 치환 후 재기록.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install google-cloud-bigquery
+      - name: 문구 순화
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+        run: python fix_changelog.py
