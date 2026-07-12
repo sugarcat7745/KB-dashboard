@@ -1,0 +1,20 @@
+name: seed-changelog
+
+# 7/3~7/12 작업 내역을 변경사항 로그(change_log)에 날짜별로 1회 적재. (수동 실행 전용)
+on:
+  workflow_dispatch: {}
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install google-cloud-bigquery
+      - name: 변경사항 시드 적재
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+        run: python seed_changelog.py
