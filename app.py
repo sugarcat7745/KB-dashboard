@@ -77,8 +77,8 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 #MainMenu, footer, header {{ visibility:hidden; }}
 .block-container {{ padding-top:1.4rem; max-width:1120px; }}
 /* 네모(블록) 사이 간격 통일 — 카드 자체 margin과 Streamlit 기본 gap이 겹쳐 들쭉날쭉하던 문제 해결.
-   세로 블록은 24px 하나로(넉넉하게), 열(컬럼) 사이는 12px로 고정. 카드 margin-bottom은 0(아래 .kb-card). */
-[data-testid="stVerticalBlock"] {{ gap:24px !important; }}
+   세로 블록은 26px 하나로(넉넉하게), 열(컬럼) 사이는 12px로 고정. 카드 margin-bottom은 0(아래 .kb-card). */
+[data-testid="stVerticalBlock"] {{ gap:26px !important; }}
 [data-testid="stHorizontalBlock"] {{ gap:12px !important; }}
 /* 헤더 */
 .kb-top {{ display:flex; justify-content:space-between; align-items:center;
@@ -1865,17 +1865,13 @@ def render_brief():
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(100% 초과=초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(49,130,246,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:20px;flex-wrap:wrap;">
-        <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
-          <div style="display:flex;align-items:baseline;gap:10px;">
-            <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};line-height:1;">{pct:.1f}%</span>
-            <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
-        <div style="display:flex;gap:34px;">
-          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">{rev_label}</div>
-            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{money(revenue)}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
-            <div style="font-size:12px;font-weight:500;color:{FAINT};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
-          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">잔여</div>
-            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
-        </div>
+        <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성</div>
+          <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+            <span class="tnum" style="font-size:36px;font-weight:700;color:{GOLD};line-height:1;">{pct:.1f}%</span>
+            <span style="font-size:14px;font-weight:600;color:{MUTED};">{rev_label} {money(revenue)}원 · 목표 2.5억</span></div></div>
+        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">잔여</div>
+          <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div>
+          <div style="font-size:12px;font-weight:500;color:{FAINT};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     # ── ROAS/효율은 '월간 종합'에서만 표시 (일간은 수임 시차로 효율 왜곡 → 제외) ──
@@ -2187,17 +2183,13 @@ def render_summary():
     pct = revenue / MONTHLY_GOAL * 100 if MONTHLY_GOAL else 0   # 표시는 실제값(초과달성 그대로)
     st.markdown(f"""<div class="kb-card" style="border:1px solid rgba(49,130,246,.35);">
       <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:16px;gap:20px;flex-wrap:wrap;">
-        <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성 · 월 목표 2.5억</div>
-          <div style="display:flex;align-items:baseline;gap:10px;">
-            <span class="tnum" style="font-size:34px;font-weight:700;color:{GOLD};line-height:1;">{pct:.1f}%</span>
-            <span style="font-size:14px;font-weight:600;color:{MUTED};">{revenue/1e8:.2f}억 / 2.5억</span></div></div>
-        <div style="display:flex;gap:34px;">
-          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">{rev_label}</div>
-            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{money(revenue)}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">원</small></div>
-            <div style="font-size:12px;font-weight:500;color:{FAINT};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
-          <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">잔여</div>
-            <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div></div>
-        </div>
+        <div><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:10px;">이번 달 목표 달성</div>
+          <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
+            <span class="tnum" style="font-size:36px;font-weight:700;color:{GOLD};line-height:1;">{pct:.1f}%</span>
+            <span style="font-size:14px;font-weight:600;color:{MUTED};">{rev_label} {money(revenue)}원 · 목표 2.5억</span></div></div>
+        <div style="text-align:right;"><div style="font-size:13px;font-weight:600;color:{MUTED};margin-bottom:7px;">잔여</div>
+          <div class="tnum" style="font-size:24px;font-weight:700;color:{TXT};line-height:1;">{max(MONTHLY_GOAL-revenue,0)/1e8:.2f}<small style="font-size:13px;font-weight:600;color:{MUTED};margin-left:2px;">억</small></div>
+          <div style="font-size:12px;font-weight:500;color:{FAINT};margin-top:6px;">{('전월동기 '+rev_c) if rev_c else '비교 없음'}</div></div>
       </div><div class="goalbar"><div style="width:{min(pct,100)}%;"></div></div></div>""", unsafe_allow_html=True)
 
     st.markdown(f'<div style="font-size:12px;color:{GOLD_D};margin:4px 0 10px;font-weight:600;">'
