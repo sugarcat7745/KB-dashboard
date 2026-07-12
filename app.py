@@ -77,8 +77,8 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 #MainMenu, footer, header {{ visibility:hidden; }}
 .block-container {{ padding-top:1.4rem; max-width:1120px; }}
 /* 네모(블록) 사이 간격 통일 — 카드 자체 margin과 Streamlit 기본 gap이 겹쳐 들쭉날쭉하던 문제 해결.
-   세로 블록은 20px 하나로(너무 붙지 않게), 열(컬럼) 사이는 12px로 고정. 카드 margin-bottom은 0(아래 .kb-card). */
-[data-testid="stVerticalBlock"] {{ gap:20px !important; }}
+   세로 블록은 24px 하나로(넉넉하게), 열(컬럼) 사이는 12px로 고정. 카드 margin-bottom은 0(아래 .kb-card). */
+[data-testid="stVerticalBlock"] {{ gap:24px !important; }}
 [data-testid="stHorizontalBlock"] {{ gap:12px !important; }}
 /* 헤더 */
 .kb-top {{ display:flex; justify-content:space-between; align-items:center;
