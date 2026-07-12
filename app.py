@@ -3552,6 +3552,123 @@ def render_ga4():
     except Exception as e:
         st.caption(f"랜딩페이지 불러오지 못했습니다: {e}")
 
+    # ── 전환 종류별 (전화 vs 카톡 vs 폼) ──
+    st.markdown(f'<div class="big-section"><i class="fa-solid fa-bullseye"></i> 전환 종류별 (무엇으로 전환했나)</div>', unsafe_allow_html=True)
+    try:
+        ce = ga4_conv_events(lo, hi)
+        if ce is not None and not ce.empty:
+            ce = ce.copy()
+            ce["라벨"] = ce["event_name"].map(_kr_event)
+            mxc = float(ce["cnt"].max() or 1)
+            rows = ""
+            for i, (_, r) in enumerate(ce.head(8).iterrows(), 1):
+                cnt = int(r["cnt"])
+                rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                         f'<div class="rank-main"><div class="rank-label">{r["라벨"]}</div>'
+                         f'<div class="rank-track"><span style="width:{cnt/mxc*100:.0f}%;background:{TEAL};"></span></div></div>'
+                         f'<div><div class="rank-val tnum">{cnt:,}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">건</small></div></div></div>')
+            st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
+        else:
+            st.caption("전환 이벤트 데이터 없음")
+    except Exception as e:
+        st.caption(f"전환 종류 불러오지 못했습니다: {e}")
+
+    # ── 전환을 일으킨 페이지 TOP ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-flag-checkered"></i> 전환을 일으킨 페이지</div>', unsafe_allow_html=True)
+    try:
+        pc = ga4_page_conv(lo, hi)
+        if pc is not None and not pc.empty:
+            pc = pc.copy()
+            mxp = float(pc["conversions"].max() or 1)
+            rows = ""
+            for i, (_, r) in enumerate(pc.head(8).iterrows(), 1):
+                page = str(r["page"]).replace("https://www.lawfirmkb.com", "").replace("https://www.", "").replace("https://", "") or "/"
+                if len(page) > 40:
+                    page = page[:40] + "…"
+                cv = int(r["conversions"]); vw = int(r["views"])
+                rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                         f'<div class="rank-main"><div class="rank-label">{page}</div>'
+                         f'<div class="rank-track"><span style="width:{cv/mxp*100:.0f}%;background:{GOOD};"></span></div></div>'
+                         f'<div><div class="rank-val tnum">{cv:,}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">전환</small></div>'
+                         f'<div class="rank-sub">조회 {vw:,}</div></div></div>')
+            st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
+            st.caption("전환(전화·카톡·상담신청)이 실제로 발생한 페이지 기준 · 광고 랜딩을 어디로 보낼지 판단에 활용")
+        else:
+            st.caption("아직 전환이 발생한 페이지가 없습니다.")
+    except Exception as e:
+        st.caption(f"전환 페이지 불러오지 못했습니다: {e}")
+
+    # ── 디바이스 · 지역 (2열) ──
+    st.markdown(f'<div class="big-section"><i class="fa-solid fa-mobile-screen"></i> 방문자 특성 (디바이스 · 지역)</div>', unsafe_allow_html=True)
+    dcol, rcol = st.columns(2)
+    DEV_KR = {"desktop": "PC", "mobile": "모바일", "tablet": "태블릿", "(미상)": "(미상)"}
+    DEV_IC = {"desktop": "fa-desktop", "mobile": "fa-mobile-screen", "tablet": "fa-tablet-screen-button"}
+    with dcol:
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-display"></i> 디바이스</div>', unsafe_allow_html=True)
+        try:
+            dv = ga4_device(lo, hi)
+            if dv is not None and not dv.empty:
+                dv = dv.copy()
+                tot = float(dv["sessions"].sum() or 1)
+                rows = ""
+                for _, r in dv.iterrows():
+                    cat = str(r["cat"]); nm = DEV_KR.get(cat, cat)
+                    ss = int(r["sessions"]); pctv = ss / tot * 100
+                    ic = DEV_IC.get(cat, "fa-circle")
+                    rows += (f'<div class="rank-row"><span class="rank-badge" style="background:{BG};color:{MUTED};"><i class="fa-solid {ic}"></i></span>'
+                             f'<div class="rank-main"><div class="rank-label">{nm}</div>'
+                             f'<div class="rank-track"><span style="width:{pctv:.0f}%;background:{GOLD};"></span></div></div>'
+                             f'<div><div class="rank-val tnum">{pctv:.0f}<small style="font-size:11px;font-weight:600;color:{MUTED};">%</small></div>'
+                             f'<div class="rank-sub">{ss:,} 세션</div></div></div>')
+                st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
+            else:
+                st.caption("디바이스 데이터 없음")
+        except Exception as e:
+            st.caption(f"디바이스 불러오지 못했습니다: {e}")
+    with rcol:
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-location-dot"></i> 지역 (방문자)</div>', unsafe_allow_html=True)
+        try:
+            rg = ga4_region(lo, hi)
+            if rg is not None and not rg.empty:
+                rg = rg.copy()
+                mxr = float(rg["users"].max() or 1)
+                rows = ""
+                for i, (_, r) in enumerate(rg.head(8).iterrows(), 1):
+                    nm = _kr_region(r["region"]); us = int(r["users"])
+                    rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                             f'<div class="rank-main"><div class="rank-label">{nm}</div>'
+                             f'<div class="rank-track"><span style="width:{us/mxr*100:.0f}%;background:{TEAL};"></span></div></div>'
+                             f'<div><div class="rank-val tnum">{us:,}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">명</small></div></div></div>')
+                st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
+            else:
+                st.caption("지역 데이터 없음")
+        except Exception as e:
+            st.caption(f"지역 불러오지 못했습니다: {e}")
+
+    # ── 시간대별 유입·전환 ──
+    st.markdown(f'<div class="big-section"><i class="fa-solid fa-clock"></i> 시간대별 유입 · 전환</div>', unsafe_allow_html=True)
+    try:
+        hh = ga4_hourly(lo, hi)
+        if hh is not None and not hh.empty:
+            hh = hh.copy()
+            base = pd.DataFrame({"hr": list(range(24))})
+            hh = base.merge(hh, on="hr", how="left").fillna(0)
+            fh = go.Figure()
+            fh.add_bar(x=hh["hr"], y=hh["sessions"], name="세션", marker_color=GOLD)
+            fh.add_trace(go.Scatter(x=hh["hr"], y=hh["conversions"], name="전환",
+                                    mode="lines+markers", line=dict(color=TEAL, width=2.5), yaxis="y2"))
+            fh.update_layout(xaxis=dict(title="", tickmode="array",
+                                        tickvals=[0, 3, 6, 9, 12, 15, 18, 21],
+                                        ticktext=["0시", "3시", "6시", "9시", "12시", "15시", "18시", "21시"]),
+                             yaxis2=dict(overlaying="y", side="right", showgrid=False),
+                             legend=dict(orientation="h", y=1.12))
+            st.plotly_chart(fig_theme(fh, 260), use_container_width=True, config={"displayModeBar": False})
+            st.caption("상담 접수 인력 배치·야간 자동응대 판단에 활용")
+        else:
+            st.caption("시간대 데이터 없음")
+    except Exception as e:
+        st.caption(f"시간대 불러오지 못했습니다: {e}")
+
     # ── ⑨ 일별 추세 (쌓일수록 풍성) ──
     st.markdown(f'<div class="big-section"><i class="fa-solid fa-chart-line"></i> 일별 추세 (세션·전환)</div>', unsafe_allow_html=True)
     try:
