@@ -2701,8 +2701,6 @@ def render_inquiries():
     kpi(c[1], "fa-comments", "상담", f"{sangdam:,}", "건", *delta_str(sangdam, p_sang, "cnt"))
     kpi(c[2], "fa-handshake", "수임", f"{suim:,}", "건", *delta_str(suim, p_suim, "cnt"))
 
-    # ════ 대단락: 추이 분석 ════
-    st.markdown('<div class="big-section"><i class="fa-solid fa-chart-line"></i> 추이 분석</div>', unsafe_allow_html=True)
     # 추이 비교 — 선택한 기간 단위에 맞춰 비교 창이 바뀜 (일→7일 / 주→8주 / 월→12개월 / 연→3년)
     _u = trend_unit("inq")
     _uname = {"day": "일별", "week": "주별", "month": "월별", "year": "연도별"}[_u]
@@ -2736,25 +2734,8 @@ def render_inquiries():
     thin_xticks(fd, byd["_lbl"])
     st.plotly_chart(fig_theme(fd, 280), use_container_width=True, config={"displayModeBar": False})
 
-    # ════ 대단락: 카테고리 분석 ════
-    st.markdown('<div class="big-section"><i class="fa-solid fa-tags"></i> 카테고리 분석</div>', unsafe_allow_html=True)
-    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-tags"></i> 광고 카테고리별 문의 · 수임</div>', unsafe_allow_html=True)
+    # 카테고리 분석 — '광고 카테고리별 문의·수임' 막대는 아래 '효율' 표와 중복이라 제거(효율 표에 문의·수임 포함)
     bad = ["(미분류)", "nan", "", "종결", "수임완료", "문자남김"]
-    catf = inqf[~inqf["category"].isin(bad)]
-    if not catf.empty:
-        cat_inq = catf.groupby("category").size()
-        cat_suim = catf[catf["contracted"]].groupby("category").size()
-        top = list(cat_inq.sort_values(ascending=False).head(12).index)[::-1]
-        fc = go.Figure()
-        fc.add_trace(go.Bar(y=top, x=[int(cat_inq.get(c, 0)) for c in top], name="문의",
-            orientation="h", marker=dict(color=GOLD), text=[int(cat_inq.get(c, 0)) for c in top], textposition="outside"))
-        fc.add_trace(go.Bar(y=top, x=[int(cat_suim.get(c, 0)) for c in top], name="수임",
-            orientation="h", marker=dict(color=TEAL), text=[int(cat_suim.get(c, 0)) for c in top], textposition="outside"))
-        fc.update_layout(barmode="group", legend=dict(orientation="h", y=1.08))
-        st.plotly_chart(fig_theme(fc, max(280, len(top) * 42)), use_container_width=True, config={"displayModeBar": False})
-    else:
-        st.caption("이 기간 카테고리 데이터가 없습니다.")
-
     # ── 카테고리별 효율 (광고비 · 문의당비용 · 수임건당 광고비) — 예산 재배분 판단의 핵심 테이블 ──
     st.markdown(f'<div class="sec-title"><i class="fa-solid fa-coins"></i> 카테고리별 효율 '
                 f'<span style="color:{MUTED};font-size:12px;font-weight:400;">(광고비 · 문의당비용 · 수임건당 광고비 · {start} ~ {end})</span></div>',
@@ -2794,8 +2775,6 @@ def render_inquiries():
     else:
         st.caption("이 기간 카테고리별 효율 데이터가 없습니다.")
 
-    # ════ 대단락: 이름 대조 ════
-    st.markdown('<div class="big-section"><i class="fa-solid fa-magnifying-glass"></i> 이름 대조</div>', unsafe_allow_html=True)
     # 이름 대조 — 문의자 ↔ 계약/미수금
     st.markdown('<div class="sec-title"><i class="fa-solid fa-user-check"></i> 문의자 ↔ 계약 현황</div>', unsafe_allow_html=True)
     q = st.text_input("이름 검색", key="inq_search", placeholder="이름을 입력하면 문의·계약·미수금을 한 번에 봅니다 (예: 홍길동)")
@@ -3168,7 +3147,7 @@ def render_contracts():
             st.caption("이 기간 계약이 없습니다.")
 
         # ── 입금 현황 + 미수금 (전체 기간) ──
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황 (전체)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-money-bill-wave"></i> 입금 현황</div>', unsafe_allow_html=True)
         t_amt, t_paid, t_unpaid = df["_amt"].sum(), df["_paid"].sum(), df["_unpaid"].sum()
         rate = t_paid / t_amt * 100 if t_amt else 0
         unpaid_ratio = t_unpaid / t_amt * 100 if t_amt else 0
@@ -3191,7 +3170,7 @@ def render_contracts():
                 ("6~12개월",  unpaid.loc[(_age >= 180) & (_age < 365), "_unpaid"].sum(), int(((_age >= 180) & (_age < 365)).sum()), "#D99A5B"),
                 ("1년 이상",  unpaid.loc[_age >= 365, "_unpaid"].sum(), int((_age >= 365).sum()), CORAL),
             ]
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-hourglass-half"></i> 미수금 경과기간별 (오래될수록 회수 난이도↑)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-hourglass-half"></i> 미수금 경과기간</div>', unsafe_allow_html=True)
             _rows = ""
             for lab, v, cnt, col in _seg:
                 _p = v / _tot_un * 100
@@ -3218,7 +3197,7 @@ def render_contracts():
 
         st.write("")
         # 월별 추세 (YoY)
-        st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출 추세 (전년 비교)</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 월별 신건 매출</div>', unsafe_allow_html=True)
         years = sorted(df["_y"].unique())
         colors = {years[-1]: GOLD}
         if len(years) >= 2: colors[years[-2]] = TEAL
@@ -3245,7 +3224,7 @@ def render_contracts():
             st.plotly_chart(fig_theme(fig2, 250), use_container_width=True, config={"displayModeBar": False})
         # 계약유형별 신건매출 — 순위 리스트(합계순) + 연도별 내역
         with cc[1]:
-            st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 신건 매출 (연도별 내역)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-scale-balanced"></i> 계약유형별 신건 매출</div>', unsafe_allow_html=True)
             pv = df[df["_is_new"]].pivot_table(index="_type", columns="_y", values="_amt", aggfunc="sum", fill_value=0)
             pv["합계"] = pv.sum(axis=1)
             pv = pv.sort_values("합계", ascending=False).head(8)
