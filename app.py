@@ -4293,15 +4293,14 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
     if not HAS_ANTHROPIC:
         return (demand_kws[:n] or ["(AI 비활성화)"])
     seed = random.randint(1000, 9999)
-    regs = random.sample(QNA_REGIONS, k=min(6, len(QNA_REGIONS)))
     sysp = ("너는 법무법인 KB(형사·성범죄 등 형사전문) 홈페이지 QnA 게시판에 '다음에 쓸' 키워드를 추천한다. "
             f"분류 '{cat}' 게시판에 새 글로 올릴 검색형 키워드 10개를 뽑아라. 규칙:\n"
             "1) [이미 있는 키워드]와 겹치지 말 것(현황에 모자란 주제를 우선).\n"
             "2) [실검색어]에 나타난 실제 수요 표현을 최대한 반영할 것.\n"
-            "3) 3~4개는 지역명을 앞에 붙일 것(예: '서울 데이트폭력', '부산 몸캠피싱'). 지역은 다양하게.\n"
-            "4) 각 키워드는 검색어 형태(문장 아님, 대략 4~10자).\n"
-            "5) 분류 성격에 맞는 주제만 낼 것.\n"
-            f"매번 다른 조합으로 낼 것(seed={seed}, 참고 지역풀={regs}). JSON 배열(문자열 10개)만 출력하라.")
+            "3) 각 키워드는 검색어 형태(문장 아님, 대략 4~10자).\n"
+            "4) 분류 성격에 맞는 주제만 낼 것.\n"
+            "5) 지역명(서울·부산 등)은 붙이지 말 것 — 지역은 사내에서 수동으로 관리한다.\n"
+            f"매번 다른 조합으로 낼 것(seed={seed}). JSON 배열(문자열 10개)만 출력하라.")
     usr = (f"분류: {cat}\n[이미 있는 키워드]\n" + "\n".join(covered[:80])
            + "\n\n[실검색어(수요 상위)]\n" + ", ".join(demand_kws))
     try:
@@ -4440,6 +4439,37 @@ def qna_load_latest(cat):
         return None
 
 
+def _qna_reset_item_flags():
+    """직전 배치의 승인·게시완료 플래그(인덱스 기반) 초기화.
+    새 배치를 생성/추천/복원할 때 호출해 '인덱스 충돌로 새 원고가 게시됨으로 잠기는' 문제 방지."""
+    for k in [k for k in list(st.session_state.keys())
+              if k.startswith("qna_posted_") or k.startswith("qna_confirm_")]:
+        st.session_state.pop(k, None)
+
+
+def _qna_append_post(wid, g):
+    """게시 직후 qna_posts에 1행 추가 → 분류별 글 수·중복대조에 즉시 반영.
+    (다음 qna-sync가 라이브에서 전체 재수집해 WRITE_TRUNCATE로 재조정하므로 중복 없음)."""
+    try:
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.qna_posts"
+        secs = g.get("ans", {}).get("sections", [])
+        blen = sum(len(p) for s in secs for p in s.get("paras", []))
+        schema = [bigquery.SchemaField(n, t) for n, t in (
+            ("wr_id", "STRING"), ("cat", "STRING"), ("region", "STRING"),
+            ("base_kw", "STRING"), ("title", "STRING"),
+            ("has5", "INTEGER"), ("body_len", "INTEGER"))]
+        client.load_table_from_json([{
+            "wr_id": str(wid), "cat": g.get("cat", ""), "region": "",
+            "base_kw": g.get("core", ""), "title": g.get("title", ""),
+            "has5": int(len(secs) >= 5), "body_len": int(blen),
+        }], tid, job_config=bigquery.LoadJobConfig(
+            schema=schema, write_disposition="WRITE_APPEND")).result()
+    except Exception:
+        pass
+
+
 def _qna_reload_ui(sel):
     """저장된 원고가 있으면 '불러오기' 버튼 노출 → 세션 복원(게시완료 표시까지)."""
     meta = qna_draft_meta(sel)
@@ -4452,12 +4482,10 @@ def _qna_reload_ui(sel):
             return
         its = loaded["items"]
         st.session_state["qna_full"] = {"cat": sel, "items": its}
-        for i, it in enumerate(its):   # 게시완료·승인 상태 초기화 후 복원
-            st.session_state.pop(f"qna_confirm_{i}", None)
+        _qna_reset_item_flags()        # 직전 배치 플래그 싹 비우고
+        for i, it in enumerate(its):   # 게시완료 상태만 복원
             if it.get("_posted"):
                 st.session_state[f"qna_posted_{i}"] = it["_posted"]
-            else:
-                st.session_state.pop(f"qna_posted_{i}", None)
         st.session_state.pop("qna_reco", None)   # 생성 UI 대신 복원된 원고 UI 표시
         st.rerun()
 
@@ -4546,8 +4574,9 @@ def render_qna():
             if cols[j].button(f"{c} ({n})", key=f"qna_cb_{c}",
                               use_container_width=True, type=typ):
                 st.session_state["qna_sel_cat"] = c
-                for k in ("qna_reco", "qna_full"):
+                for k in ("qna_reco", "qna_full", "qna_cmp_res"):
                     st.session_state.pop(k, None)
+                _qna_reset_item_flags()   # 분류 바꾸면 이전 배치 플래그도 초기화
                 st.rerun()
     if not sel:
         st.info("위에서 게시판 분류를 클릭하세요.")
@@ -4580,26 +4609,36 @@ def render_qna():
             st.markdown(f"**테스트 제목:** {res['title']}")
             _qna_render_compare(res)
 
-    # ── 2) 추천 키워드 (매번 다르게 · 모자란 것 우선 · 지역 포함) ──
+    # ── 2) 키워드 (자동 추천 + 직접 입력) ──
     st.divider()
-    st.markdown(f"**2) 추천 키워드** — 분류 <span style='color:{GOLD};font-weight:700'>{sel}</span> "
-                "· 현황에 모자란 주제 + 실수요 + 지역 반영", unsafe_allow_html=True)
+    st.markdown(f"**2) 키워드** — 분류 <span style='color:{GOLD};font-weight:700'>{sel}</span> "
+                "· 자동 추천(모자란 주제 + 실수요) + 직접 입력", unsafe_allow_html=True)
     _qna_reload_ui(sel)   # 이전에 만든 원고 다시 불러오기 (BQ 저장분 복원)
     if st.button("🔄 키워드 10개 추천 / 새로고침", key="qna_reco_btn"):
+        _qna_reset_item_flags()
         with st.spinner("추천 중…"):
             st.session_state["qna_reco"] = qna_reco_keywords(sel, corpus, qna_demand())
             st.session_state.pop("qna_full", None)
     reco = st.session_state.get("qna_reco", [])
+    # 직접 키워드 추가 — 밀고 싶은 주제(예: 보이스피싱)를 직접 넣어 생성. 추천과 합쳐짐(직접 입력 우선).
+    man_txt = st.text_area("✍️ 직접 쓸 키워드 (줄당 1개, 선택) — 추천보다 앞에 배치돼 함께 생성됩니다",
+                           key="qna_manual_kw", height=78, placeholder="예)\n보이스피싱 초범\n몸캠피싱 대응")
+    manual = [x.strip() for x in man_txt.splitlines() if x.strip()]
+    cand = manual + [r for r in reco if r not in manual]   # 직접 입력 우선, 중복 제거
     _has_full = (st.session_state.get("qna_full") or {}).get("cat") == sel
-    if reco:
-        st.markdown("추천 키워드 " + "  ·  ".join(f"`{k}`" for k in reco))
+    if cand:
+        tag = lambda k: (f"<b style='color:{GOLD}'>`{k}`</b>" if k in manual else f"`{k}`")
+        st.markdown("생성 대상 " + "  ·  ".join(tag(k) for k in cand)
+                    + (f"　<span style='color:{FAINT};font-size:12px'>(파랑=직접 입력)</span>" if manual else ""),
+                    unsafe_allow_html=True)
 
         # ── 3) 생성 개수 선택 → 질문·답변·완성본 (병렬 생성) ──
         #    비용 = 개수 × (답변 1회). 필요한 만큼만 생성. 생성 즉시 BQ에 저장돼 다시 불러올 수 있음.
         n_gen = st.columns([1.4, 2.6])[0].slider(
-            "생성 개수", 1, len(reco), min(5, len(reco)))
-        use = reco[:n_gen]
-        if st.button(f"✅ 확인 — 추천 {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
+            "생성 개수", 1, len(cand), min(5, len(cand)))
+        use = cand[:n_gen]
+        if st.button(f"✅ 확인 — {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
+            _qna_reset_item_flags()   # 새 배치 → 직전 배치의 승인·게시완료 플래그 초기화
             from concurrent.futures import ThreadPoolExecutor
             try:
                 client = _qna_client()
@@ -4621,7 +4660,7 @@ def render_qna():
                 st.warning(f"{len(use)}개 중 {len(use) - len(ok)}개는 생성에 실패했습니다. "
                            "‘확인’을 한 번 더 누르면 재시도합니다.")
     elif not _has_full:
-        st.info("‘키워드 10개 추천’을 누르면 이 게시판에 새로 쓸 키워드를 뽑아줍니다. "
+        st.info("‘키워드 10개 추천’을 누르거나, 위에 직접 키워드를 입력하면 원고를 생성할 수 있어요. "
                 "이전에 만든 원고가 있으면 위 ‘📂 저장된 원고 불러오기’로 되살릴 수 있어요.")
         return
 
@@ -4767,6 +4806,7 @@ def render_qna():
                 st.session_state[f"qna_posted_{i}"] = wid; done += 1
                 if g.get("_did"):   # 저장분을 게시완료 표시 → 다시 불러와도 중복 업로드 방지
                     qna_mark_posted(g["_did"], wid)
+                _qna_append_post(wid, g)   # qna_posts에 즉시 반영 → 분류별 글 수 갱신
                 try:
                     log_change(st.session_state.get("auth_user", "admin"), "QnA",
                                f"QnA 게시: {g['title']}", f"wr_id={wid} 분류={g['cat']}", "실수요 기반 원고")
@@ -4777,6 +4817,10 @@ def render_qna():
             prog.progress((n + 1) / len(approved))
         st.success(f"{done}/{len(approved)}개 업로드 완료")
         if done:
+            try:
+                qna_corpus.clear()   # 게시글 수(분류 버튼)·중복대조 즉시 갱신
+            except Exception:
+                pass
             st.balloons()
         st.rerun()
 
