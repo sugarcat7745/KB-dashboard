@@ -4700,7 +4700,6 @@ def _qna_render_compare(res):
 def render_qna():
     tab_header("fa-feather-pointed", "QnA 원고 생성", "실수요 기반 질문·답변 생성 · 검수 · 업로드",
                color="#CA8A04", rgb="202,138,4")
-    st.caption("게시판 분류를 고르면 실수요 기반으로 '모자란 키워드' 10개를 추천합니다.")
     corpus = qna_corpus()
     if corpus.empty:
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
@@ -4713,7 +4712,8 @@ def render_qna():
         st.divider()
 
     # ── 1) 게시판 분류 선택 (현재 글 수 표시) ──
-    st.markdown("**1) 게시판 분류** · 괄호 안은 현재 등록된 글 수")
+    st.markdown('<div class="big-section">1) 게시판 분류</div>', unsafe_allow_html=True)
+    st.caption("괄호 안 숫자는 현재 등록된 글 수")
     sel = st.session_state.get("qna_sel_cat")
     ncol = 4
     for i in range(0, len(QNA_CATS), ncol):
@@ -4735,16 +4735,15 @@ def render_qna():
         return
 
     # ── 2) 키워드 (직접 입력 + 추천 개수 선택) ──
-    st.divider()
-    st.markdown(f"**2) 키워드** — 분류 <span style='color:{GOLD};font-weight:700'>{sel}</span> "
-                "· 직접 쓸 키워드 + 원하는 만큼 추천받기", unsafe_allow_html=True)
+    st.markdown('<div class="big-section">2) 키워드</div>', unsafe_allow_html=True)
+    st.caption(f"분류 {sel} · 직접 쓸 키워드 + 원하는 만큼 추천받기")
     _qna_reload_ui(sel)   # 이전에 만든 원고 다시 불러오기 (BQ 저장분 복원)
 
     man_txt = st.text_area("✍️ 직접 쓸 키워드 (줄당 1개, 선택)",
                            key="qna_manual_kw", height=92, placeholder="예)\n민원자 폭행\n공무집행방해 초범")
     manual = [x.strip() for x in man_txt.splitlines() if x.strip()]
     rc1, rc2 = st.columns([1.1, 2.9])
-    n_reco = rc1.number_input("🎯 추천받을 개수", min_value=0, max_value=10, value=5, step=1, key="qna_reco_n")
+    n_reco = rc1.number_input("🎯 추천받을 개수", min_value=0, max_value=10, value=0, step=1, key="qna_reco_n")
     rc2.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)   # 입력칸과 세로 정렬
     if rc2.button("🔄 추천 받기 / 새로고침", key="qna_reco_btn"):
         _qna_reset_item_flags()
@@ -4759,8 +4758,8 @@ def render_qna():
     picked = []
     if reco:
         for i in range(len(reco)):
-            st.session_state.setdefault(f"qna_kw_{i}", True)
-        st.markdown(f"**추천 키워드 {len(reco)}개 — 쓸 것만 체크**")
+            st.session_state.setdefault(f"qna_kw_{i}", False)   # 처음엔 모두 해제
+        st.markdown(f'<div class="sec-title">추천 키워드 {len(reco)}개 — 쓸 것만 체크</div>', unsafe_allow_html=True)
         b1, b2, _b3 = st.columns([1, 1, 5], gap="small")
         if b1.button("전체 선택", key="qna_kw_all"):
             for i in range(len(reco)):
@@ -4837,11 +4836,10 @@ def render_qna():
         return need, okl
 
     # ── 요약 목록 (제목 · 검증 배지 · 승인 체크) ──
-    st.divider()
+    st.markdown('<div class="big-section">3) 검수 · 승인 · 업로드</div>', unsafe_allow_html=True)
     done_n = sum(1 for i in range(len(items)) if st.session_state.get(f"qna_posted_{i}"))
-    st.markdown(f"**생성 완료 {len(items)}개** · 게시됨 {done_n}개 — 상세에서 검수·수정 후 "
-                "‘승인’을 체크하고, 맨 아래에서 한 번에 업로드하세요."
-                + ("" if cid else "  ·  ⚠️ 업로드는 Secrets `[qna_board] id/pw` 설정 후 활성화."))
+    st.caption(f"생성 완료 {len(items)}개 · 게시됨 {done_n}개 — 상세에서 검수·수정 후 ‘승인’ 체크, 맨 아래에서 한 번에 업로드."
+               + ("" if cid else "  ·  ⚠️ 업로드는 Secrets [qna_board] id/pw 설정 후 활성화."))
     unposted = [i for i in range(len(items)) if not st.session_state.get(f"qna_posted_{i}")]
     ac1, ac2, _ac3 = st.columns([1.1, 1, 3.9])
     if ac1.button("☑️ 전체 승인", key="qna_approve_all", disabled=not (cid and unposted)):
