@@ -4745,6 +4745,7 @@ def render_qna():
     manual = [x.strip() for x in man_txt.splitlines() if x.strip()]
     rc1, rc2 = st.columns([1.1, 2.9])
     n_reco = rc1.number_input("🎯 추천받을 개수", min_value=0, max_value=10, value=5, step=1, key="qna_reco_n")
+    rc2.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)   # 입력칸과 세로 정렬
     if rc2.button("🔄 추천 받기 / 새로고침", key="qna_reco_btn"):
         _qna_reset_item_flags()
         for k in [k for k in list(st.session_state.keys()) if k.startswith("qna_kw_")]:
@@ -4759,10 +4760,8 @@ def render_qna():
     if reco:
         for i in range(len(reco)):
             st.session_state.setdefault(f"qna_kw_{i}", True)
-        _n_on = sum(1 for i in range(len(reco)) if st.session_state.get(f"qna_kw_{i}"))
-        st.markdown(f"**추천 키워드 {len(reco)}개 — 쓸 것만 체크** "
-                    f"<span style='color:{MUTED};font-size:13px'>(선택 {_n_on})</span>", unsafe_allow_html=True)
-        b1, b2, _b3 = st.columns([1, 1, 4])
+        st.markdown(f"**추천 키워드 {len(reco)}개 — 쓸 것만 체크**")
+        b1, b2, _b3 = st.columns([1, 1, 5], gap="small")
         if b1.button("전체 선택", key="qna_kw_all"):
             for i in range(len(reco)):
                 st.session_state[f"qna_kw_{i}"] = True
@@ -4782,10 +4781,8 @@ def render_qna():
         tag = lambda k: (f"<b style='color:{GOLD}'>`{k}`</b>" if k in manual else f"`{k}`")
         st.markdown(f"**생성 대상 {len(cand)}개** "
                     f"<span style='color:{MUTED};font-size:13px'>(직접 {len(manual)} + 추천 {len(cand) - len(manual)})</span><br>"
-                    + "  ·  ".join(tag(k) for k in cand)
-                    + (f"　<span style='color:{FAINT};font-size:12px'>· 파랑=직접 입력</span>" if manual else ""),
+                    + "  ·  ".join(tag(k) for k in cand),
                     unsafe_allow_html=True)
-        st.caption(f"이 {len(cand)}개를 그대로 생성합니다. 개수를 바꾸려면 직접 키워드나 위 ‘추천받을 개수’를 조정하세요.")
         use = cand
         if st.button(f"✅ {len(cand)}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
             _qna_reset_item_flags()   # 새 배치 → 직전 배치의 승인·게시완료 플래그 초기화
