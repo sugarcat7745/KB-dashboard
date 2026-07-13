@@ -4742,9 +4742,8 @@ def render_qna():
     man_txt = st.text_area("✍️ 직접 쓸 키워드 (줄당 1개, 선택)",
                            key="qna_manual_kw", height=92, placeholder="예)\n민원자 폭행\n공무집행방해 초범")
     manual = [x.strip() for x in man_txt.splitlines() if x.strip()]
-    rc1, rc2 = st.columns([1.1, 2.9])
+    rc1, rc2 = st.columns([1.1, 2.9], vertical_alignment="bottom")
     n_reco = rc1.number_input("🎯 추천받을 개수", min_value=0, max_value=10, value=0, step=1, key="qna_reco_n")
-    rc2.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)   # 입력칸과 세로 정렬
     if rc2.button("🔄 추천 받기 / 새로고침", key="qna_reco_btn"):
         _qna_reset_item_flags()
         for k in [k for k in list(st.session_state.keys()) if k.startswith("qna_kw_")]:
@@ -4778,10 +4777,11 @@ def render_qna():
     if cand:
         # ── 3) 생성 대상 = 직접 + 추천 전부 (개수는 위에서 이미 정함). 생성 즉시 BQ 저장. ──
         tag = lambda k: (f"<b style='color:{GOLD}'>`{k}`</b>" if k in manual else f"`{k}`")
-        st.markdown(f"**생성 대상 {len(cand)}개** "
-                    f"<span style='color:{MUTED};font-size:13px'>(직접 {len(manual)} + 추천 {len(cand) - len(manual)})</span><br>"
-                    + "  ·  ".join(tag(k) for k in cand),
+        st.markdown(f'<div class="sec-title">생성 대상 {len(cand)}개 '
+                    f'<span style="color:{MUTED};font-weight:500;font-size:13px">'
+                    f'(직접 {len(manual)} + 추천 {len(cand) - len(manual)})</span></div>',
                     unsafe_allow_html=True)
+        st.markdown("  ·  ".join(tag(k) for k in cand), unsafe_allow_html=True)
         use = cand
         if st.button(f"✅ {len(cand)}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
             _qna_reset_item_flags()   # 새 배치 → 직전 배치의 승인·게시완료 플래그 초기화
@@ -4841,7 +4841,7 @@ def render_qna():
     st.caption(f"생성 완료 {len(items)}개 · 게시됨 {done_n}개 — 상세에서 검수·수정 후 ‘승인’ 체크, 맨 아래에서 한 번에 업로드."
                + ("" if cid else "  ·  ⚠️ 업로드는 Secrets [qna_board] id/pw 설정 후 활성화."))
     unposted = [i for i in range(len(items)) if not st.session_state.get(f"qna_posted_{i}")]
-    ac1, ac2, _ac3 = st.columns([1.1, 1, 3.9])
+    ac1, ac2, _ac3 = st.columns([1, 1, 5], gap="small")
     if ac1.button("☑️ 전체 승인", key="qna_approve_all", disabled=not (cid and unposted)):
         for i in unposted:
             st.session_state[f"qna_confirm_{i}"] = True
@@ -4853,7 +4853,7 @@ def render_qna():
     for i, it in enumerate(items):
         need, _okl = _split_laws(it)
         posted = st.session_state.get(f"qna_posted_{i}")
-        c0, c1 = st.columns([0.1, 0.9])
+        c0, c1 = st.columns([0.045, 0.955], gap="small", vertical_alignment="center")
         if posted:
             c0.markdown("✅")
             c1.markdown(f"<span style='color:{MUTED}'>{i+1}. {it['title']} · 게시됨 "
