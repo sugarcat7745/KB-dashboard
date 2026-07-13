@@ -4726,6 +4726,8 @@ def render_qna():
                 st.session_state["qna_sel_cat"] = c
                 for k in ("qna_reco", "qna_full", "qna_cmp_res"):
                     st.session_state.pop(k, None)
+                for k in [k for k in list(st.session_state.keys()) if k.startswith("qna_kw_")]:
+                    st.session_state.pop(k, None)   # 추천 체크 상태도 초기화
                 _qna_reset_item_flags()   # 분류 바꾸면 이전 배치 플래그도 초기화
                 st.rerun()
     if not sel:
@@ -4745,12 +4747,35 @@ def render_qna():
     n_reco = rc1.number_input("🎯 추천받을 개수", min_value=0, max_value=10, value=5, step=1, key="qna_reco_n")
     if rc2.button("🔄 추천 받기 / 새로고침", key="qna_reco_btn"):
         _qna_reset_item_flags()
+        for k in [k for k in list(st.session_state.keys()) if k.startswith("qna_kw_")]:
+            st.session_state.pop(k, None)   # 이전 추천의 체크 상태 초기화
         with st.spinner("추천 중…"):
             st.session_state["qna_reco"] = (
                 qna_reco_keywords(sel, corpus, qna_demand(), n=int(n_reco)) if int(n_reco) > 0 else [])
             st.session_state.pop("qna_full", None)
     reco = st.session_state.get("qna_reco", [])
-    cand = manual + [r for r in reco if r not in manual]   # 직접 입력 우선, 중복 제거
+    # 추천 키워드 — 쓸 것만 체크로 선택 (기본 전체 선택). 전체선택/해제 버튼 제공.
+    picked = []
+    if reco:
+        for i in range(len(reco)):
+            st.session_state.setdefault(f"qna_kw_{i}", True)
+        _n_on = sum(1 for i in range(len(reco)) if st.session_state.get(f"qna_kw_{i}"))
+        st.markdown(f"**추천 키워드 {len(reco)}개 — 쓸 것만 체크** "
+                    f"<span style='color:{MUTED};font-size:13px'>(선택 {_n_on})</span>", unsafe_allow_html=True)
+        b1, b2, _b3 = st.columns([1, 1, 4])
+        if b1.button("전체 선택", key="qna_kw_all"):
+            for i in range(len(reco)):
+                st.session_state[f"qna_kw_{i}"] = True
+            st.rerun()
+        if b2.button("전체 해제", key="qna_kw_none"):
+            for i in range(len(reco)):
+                st.session_state[f"qna_kw_{i}"] = False
+            st.rerun()
+        gcols = st.columns(3)
+        for i, kw in enumerate(reco):
+            if gcols[i % 3].checkbox(kw, key=f"qna_kw_{i}"):
+                picked.append(kw)
+    cand = manual + [r for r in picked if r not in manual]   # 직접 입력 + 체크한 추천, 중복 제거
     _has_full = (st.session_state.get("qna_full") or {}).get("cat") == sel
     if cand:
         # ── 3) 생성 대상 = 직접 + 추천 전부 (개수는 위에서 이미 정함). 생성 즉시 BQ 저장. ──
