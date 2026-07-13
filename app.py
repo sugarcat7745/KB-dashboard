@@ -4185,13 +4185,8 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
         return [f"(생성 오류: {e})"]
 
 
-def qna_gen_answer(title, keyword, cat, client=None, verified=None):
-    """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환.
-    실패 시 None(병렬 호출 대비 st.* 미사용). client 지정 시 그 클라이언트 사용.
-    verified: 인용 허용 검증 조문 목록(이 밖은 쓰지 말라고 지시)."""
-    if not HAS_ANTHROPIC:
-        return None
-    cli = client or _qna_client()
+def _qna_answer_prompt(title, keyword, cat, verified=None):
+    """답변 생성 프롬프트(system, user) 구성 — 생성·모델비교가 공유(중복 방지)."""
     vtxt = ""
     if verified:
         vtxt = "\n\n[검증된 법조문 — 반드시 이 목록 안에서만 인용]\n" + "\n".join(
@@ -4214,14 +4209,49 @@ def qna_gen_answer(title, keyword, cat, client=None, verified=None):
             "변호사 선임이 필요한 이유·법무법인 KB의 강점) 그대로만 쓰고, 키워드를 앞에 붙이지 마라. "
             "각 문단은 3~4문장 존댓말 서술형으로 쓴다.")
     usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}" + vtxt
+    return sysp, usr
+
+
+def qna_gen_answer(title, keyword, cat, client=None, verified=None, model=MODEL_CHAT):
+    """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환.
+    실패 시 None(병렬 호출 대비 st.* 미사용). client 지정 시 그 클라이언트 사용.
+    verified: 인용 허용 검증 조문 목록(이 밖은 쓰지 말라고 지시). model: 기본 Sonnet."""
+    if not HAS_ANTHROPIC:
+        return None
+    cli = client or _qna_client()
+    sysp, usr = _qna_answer_prompt(title, keyword, cat, verified)
     try:
-        m = cli.messages.create(model=MODEL_CHAT, max_tokens=3500,
+        m = cli.messages.create(model=model, max_tokens=3500,
               system=sysp, messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
         d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
         return d
     except Exception:
         return None
+
+
+def qna_answer_compare(title, keyword, cat, model, verified=None):
+    """모델 비교 테스트용: 지정 모델로 답변 생성 → (dict|None, input_tokens, output_tokens)."""
+    if not HAS_ANTHROPIC:
+        return None, 0, 0
+    try:
+        cli = _qna_client()
+        sysp, usr = _qna_answer_prompt(title, keyword, cat, verified)
+        m = cli.messages.create(model=model, max_tokens=3500,
+              system=sysp, messages=[{"role": "user", "content": usr}])
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+        it = int(getattr(m.usage, "input_tokens", 0) or 0)
+        ot = int(getattr(m.usage, "output_tokens", 0) or 0)
+        return d, it, ot
+    except Exception:
+        return None, 0, 0
+
+
+def _qna_cost_krw(model_key, it, ot):
+    """추정 비용(원). log_ai_usage와 동일 단가(per 1M USD)×환율 1,400."""
+    in_r, out_r = {"sonnet": (3.0, 15.0), "haiku": (1.0, 5.0)}.get(model_key, (1.0, 5.0))
+    return round((it * in_r + ot * out_r) / 1_000_000 * 1400, 1)
 
 
 def qna_make_one(keyword, cat, existing, client=None):
@@ -4426,6 +4456,63 @@ def _qna_reload_ui(sel):
         st.rerun()
 
 
+def _qna_show_one(col, label, cat, ans, accent):
+    """모델 비교: 한 모델의 답변을 렌더(요약·섹션·조문 검증 배지)."""
+    with col:
+        st.markdown(f"<b style='color:{accent}'>{label}</b>", unsafe_allow_html=True)
+        if not ans:
+            st.error("생성 실패 (모델 오류 또는 JSON 파싱 실패)")
+            return
+        st.markdown("**핵심 요약**")
+        for x in ans.get("intro3", []):
+            st.markdown(f"<div style='font-size:13px;margin-bottom:2px'>· {x}</div>", unsafe_allow_html=True)
+        for sec in ans.get("sections", []):
+            st.markdown(f"<div style='font-weight:700;margin-top:8px'>{sec.get('sub','')}</div>", unsafe_allow_html=True)
+            for p in sec.get("paras", []):
+                st.markdown(f"<div style='font-size:12.5px;color:{MUTED};margin-bottom:4px;line-height:1.55'>{p}</div>",
+                            unsafe_allow_html=True)
+        vr = qna_laws_for(cat)
+        laws = ans.get("laws", [])
+        if laws:
+            lis = []
+            for l in laws:
+                hit = qna_law_match(l, vr)
+                c = GOOD if hit else "#E5484D"
+                lis.append(f"<div style='color:{c};font-size:12.5px'>{'✓' if hit else '🔴'} {l}</div>")
+            st.markdown(f"<div style='margin-top:8px;font-weight:700'>인용 법조문</div>" + "".join(lis),
+                        unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='margin-top:8px;color:#E5484D;font-size:12.5px'>인용 법조문 없음</div>",
+                        unsafe_allow_html=True)
+
+
+def _qna_render_compare(res):
+    """모델 비교 결과(비용·토큰·본문·조문검증)를 나란히 표시."""
+    s, h = res["s"], res["h"]
+    sc, hc = s["krw"], h["krw"]
+    save = (1 - (hc / sc)) * 100 if sc else 0
+    st.markdown(
+        f"<div style='display:flex;gap:10px;margin:8px 0 6px'>"
+        f"<div style='flex:1;border:1px solid {LINE};border-radius:8px;padding:9px 13px'>"
+        f"<div style='font-weight:700'>Sonnet <span style='color:{MUTED};font-weight:500;font-size:12px'>(현재)</span></div>"
+        f"<div style='font-size:21px;font-weight:800'>{sc:,.1f}<span style='font-size:12px;font-weight:600'>원</span></div>"
+        f"<div style='color:{MUTED};font-size:12px'>입력 {s['it']:,} · 출력 {s['ot']:,} 토큰</div></div>"
+        f"<div style='flex:1;border:1.5px solid {GOOD};border-radius:8px;padding:9px 13px'>"
+        f"<div style='font-weight:700;color:{GOOD}'>Haiku <span style='color:{MUTED};font-weight:500;font-size:12px'>(후보)</span></div>"
+        f"<div style='font-size:21px;font-weight:800;color:{GOOD}'>{hc:,.1f}<span style='font-size:12px;font-weight:600'>원</span></div>"
+        f"<div style='color:{MUTED};font-size:12px'>입력 {h['it']:,} · 출력 {h['ot']:,} 토큰</div></div>"
+        f"</div>", unsafe_allow_html=True)
+    if sc:
+        st.success(f"이 건 기준 Haiku가 약 **{save:.0f}% 저렴** (건당 {sc - hc:,.1f}원 절약). "
+                   "아래 본문·조문 정확도를 직접 비교해 채택 여부를 판단하세요.")
+    st.divider()
+    cS, cH = st.columns(2)
+    _qna_show_one(cS, "🟦 Sonnet 초안", res["cat"], s["ans"], TXT)
+    _qna_show_one(cH, "🟩 Haiku 초안", res["cat"], h["ans"], GOOD)
+    st.caption("🔴 = 검증 목록에 없는 조문(직접 확인 필요) · ✓ = 검증된 조문. "
+               "Haiku가 🔴가 많거나 문단이 부실하면 품질 리스크가 큰 것.")
+
+
 def render_qna():
     tab_header("fa-feather-pointed", "QnA 원고 생성", "실수요 기반 질문·답변 생성 · 검수 · 업로드",
                color="#CA8A04", rgb="202,138,4")
@@ -4459,6 +4546,33 @@ def render_qna():
     if not sel:
         st.info("위에서 게시판 분류를 클릭하세요.")
         return
+
+    # ── 🧪 모델 비교 테스트 (Sonnet vs Haiku) — 비용·품질 직접 비교 ──
+    with st.expander("🧪 모델 비교 테스트 (Sonnet vs Haiku) — 답변을 Haiku로 바꾸면 얼마나 싸지고 품질은 어떤지"):
+        st.caption("같은 키워드로 두 모델이 만든 답변을 나란히 생성해 비용·토큰·본문·조문 정확도를 비교합니다. "
+                   "1회 테스트는 두 모델 합쳐 약 90~100원(게시와 무관한 시험 생성).")
+        _dflt = (st.session_state.get("qna_reco") or [f"{sel} 초범 처벌"])[0]
+        tkw = st.text_input("테스트 키워드", value=_dflt, key="qna_cmp_kw")
+        if st.button("🔬 두 모델로 생성해 비교", key="qna_cmp_btn"):
+            core = re.sub(r"\s*변호사$", "", str(tkw)).strip()
+            title = f"{tkw} | 처벌과 대응은?"
+            vr = qna_laws_for(sel)
+            with st.spinner("Sonnet · Haiku 동시 생성 중… (30초 내외)"):
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=2) as ex:
+                    fs = ex.submit(qna_answer_compare, title, core, sel, MODEL_CHAT, vr)
+                    fh = ex.submit(qna_answer_compare, title, core, sel, MODEL_INSIGHT, vr)
+                    s_ans, s_it, s_ot = fs.result()
+                    h_ans, h_it, h_ot = fh.result()
+            st.session_state["qna_cmp_res"] = {
+                "title": title, "cat": sel,
+                "s": {"ans": s_ans, "it": s_it, "ot": s_ot, "krw": _qna_cost_krw("sonnet", s_it, s_ot)},
+                "h": {"ans": h_ans, "it": h_it, "ot": h_ot, "krw": _qna_cost_krw("haiku", h_it, h_ot)},
+            }
+        res = st.session_state.get("qna_cmp_res")
+        if res:
+            st.markdown(f"**테스트 제목:** {res['title']}")
+            _qna_render_compare(res)
 
     # ── 2) 추천 키워드 (매번 다르게 · 모자란 것 우선 · 지역 포함) ──
     st.divider()
