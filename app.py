@@ -4339,8 +4339,7 @@ def render_qna():
     # ── 3) 생성 개수 선택 → 질문·답변·완성본 (병렬 생성) ──
     #    비용 = 개수 × (답변 1회 Sonnet). 필요한 만큼만 생성해 코인 절약.
     n_gen = st.columns([1.4, 2.6])[0].slider(
-        "생성 개수", 1, len(reco), min(5, len(reco)),
-        help="1건당 Sonnet 답변 1회(약 60~90원). 필요한 만큼만 생성하면 비용이 줄어듭니다.")
+        "생성 개수", 1, len(reco), min(5, len(reco)))
     use = reco[:n_gen]
     if st.button(f"✅ 확인 — 추천 {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
         from concurrent.futures import ThreadPoolExecutor
