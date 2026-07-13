@@ -4288,6 +4288,144 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
         return (demand_kws[:n] or [f"(추천 오류: {e})"])
 
 
+# ── 생성한 원고 저장·불러오기 (BigQuery qna_draft, append-only) ─────────────
+#  세션(임시 메모리)에만 있으면 재접속·새로고침으로 날아감 → 생성 즉시 BQ에 쌓아
+#  분류별 '최신 묶음'을 언제든 되살린다. 게시 완료분은 posted 마커로 중복 업로드 방지.
+QNA_DRAFT_SCHEMA = [("id", "STRING"), ("batch", "STRING"), ("ts", "TIMESTAMP"),
+                    ("user", "STRING"), ("cat", "STRING"), ("title", "STRING"),
+                    ("payload", "STRING"), ("posted", "STRING")]
+
+
+def _qna_draft_schema():
+    from google.cloud import bigquery
+    return [bigquery.SchemaField(n, t) for n, t in QNA_DRAFT_SCHEMA]
+
+
+def qna_save_drafts(user, cat, items):
+    """생성한 원고 묶음을 BigQuery에 저장(재접속 후 다시 불러오기용). 각 item에 _did 부여."""
+    try:
+        import uuid
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.qna_draft"
+        batch = uuid.uuid4().hex[:12]
+        ts = datetime.now().isoformat(timespec="seconds")
+        rows = []
+        for it in items:
+            if not it.get("_did"):
+                it["_did"] = uuid.uuid4().hex[:12]
+            rows.append({
+                "id": it["_did"], "batch": batch, "ts": ts,
+                "user": str(user)[:50], "cat": str(cat)[:40],
+                "title": (it.get("title") or "")[:300],
+                "payload": json.dumps(it, ensure_ascii=False)[:900000],
+                "posted": "",
+            })
+        client.load_table_from_json(
+            rows, tid, job_config=bigquery.LoadJobConfig(
+                schema=_qna_draft_schema(), write_disposition="WRITE_APPEND",
+                create_disposition="CREATE_IF_NEEDED")).result()
+        try:
+            qna_draft_meta.clear()   # 방금 저장분이 '불러오기'에 바로 뜨게 캐시 무효화
+        except Exception:
+            pass
+        return batch
+    except Exception:
+        return None
+
+
+def qna_mark_posted(did, wr_id):
+    """업로드 완료된 원고를 posted 표시(append-only 마커 행)."""
+    try:
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.qna_draft"
+        client.load_table_from_json([{
+            "id": str(did), "batch": "", "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": "", "cat": "", "title": "", "payload": "", "posted": str(wr_id),
+        }], tid, job_config=bigquery.LoadJobConfig(
+            schema=_qna_draft_schema(), write_disposition="WRITE_APPEND")).result()
+    except Exception:
+        pass
+
+
+@st.cache_data(ttl=120)
+def qna_draft_meta(cat):
+    """해당 분류의 가장 최근 저장 묶음 요약 {n, ts, batch}. 없거나 테이블 없으면 None."""
+    try:
+        c = str(cat).replace("'", "")[:40]
+        df = bq(f"SELECT batch, COUNT(*) n, MAX(ts) ts "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` "
+                f"WHERE cat = '{c}' AND payload != '' "
+                f"GROUP BY batch ORDER BY ts DESC LIMIT 1")
+        if df is None or df.empty:
+            return None
+        r = df.iloc[0]
+        try:
+            ttxt = pd.to_datetime(r["ts"]).strftime("%-m/%-d %H:%M")
+        except Exception:
+            ttxt = str(r["ts"])[:16]
+        return {"n": int(r["n"]), "ts": ttxt, "batch": str(r["batch"])}
+    except Exception:
+        return None
+
+
+def qna_load_latest(cat):
+    """해당 분류의 최신 저장 묶음을 복원 → item dict 리스트. 게시완료(posted) 정보 포함."""
+    try:
+        c = str(cat).replace("'", "")[:40]
+        df = bq_fresh(f"SELECT id, batch, ts, payload FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` "
+                      f"WHERE cat = '{c}' AND payload != '' ORDER BY ts DESC LIMIT 50")
+        if df is None or df.empty:
+            return None
+        top = str(df.iloc[0]["batch"])
+        sub = df[df["batch"].astype(str) == top]
+        # posted 마커(전체 id→wr_id)
+        pmap = {}
+        try:
+            pm = bq_fresh(f"SELECT id, posted FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` "
+                          f"WHERE posted != ''")
+            if pm is not None and not pm.empty:
+                for _, r in pm.iterrows():
+                    pmap[str(r["id"])] = str(r["posted"])
+        except Exception:
+            pass
+        items = []
+        for _, r in sub.iterrows():
+            try:
+                it = json.loads(r["payload"])
+            except Exception:
+                continue
+            it["_did"] = str(r["id"])
+            it["_posted"] = pmap.get(str(r["id"]), "")
+            items.append(it)
+        return {"cat": cat, "items": items} if items else None
+    except Exception:
+        return None
+
+
+def _qna_reload_ui(sel):
+    """저장된 원고가 있으면 '불러오기' 버튼 노출 → 세션 복원(게시완료 표시까지)."""
+    meta = qna_draft_meta(sel)
+    if not meta:
+        return
+    if st.button(f"📂 저장된 원고 {meta['n']}개 불러오기  ·  {meta['ts']} 생성", key="qna_reload_btn"):
+        loaded = qna_load_latest(sel)
+        if not loaded:
+            st.warning("불러올 원고를 찾지 못했습니다.")
+            return
+        its = loaded["items"]
+        st.session_state["qna_full"] = {"cat": sel, "items": its}
+        for i, it in enumerate(its):   # 게시완료·승인 상태 초기화 후 복원
+            st.session_state.pop(f"qna_confirm_{i}", None)
+            if it.get("_posted"):
+                st.session_state[f"qna_posted_{i}"] = it["_posted"]
+            else:
+                st.session_state.pop(f"qna_posted_{i}", None)
+        st.session_state.pop("qna_reco", None)   # 생성 UI 대신 복원된 원고 UI 표시
+        st.rerun()
+
+
 def render_qna():
     tab_header("fa-feather-pointed", "QnA 원고 생성", "실수요 기반 질문·답변 생성 · 검수 · 업로드",
                color="#CA8A04", rgb="202,138,4")
@@ -4326,41 +4464,46 @@ def render_qna():
     st.divider()
     st.markdown(f"**2) 추천 키워드** — 분류 <span style='color:{GOLD};font-weight:700'>{sel}</span> "
                 "· 현황에 모자란 주제 + 실수요 + 지역 반영", unsafe_allow_html=True)
+    _qna_reload_ui(sel)   # 이전에 만든 원고 다시 불러오기 (BQ 저장분 복원)
     if st.button("🔄 키워드 10개 추천 / 새로고침", key="qna_reco_btn"):
         with st.spinner("추천 중…"):
             st.session_state["qna_reco"] = qna_reco_keywords(sel, corpus, qna_demand())
             st.session_state.pop("qna_full", None)
     reco = st.session_state.get("qna_reco", [])
-    if not reco:
-        st.info("‘키워드 10개 추천’을 누르면 이 게시판에 새로 쓸 키워드를 뽑아줍니다.")
-        return
-    st.markdown("추천 키워드 " + "  ·  ".join(f"`{k}`" for k in reco))
+    _has_full = (st.session_state.get("qna_full") or {}).get("cat") == sel
+    if reco:
+        st.markdown("추천 키워드 " + "  ·  ".join(f"`{k}`" for k in reco))
 
-    # ── 3) 생성 개수 선택 → 질문·답변·완성본 (병렬 생성) ──
-    #    비용 = 개수 × (답변 1회 Sonnet). 필요한 만큼만 생성해 코인 절약.
-    n_gen = st.columns([1.4, 2.6])[0].slider(
-        "생성 개수", 1, len(reco), min(5, len(reco)))
-    use = reco[:n_gen]
-    if st.button(f"✅ 확인 — 추천 {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
-        from concurrent.futures import ThreadPoolExecutor
-        try:
-            client = _qna_client()
-        except Exception:
-            client = None
-        with st.spinner(f"{len(use)}개 원고 동시 생성 중… (1분 내외)"):
-            with ThreadPoolExecutor(max_workers=5) as ex:
-                items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client), use))
-                # 실패(None)한 키워드는 1회 재시도 — 일시적 생성 실패로 개수가 줄지 않게
-                fail_idx = [i for i, it in enumerate(items) if not it]
-                if fail_idx:
-                    retry = list(ex.map(lambda i: qna_make_one(use[i], sel, existing, client), fail_idx))
-                    for i, it in zip(fail_idx, retry):
-                        items[i] = it
-        ok = [it for it in items if it]
-        st.session_state["qna_full"] = {"cat": sel, "items": ok}
-        if len(ok) < len(use):
-            st.warning(f"{len(use)}개 중 {len(use) - len(ok)}개는 생성에 실패했습니다. "
-                       "‘확인’을 한 번 더 누르면 재시도합니다.")
+        # ── 3) 생성 개수 선택 → 질문·답변·완성본 (병렬 생성) ──
+        #    비용 = 개수 × (답변 1회). 필요한 만큼만 생성. 생성 즉시 BQ에 저장돼 다시 불러올 수 있음.
+        n_gen = st.columns([1.4, 2.6])[0].slider(
+            "생성 개수", 1, len(reco), min(5, len(reco)))
+        use = reco[:n_gen]
+        if st.button(f"✅ 확인 — 추천 {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
+            from concurrent.futures import ThreadPoolExecutor
+            try:
+                client = _qna_client()
+            except Exception:
+                client = None
+            with st.spinner(f"{len(use)}개 원고 동시 생성 중… (1분 내외)"):
+                with ThreadPoolExecutor(max_workers=5) as ex:
+                    items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client), use))
+                    # 실패(None)한 키워드는 1회 재시도 — 일시적 생성 실패로 개수가 줄지 않게
+                    fail_idx = [i for i, it in enumerate(items) if not it]
+                    if fail_idx:
+                        retry = list(ex.map(lambda i: qna_make_one(use[i], sel, existing, client), fail_idx))
+                        for i, it in zip(fail_idx, retry):
+                            items[i] = it
+            ok = [it for it in items if it]
+            qna_save_drafts(st.session_state.get("auth_user", "admin"), sel, ok)  # BQ 저장(다시 불러오기)
+            st.session_state["qna_full"] = {"cat": sel, "items": ok}
+            if len(ok) < len(use):
+                st.warning(f"{len(use)}개 중 {len(use) - len(ok)}개는 생성에 실패했습니다. "
+                           "‘확인’을 한 번 더 누르면 재시도합니다.")
+    elif not _has_full:
+        st.info("‘키워드 10개 추천’을 누르면 이 게시판에 새로 쓸 키워드를 뽑아줍니다. "
+                "이전에 만든 원고가 있으면 위 ‘📂 저장된 원고 불러오기’로 되살릴 수 있어요.")
+        return
 
     full = st.session_state.get("qna_full")
     if not full or full.get("cat") != sel:
@@ -4502,6 +4645,8 @@ def render_qna():
                 wid = qna_upload(g["title"], g["cat"], _detail, _summary,
                                  [g["core"], g["cat"], "형사전문변호사"])
                 st.session_state[f"qna_posted_{i}"] = wid; done += 1
+                if g.get("_did"):   # 저장분을 게시완료 표시 → 다시 불러와도 중복 업로드 방지
+                    qna_mark_posted(g["_did"], wid)
                 try:
                     log_change(st.session_state.get("auth_user", "admin"), "QnA",
                                f"QnA 게시: {g['title']}", f"wr_id={wid} 분류={g['cat']}", "실수요 기반 원고")
