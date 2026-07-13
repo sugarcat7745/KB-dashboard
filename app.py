@@ -3880,9 +3880,52 @@ def qna_laws():
     return {}
 
 
+# 법조문 참조표: 사람이 직접 편집하는 구글 시트 탭(광고전략DB의 '법조문DB').
+#   앱은 읽기 전용 → 편집은 브라우저에서. 탭 없으면 번들 JSON(qna_laws)로 자동 폴백.
+QNA_LAW_TAB = "법조문DB"
+
+
+@st.cache_data(ttl=600)
+def qna_law_ref():
+    """법조문DB 탭 → {분류:[{law,article,summary,penalty}]}. 없거나 비면 번들 JSON 폴백.
+    헤더 부분매칭: 분류/법명/조문/요약(요건)/법정형(형량). '형량' 칸이 채워진 행만 숫자 인용."""
+    try:
+        vals = get_gc().open_by_key(AD_SHEET_ID).worksheet(QNA_LAW_TAB).get_all_values()
+        if not vals or len(vals) < 2:
+            raise RuntimeError("빈 탭")
+        hdr = vals[0]
+
+        def col(*keys):
+            for i, h in enumerate(hdr):
+                if any(k in str(h) for k in keys):
+                    return i
+            return -1
+        c_cat, c_law, c_art = col("분류"), col("법명", "법령", "법"), col("조문")
+        c_sum, c_pen = col("요약", "요건", "설명", "내용"), col("법정형", "형량")
+        if min(c_cat, c_law, c_art) < 0:
+            raise RuntimeError("헤더 불일치")
+
+        def g(r, i):
+            return r[i].strip() if 0 <= i < len(r) else ""
+        out = {}
+        for r in vals[1:]:
+            cat, law, art = g(r, c_cat), g(r, c_law), g(r, c_art)
+            if not (cat and law and art):
+                continue
+            out.setdefault(cat, []).append({
+                "law": law, "article": art,
+                "summary": g(r, c_sum), "penalty": g(r, c_pen),
+            })
+        if not out:
+            raise RuntimeError("행 없음")
+        return out
+    except Exception:
+        return qna_laws()   # 시트 미설정·장애 시 번들 JSON로 안전 폴백
+
+
 def qna_laws_for(cat):
     """분류에 적용할 검증 조문(공통 + 해당 분류), 중복 제거."""
-    d = qna_laws()
+    d = qna_law_ref()
     out, seen = [], set()
     for it in list(d.get("공통", [])) + list(d.get(cat, [])):
         k = (it.get("law"), it.get("article"))
