@@ -4227,7 +4227,7 @@ def qna_gen_answer(title, keyword, cat, client=None, verified=None, model=MODEL_
     cli = client or _qna_client()
     sysp, usr = _qna_answer_prompt(title, keyword, cat, verified)
     try:
-        m = cli.messages.create(model=model, max_tokens=3500,
+        m = cli.messages.create(model=model, max_tokens=5000,
               system=sysp, messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
         d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
@@ -4237,21 +4237,26 @@ def qna_gen_answer(title, keyword, cat, client=None, verified=None, model=MODEL_
 
 
 def qna_answer_compare(title, keyword, cat, model, verified=None):
-    """모델 비교 테스트용: 지정 모델로 답변 생성 → (dict|None, input_tokens, output_tokens)."""
+    """모델 비교 테스트용: 지정 모델로 답변 생성 → (dict|None, input_tokens, output_tokens, err)."""
     if not HAS_ANTHROPIC:
-        return None, 0, 0
+        return None, 0, 0, "Anthropic 미설정"
     try:
         cli = _qna_client()
         sysp, usr = _qna_answer_prompt(title, keyword, cat, verified)
-        m = cli.messages.create(model=model, max_tokens=3500,
+        m = cli.messages.create(model=model, max_tokens=5000,
               system=sysp, messages=[{"role": "user", "content": usr}])
-        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
-        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
         it = int(getattr(m.usage, "input_tokens", 0) or 0)
         ot = int(getattr(m.usage, "output_tokens", 0) or 0)
-        return d, it, ot
-    except Exception:
-        return None, 0, 0
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        if getattr(m, "stop_reason", "") == "max_tokens":
+            return None, it, ot, "출력이 max_tokens에 걸려 잘림(JSON 미완성)"
+        try:
+            d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+        except Exception as je:
+            return None, it, ot, f"JSON 파싱 실패: {str(je)[:80]}"
+        return d, it, ot, ""
+    except Exception as e:
+        return None, 0, 0, f"{type(e).__name__}: {str(e)[:120]}"
 
 
 def _qna_cost_krw(model_key, it, ot):
@@ -4490,12 +4495,12 @@ def _qna_reload_ui(sel):
         st.rerun()
 
 
-def _qna_show_one(col, label, cat, ans, accent):
+def _qna_show_one(col, label, cat, ans, accent, err=""):
     """모델 비교: 한 모델의 답변을 렌더(요약·섹션·조문 검증 배지)."""
     with col:
         st.markdown(f"<b style='color:{accent}'>{label}</b>", unsafe_allow_html=True)
         if not ans:
-            st.error("생성 실패 (모델 오류 또는 JSON 파싱 실패)")
+            st.error(f"생성 실패 — {err or '모델 오류 또는 JSON 파싱 실패'}")
             return
         st.markdown("**핵심 요약**")
         for x in ans.get("intro3", []):
@@ -4541,8 +4546,8 @@ def _qna_render_compare(res):
                    "아래 본문·조문 정확도를 직접 비교해 채택 여부를 판단하세요.")
     st.divider()
     cS, cH = st.columns(2)
-    _qna_show_one(cS, "🟦 Sonnet 초안", res["cat"], s["ans"], TXT)
-    _qna_show_one(cH, "🟩 Haiku 초안", res["cat"], h["ans"], GOOD)
+    _qna_show_one(cS, "🟦 Sonnet 초안", res["cat"], s["ans"], TXT, s.get("err", ""))
+    _qna_show_one(cH, "🟩 Haiku 초안", res["cat"], h["ans"], GOOD, h.get("err", ""))
     st.caption("🔴 = 검증 목록에 없는 조문(직접 확인 필요) · ✓ = 검증된 조문. "
                "Haiku가 🔴가 많거나 문단이 부실하면 품질 리스크가 큰 것.")
 
@@ -4597,12 +4602,12 @@ def render_qna():
                 with ThreadPoolExecutor(max_workers=2) as ex:
                     fs = ex.submit(qna_answer_compare, title, core, sel, MODEL_CHAT, vr)
                     fh = ex.submit(qna_answer_compare, title, core, sel, MODEL_INSIGHT, vr)
-                    s_ans, s_it, s_ot = fs.result()
-                    h_ans, h_it, h_ot = fh.result()
+                    s_ans, s_it, s_ot, s_err = fs.result()
+                    h_ans, h_it, h_ot, h_err = fh.result()
             st.session_state["qna_cmp_res"] = {
                 "title": title, "cat": sel,
-                "s": {"ans": s_ans, "it": s_it, "ot": s_ot, "krw": _qna_cost_krw("sonnet", s_it, s_ot)},
-                "h": {"ans": h_ans, "it": h_it, "ot": h_ot, "krw": _qna_cost_krw("haiku", h_it, h_ot)},
+                "s": {"ans": s_ans, "it": s_it, "ot": s_ot, "err": s_err, "krw": _qna_cost_krw("sonnet", s_it, s_ot)},
+                "h": {"ans": h_ans, "it": h_it, "ot": h_ot, "err": h_err, "krw": _qna_cost_krw("haiku", h_it, h_ot)},
             }
         res = st.session_state.get("qna_cmp_res")
         if res:
