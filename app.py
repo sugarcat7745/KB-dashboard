@@ -4189,8 +4189,11 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
     """답변 생성 프롬프트(system, user) 구성 — 생성·모델비교가 공유(중복 방지)."""
     vtxt = ""
     if verified:
-        vtxt = "\n\n[검증된 법조문 — 반드시 이 목록 안에서만 인용]\n" + "\n".join(
-            f"- {v['law']} {v['article']} ({v.get('summary', '')})" for v in verified)
+        def _vline(v):
+            base = f"- {v['law']} {v['article']} ({v.get('summary', '')})"
+            pen = (v.get("penalty") or "").strip()
+            return base + (f" [법정형: {pen}]" if pen else " [법정형: 미기재 → 구체적 수치 쓰지 말 것]")
+        vtxt = "\n\n[검증된 법조문 — 반드시 이 목록 안에서만 인용]\n" + "\n".join(_vline(v) for v in verified)
     sysp = ("너는 법무법인 KB의 형사전문 변호사 원고를 쓰는 조수다. 홈페이지 QnA 답변 '초안'을 만든다. "
             "독자는 피의자·의뢰인이며, 차분하고 정직한 톤으로 방어 관점에서 쓴다. "
             "반드시 아래 JSON 스키마로만 출력하라(설명 금지):\n"
@@ -4204,7 +4207,10 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
             "핵심 사항에는 반드시 관련 법조문을 인용하라. **법조문은 아래 [검증된 법조문] 목록 안에서만 골라 인용하고, "
             "목록에 없는 조문은 쓰지 마라.** 목록으로 충분히 답할 수 있으면 목록 밖 조문은 절대 쓰지 마라. "
             "정말 목록에 없는 조문이 꼭 필요할 때만 laws 항목 맨 앞에 '★미검증:'을 붙여라(그 외에는 ★를 쓰지 마라). "
-            "형량·개정의 최신 수치는 확정적으로 단정하지 말고 '~에 처해질 수 있습니다'처럼 서술하라. "
+            "[형량 정확성] 법정형·형량의 구체적 수치는 [검증된 법조문] 목록의 '법정형' 값에 있는 것만 그대로 인용하라. "
+            "'법정형: 미기재'이거나 값이 없으면 구체적 숫자를 쓰지 말고 '법정형이 무겁습니다', '실형 가능성이 있습니다'처럼 "
+            "정성적으로만 서술하라. 형량 숫자를 기억·추측으로 지어내지 마라. 어느 경우든 단정하지 말고 "
+            "'~에 처해질 수 있습니다'로 서술하라(개정 가능성 있음). "
             "sections의 'sub'는 스키마의 5개 라벨(핵심 사항·필수 주의 사항·실제 대응 순서·"
             "변호사 선임이 필요한 이유·법무법인 KB의 강점) 그대로만 쓰고, 키워드를 앞에 붙이지 마라. "
             "[작성 품질 기준] 각 문단은 4~5문장의 존댓말 서술형으로 쓰되 다음을 지켜라. "
@@ -4781,8 +4787,11 @@ def render_qna():
 
     with st.expander(f"⚖️ '{cat}'에서 인용 가능한 검증 법조문 {len(qna_laws_for(cat))}개"):
         for v in qna_laws_for(cat):
-            st.markdown(f"- **{v['law']} {v['article']}** — {v.get('summary','')} "
-                        f"[[law.go.kr]({qna_law_url(v['law'], v['article'])})]")
+            pen = (v.get("penalty") or "").strip()
+            pen_txt = (f" · <span style='color:{MUTED}'>법정형: {pen}</span>" if pen
+                       else f" · <span style='color:{FAINT}'>법정형 미기재(수치 인용 안 함)</span>")
+            st.markdown(f"- **{v['law']} {v['article']}** — {v.get('summary','')}{pen_txt} "
+                        f"[[law.go.kr]({qna_law_url(v['law'], v['article'])})]", unsafe_allow_html=True)
 
     if st.toggle("🧩 완성본(게시판 골격) 보기", key=f"qna_prev_{sidx}"):
         prev = (f"<div style='border:1px solid {LINE};border-radius:8px;padding:14px;"
