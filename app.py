@@ -4732,33 +4732,6 @@ def render_qna():
         st.info("위에서 게시판 분류를 클릭하세요.")
         return
 
-    # ── 🧪 모델 비교 테스트 (Sonnet vs Haiku) — 비용·품질 직접 비교 ──
-    with st.expander("🧪 모델 비교 테스트 (Sonnet vs Haiku) — 답변을 Haiku로 바꾸면 얼마나 싸지고 품질은 어떤지"):
-        st.caption("같은 키워드로 두 모델이 만든 답변을 나란히 생성해 비용·토큰·본문·조문 정확도를 비교합니다. "
-                   "1회 테스트는 두 모델 합쳐 약 90~100원(게시와 무관한 시험 생성).")
-        _dflt = (st.session_state.get("qna_reco") or [f"{sel} 초범 처벌"])[0]
-        tkw = st.text_input("테스트 키워드", value=_dflt, key="qna_cmp_kw")
-        if st.button("🔬 두 모델로 생성해 비교", key="qna_cmp_btn"):
-            core = re.sub(r"\s*변호사$", "", str(tkw)).strip()
-            title = f"{tkw} | 처벌과 대응은?"
-            vr = qna_laws_for(sel)
-            with st.spinner("Sonnet · Haiku 동시 생성 중… (30초 내외)"):
-                from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    fs = ex.submit(qna_answer_compare, title, core, sel, MODEL_CHAT, vr)
-                    fh = ex.submit(qna_answer_compare, title, core, sel, MODEL_INSIGHT, vr)
-                    s_ans, s_it, s_ot, s_err = fs.result()
-                    h_ans, h_it, h_ot, h_err = fh.result()
-            st.session_state["qna_cmp_res"] = {
-                "title": title, "cat": sel,
-                "s": {"ans": s_ans, "it": s_it, "ot": s_ot, "err": s_err, "krw": _qna_cost_krw("sonnet", s_it, s_ot)},
-                "h": {"ans": h_ans, "it": h_it, "ot": h_ot, "err": h_err, "krw": _qna_cost_krw("haiku", h_it, h_ot)},
-            }
-        res = st.session_state.get("qna_cmp_res")
-        if res:
-            st.markdown(f"**테스트 제목:** {res['title']}")
-            _qna_render_compare(res)
-
     # ── 2) 키워드 (자동 추천 + 직접 입력) ──
     st.divider()
     st.markdown(f"**2) 키워드** — 분류 <span style='color:{GOLD};font-weight:700'>{sel}</span> "
@@ -4784,8 +4757,12 @@ def render_qna():
 
         # ── 3) 생성 개수 선택 → 질문·답변·완성본 (병렬 생성) ──
         #    비용 = 개수 × (답변 1회). 필요한 만큼만 생성. 생성 즉시 BQ에 저장돼 다시 불러올 수 있음.
-        n_gen = st.columns([1.4, 2.6])[0].slider(
-            "생성 개수", 1, len(cand), min(5, len(cand)))
+        if len(cand) > 1:
+            n_gen = st.columns([1.4, 2.6])[0].slider(
+                "생성 개수", 1, len(cand), min(5, len(cand)))
+        else:
+            n_gen = 1   # 후보 1건이면 슬라이더(min==max) 불가 → 고정
+            st.caption("생성 대상 1건")
         use = cand[:n_gen]
         if st.button(f"✅ 확인 — {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
             _qna_reset_item_flags()   # 새 배치 → 직전 배치의 승인·게시완료 플래그 초기화
