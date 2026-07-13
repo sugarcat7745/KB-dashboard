@@ -3923,15 +3923,111 @@ def qna_law_ref():
         return qna_laws()   # 시트 미설정·장애 시 번들 JSON로 안전 폴백
 
 
+# ── AI 리서치로 추가된 조문(🟨노랑) — BigQuery qna_law_research (앱이 쓰기 가능) ──
+QNA_LAWRSCH_SCHEMA = [("id", "STRING"), ("ts", "TIMESTAMP"), ("user", "STRING"),
+                      ("cat", "STRING"), ("law", "STRING"), ("article", "STRING"),
+                      ("summary", "STRING"), ("penalty", "STRING"), ("source", "STRING")]
+
+
+def _qna_lawrsch_schema():
+    from google.cloud import bigquery
+    return [bigquery.SchemaField(n, t) for n, t in QNA_LAWRSCH_SCHEMA]
+
+
+@st.cache_data(ttl=300)
+def qna_law_researched():
+    """리서치로 추가된 조문 → {분류:[{law,article,summary,penalty,tier:'yellow'}]}. 없으면 {}."""
+    try:
+        df = bq(f"SELECT cat, law, article, summary, penalty "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_law_research`")
+        if df is None or df.empty:
+            return {}
+        out = {}
+        for _, r in df.iterrows():
+            out.setdefault(str(r["cat"]), []).append({
+                "law": str(r["law"]), "article": str(r["article"]),
+                "summary": str(r["summary"] or ""), "penalty": str(r["penalty"] or ""),
+                "tier": "yellow"})
+        return out
+    except Exception:
+        return {}
+
+
+def qna_law_research_save(user, cat, item):
+    """리서치로 찾은 조문 1건을 BigQuery에 추가(🟨노랑). 성공 True."""
+    try:
+        import uuid
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.qna_law_research"
+        client.load_table_from_json([{
+            "id": uuid.uuid4().hex[:12], "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": str(user)[:50], "cat": str(cat)[:40],
+            "law": str(item.get("law", ""))[:120], "article": str(item.get("article", ""))[:40],
+            "summary": str(item.get("summary", ""))[:300], "penalty": str(item.get("penalty", ""))[:300],
+            "source": str(item.get("source", ""))[:400],
+        }], tid, job_config=bigquery.LoadJobConfig(
+            schema=_qna_lawrsch_schema(), write_disposition="WRITE_APPEND",
+            create_disposition="CREATE_IF_NEEDED")).result()
+        try:
+            qna_law_researched.clear()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+def qna_research_article(query, cat):
+    """웹검색으로 조문·현행 법정형을 확인 → {found, law, article, summary, penalty, source}.
+    Anthropic web_search 서버툴 사용(런타임 온라인 검색). 확인 안 되면 found=False."""
+    if not HAS_ANTHROPIC:
+        return {"found": False}
+    try:
+        cli = _qna_client()
+        sysp = ("너는 한국 법령 리서치 조수다. 주어진 '조문 표현'을 web_search로 국가법령정보센터(law.go.kr) 등에서 "
+                "검색해 정확한 법명·조문번호·요약·현행 법정형을 확인하라. 실제로 확인되지 않으면 found=false로 답하라. "
+                "반드시 아래 JSON만 출력(설명 금지):\n"
+                '{"found":true,"law":"정확한 법명","article":"제○조","summary":"한 줄 요약",'
+                '"penalty":"현행 법정형(불명확하면 빈 문자열)","source":"근거 URL"}')
+        usr = f"분류: {cat}\n확인할 조문/주제: {query}"
+        msgs = [{"role": "user", "content": usr}]
+        m = None
+        for _ in range(4):   # 서버툴 pause_turn 대비 재개
+            m = cli.messages.create(
+                model=MODEL_CHAT, max_tokens=1500, system=sysp,
+                tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 4}],
+                messages=msgs)
+            if getattr(m, "stop_reason", "") == "pause_turn":
+                msgs.append({"role": "assistant", "content": m.content})
+                continue
+            break
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+        if not d.get("found") or not d.get("law") or not d.get("article"):
+            return {"found": False}
+        return {"found": True, "law": d["law"], "article": d["article"],
+                "summary": d.get("summary", ""), "penalty": d.get("penalty", ""),
+                "source": d.get("source", "")}
+    except Exception:
+        return {"found": False}
+
+
 def qna_laws_for(cat):
-    """분류에 적용할 검증 조문(공통 + 해당 분류), 중복 제거."""
-    d = qna_law_ref()
+    """분류에 적용할 조문(공통 + 해당 분류) + 리서치 추가분(🟨노랑), 중복 제거(큐레이션 우선)."""
+    base = qna_law_ref()
+    rsch = qna_law_researched()
     out, seen = [], set()
-    for it in list(d.get("공통", [])) + list(d.get(cat, [])):
-        k = (it.get("law"), it.get("article"))
-        if k in seen:
-            continue
-        seen.add(k); out.append(it)
+
+    def _add(items, tier):
+        for it in items:
+            k = (str(it.get("law", "")).replace(" ", ""), str(it.get("article", "")).replace(" ", ""))
+            if not k[0] or k in seen:
+                continue
+            seen.add(k)
+            o = dict(it); o.setdefault("tier", tier); out.append(o)
+    _add(list(base.get("공통", [])) + list(base.get(cat, [])), "green")
+    _add(list(rsch.get(cat, [])), "yellow")
     return out
 
 
@@ -4811,19 +4907,39 @@ def render_qna():
             f"<div style='border:2px solid {RED};border-radius:8px;padding:10px 12px;background:#FDECEC'>"
             f"<b style='color:{RED}'>🔴 미검증 조문 {len(need)}건 — 게시 전 반드시 확인</b>"
             f"<div style='color:{MUTED};font-size:.82rem;margin:.2rem 0 .4rem'>"
-            f"검증 파일(qna_laws.json)에 없거나 ★로 표시된 조문입니다. 법명·조문번호를 확인하고 위 칸을 고치세요."
+            f"검증목록에 없거나 ★로 표시된 조문입니다. 아래 ‘온라인 확인’으로 찾거나, 위 칸에서 다른 조문으로 고치세요."
             f"</div><ul style='margin:0'>"
             + "".join(f"<li style='color:{RED}'>{l}</li>" for l in need)
             + "</ul></div>", unsafe_allow_html=True)
+        if st.button(f"🔬 미검증 조문 {len(need)}건 온라인 확인 후 추가", key=f"qna_rsch_{sidx}"):
+            _u = st.session_state.get("auth_user", "admin")
+            added, failed = 0, []
+            with st.spinner("법령 검색 중… (조문당 10초 내외)"):
+                for l in need:
+                    r = qna_research_article(l, cat)
+                    if r.get("found") and qna_law_research_save(_u, cat, r):
+                        added += 1
+                    else:
+                        failed.append(l)
+            if added:
+                st.success(f"{added}건을 찾아 🟨노랑(검수 권장)으로 추가했습니다 — 검증목록·배지에 반영됩니다.")
+            if failed:
+                st.warning("온라인에서 확인하지 못한 조문: " + ", ".join(failed)
+                           + " → 위 칸에서 **정성 서술로 바꾸거나 다른 조문으로 교체**하세요.")
+            st.rerun()
     if okl:
-        lis = "".join(
-            f"<li style='color:{MUTED}'>{l} &nbsp;·&nbsp;"
-            f"<a href='{qna_law_url(h['law'], h['article'])}' style='color:{GOLD}'>law.go.kr 확인</a></li>"
-            for l, h in okl)
+        lis = ""
+        for l, h in okl:
+            ylw = h.get("tier") == "yellow"
+            mk, col = ("🟨", "#B7791F") if ylw else ("✓", MUTED)
+            tag = " <span style='font-size:.72rem'>(AI 리서치 · 검수 권장)</span>" if ylw else ""
+            lis += (f"<li style='color:{col}'>{mk} {l}{tag} &nbsp;·&nbsp;"
+                    f"<a href='{qna_law_url(h['law'], h['article'])}' style='color:{GOLD}'>law.go.kr 확인</a></li>")
         st.markdown(
             f"<div style='border:1px solid {LINE};border-radius:8px;padding:8px 12px;margin-top:6px'>"
-            f"<b style='color:{OKC}'>✓ 검증된 조문 {len(okl)}건</b>"
-            f"<div style='color:{MUTED};font-size:.8rem'>조문 번호는 검증 파일과 일치. 형량·최신 개정은 링크에서 확인하세요.</div>"
+            f"<b style='color:{OKC}'>검증된 조문 {len(okl)}건</b> "
+            f"<span style='color:{FAINT};font-size:.78rem'>(🟨노랑 = AI 리서치로 추가, 검수 권장)</span>"
+            f"<div style='color:{MUTED};font-size:.8rem'>형량·최신 개정은 링크에서 확인하세요.</div>"
             f"<ul style='margin:0'>{lis}</ul></div>", unsafe_allow_html=True)
     if not laws:
         st.info("인용 법조문이 없습니다 — 위 칸에 근거 조문을 추가하세요.")
