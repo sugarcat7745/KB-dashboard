@@ -4732,39 +4732,37 @@ def render_qna():
         st.info("위에서 게시판 분류를 클릭하세요.")
         return
 
-    # ── 2) 키워드 (자동 추천 + 직접 입력) ──
+    # ── 2) 키워드 (직접 입력 + 추천 개수 선택) ──
     st.divider()
     st.markdown(f"**2) 키워드** — 분류 <span style='color:{GOLD};font-weight:700'>{sel}</span> "
-                "· 자동 추천(모자란 주제 + 실수요) + 직접 입력", unsafe_allow_html=True)
+                "· 직접 쓸 키워드 + 원하는 만큼 추천받기", unsafe_allow_html=True)
     _qna_reload_ui(sel)   # 이전에 만든 원고 다시 불러오기 (BQ 저장분 복원)
-    if st.button("🔄 키워드 10개 추천 / 새로고침", key="qna_reco_btn"):
+
+    man_txt = st.text_area("✍️ 직접 쓸 키워드 (줄당 1개, 선택)",
+                           key="qna_manual_kw", height=92, placeholder="예)\n민원자 폭행\n공무집행방해 초범")
+    manual = [x.strip() for x in man_txt.splitlines() if x.strip()]
+    rc1, rc2 = st.columns([1.1, 2.9])
+    n_reco = rc1.number_input("🎯 추천받을 개수", min_value=0, max_value=10, value=5, step=1, key="qna_reco_n")
+    if rc2.button("🔄 추천 받기 / 새로고침", key="qna_reco_btn"):
         _qna_reset_item_flags()
         with st.spinner("추천 중…"):
-            st.session_state["qna_reco"] = qna_reco_keywords(sel, corpus, qna_demand())
+            st.session_state["qna_reco"] = (
+                qna_reco_keywords(sel, corpus, qna_demand(), n=int(n_reco)) if int(n_reco) > 0 else [])
             st.session_state.pop("qna_full", None)
     reco = st.session_state.get("qna_reco", [])
-    # 직접 키워드 추가 — 밀고 싶은 주제(예: 보이스피싱)를 직접 넣어 생성. 추천과 합쳐짐(직접 입력 우선).
-    man_txt = st.text_area("✍️ 직접 쓸 키워드 (줄당 1개, 선택) — 추천보다 앞에 배치돼 함께 생성됩니다",
-                           key="qna_manual_kw", height=78, placeholder="예)\n보이스피싱 초범\n몸캠피싱 대응")
-    manual = [x.strip() for x in man_txt.splitlines() if x.strip()]
     cand = manual + [r for r in reco if r not in manual]   # 직접 입력 우선, 중복 제거
     _has_full = (st.session_state.get("qna_full") or {}).get("cat") == sel
     if cand:
+        # ── 3) 생성 대상 = 직접 + 추천 전부 (개수는 위에서 이미 정함). 생성 즉시 BQ 저장. ──
         tag = lambda k: (f"<b style='color:{GOLD}'>`{k}`</b>" if k in manual else f"`{k}`")
-        st.markdown("생성 대상 " + "  ·  ".join(tag(k) for k in cand)
-                    + (f"　<span style='color:{FAINT};font-size:12px'>(파랑=직접 입력)</span>" if manual else ""),
+        st.markdown(f"**생성 대상 {len(cand)}개** "
+                    f"<span style='color:{MUTED};font-size:13px'>(직접 {len(manual)} + 추천 {len(cand) - len(manual)})</span><br>"
+                    + "  ·  ".join(tag(k) for k in cand)
+                    + (f"　<span style='color:{FAINT};font-size:12px'>· 파랑=직접 입력</span>" if manual else ""),
                     unsafe_allow_html=True)
-
-        # ── 3) 생성 개수 선택 → 질문·답변·완성본 (병렬 생성) ──
-        #    비용 = 개수 × (답변 1회). 필요한 만큼만 생성. 생성 즉시 BQ에 저장돼 다시 불러올 수 있음.
-        if len(cand) > 1:
-            n_gen = st.columns([1.4, 2.6])[0].slider(
-                "생성 개수", 1, len(cand), min(5, len(cand)))
-        else:
-            n_gen = 1   # 후보 1건이면 슬라이더(min==max) 불가 → 고정
-            st.caption("생성 대상 1건")
-        use = cand[:n_gen]
-        if st.button(f"✅ 확인 — {n_gen}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
+        st.caption(f"이 {len(cand)}개를 그대로 생성합니다. 개수를 바꾸려면 직접 키워드나 위 ‘추천받을 개수’를 조정하세요.")
+        use = cand
+        if st.button(f"✅ {len(cand)}개 질문·답변·완성본 생성", key="qna_make", type="primary"):
             _qna_reset_item_flags()   # 새 배치 → 직전 배치의 승인·게시완료 플래그 초기화
             from concurrent.futures import ThreadPoolExecutor
             try:
@@ -4787,7 +4785,7 @@ def render_qna():
                 st.warning(f"{len(use)}개 중 {len(use) - len(ok)}개는 생성에 실패했습니다. "
                            "‘확인’을 한 번 더 누르면 재시도합니다.")
     elif not _has_full:
-        st.info("‘키워드 10개 추천’을 누르거나, 위에 직접 키워드를 입력하면 원고를 생성할 수 있어요. "
+        st.info("직접 키워드를 입력하거나, ‘추천 받기’를 눌러 키워드를 채운 뒤 생성하세요. "
                 "이전에 만든 원고가 있으면 위 ‘📂 저장된 원고 불러오기’로 되살릴 수 있어요.")
         return
 
