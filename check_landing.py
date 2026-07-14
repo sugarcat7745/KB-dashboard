@@ -92,37 +92,61 @@ def naver_landing_urls():
         print("  [네이버] 캠페인 조회 실패:", str(e)[:200])
         return out
     print(f"  [네이버] 캠페인 {len(camps)}개")
+    # 진단 카운터 — 왜 URL이 0인지 로그로 원인 파악 (첫 실행 후 필드 경로 보정용)
+    n_grp = n_ad = n_ext = 0
+    errs = {}          # 엔드포인트별 첫 오류 샘플
+    ad_keys = set()    # 소재 객체의 상위 키(값 아님) — URL이 어디 있는지 힌트
+
+    def _err(tag, e):
+        errs.setdefault(tag, str(e)[:140])
+
     for c in camps:
         cid = c.get("nccCampaignId")
         cname = c.get("name", "")
         # 캠페인 단위 확장소재
         try:
-            for ex in _nget(f"/ncc/ad-extensions?ownerId={cid}"):
+            exts = _nget(f"/ncc/ad-extensions?ownerId={cid}")
+            n_ext += len(exts)
+            for ex in exts:
                 for u in _urls_from(ex):
                     out.append(("확장소재", f"{cname}", u))
-        except Exception:
-            pass
+        except Exception as e:
+            _err("ext(campaign)", e)
         # 광고그룹 → 소재 · 그룹 확장소재
         try:
             grps = _nget(f"/ncc/adgroups?nccCampaignId={cid}")
-        except Exception:
+        except Exception as e:
+            _err("adgroups", e)
             grps = []
+        n_grp += len(grps)
         for g in grps:
             gid = g.get("nccAdgroupId")
             gname = g.get("name", "")
             try:
-                for ad in _nget(f"/ncc/ads?nccAdgroupId={gid}"):
-                    for u in _urls_from(ad.get("ad", ad)):
+                ads = _nget(f"/ncc/ads?nccAdgroupId={gid}")
+                n_ad += len(ads)
+                for ad in ads:
+                    if isinstance(ad, dict):
+                        ad_keys.update(ad.keys())
+                    # 소재 객체 전체를 재귀 탐색(pc/mobile final, 브랜드검색 등 구조 차이 대응)
+                    for u in _urls_from(ad):
                         out.append(("소재", f"{cname}/{gname}", u))
-            except Exception:
-                pass
+            except Exception as e:
+                _err("ads", e)
             try:
-                for ex in _nget(f"/ncc/ad-extensions?ownerId={gid}"):
+                exts = _nget(f"/ncc/ad-extensions?ownerId={gid}")
+                n_ext += len(exts)
+                for ex in exts:
                     for u in _urls_from(ex):
                         out.append(("확장소재", f"{cname}/{gname}", u))
-            except Exception:
-                pass
+            except Exception as e:
+                _err("ext(adgroup)", e)
             time.sleep(0.05)
+    print(f"  [네이버] 광고그룹 {n_grp} · 소재 {n_ad} · 확장소재 {n_ext} · 원본URL {len(out)}건")
+    if ad_keys:
+        print(f"  [네이버] 소재 객체 키: {sorted(ad_keys)}")
+    if errs:
+        print(f"  [네이버] 오류 샘플: {errs}")
     return out
 
 
@@ -219,17 +243,21 @@ def main():
 
     # 제외 호스트 필터 + 중복 제거
     seen, uniq = set(), []
+    raw = {}; skipped = {}   # 매체별 원본/제외 카운트(네이버가 0인지 필터로 사라진 건지 구분)
     for media, stype, sname, url in items:
+        raw[media] = raw.get(media, 0) + 1
         if not url.startswith("http"):
             continue
         h = _host(url)
         if any(s in h for s in SKIP_HOST):
+            skipped[media] = skipped.get(media, 0) + 1
             continue
         key = (media, url)
         if key in seen:
             continue
         seen.add(key)
         uniq.append((media, stype, sname, url))
+    print(f"매체별 원본 URL: {raw or '없음'} · 제외(추적/광고서버): {skipped or '없음'}")
     print(f"\n=== 점검 대상 {len(uniq)}개 URL ===")
     if not uniq:
         print("⚠️ 추출된 랜딩 URL이 없습니다(추출 로직/권한 확인). 실패로는 처리하지 않음.")
