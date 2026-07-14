@@ -1,0 +1,23 @@
+name: admin-probe
+
+# 관리자(/adm/) 접근이 GCP 고정 IP(프록시)에서 허용됐는지 점검용. 수동 실행 전용.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: /adm/ 접근 점검 (프록시 경유)
+        env:
+          PX: ${{ secrets.MOBON_PROXY }}
+        run: |
+          echo "프록시 경유 나가는 IP(=34.171.14.1이어야):"
+          curl -s -x "$PX" --max-time 25 https://api.ipify.org; echo
+          echo "--- /adm/visit_list.php 접근 ---"
+          curl -s -x "$PX" --max-time 25 -o /tmp/a.html \
+            -w "HTTP %{http_code}\n" \
+            "https://www.lawfirmkb.com/adm/visit_list.php?fr_date=2026-07-14&to_date=2026-07-14&page=1"
+          echo "→ 403=아직 미허용 / 200·302=허용됨"
+          echo "--- 응답 앞부분 ---"
+          head -c 300 /tmp/a.html; echo
