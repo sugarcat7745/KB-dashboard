@@ -149,7 +149,15 @@ def naver_landing_urls():
                         out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
             except Exception as e:
                 _err("ads", e)
-            if ctp == "BRAND_SEARCH":   # 브랜드검색: 광고그룹별 추출 URL 낱낱이 기록
+            if ctp == "BRAND_SEARCH":
+                # 브랜드검색 랜딩은 소재(/ncc/ads)엔 썸네일뿐 → 광고그룹 상세의 비즈채널
+                # (pcChannelKey 등)에 실제 랜딩 URL이 있음. adgroup 상세에서 추출해 점검한다.
+                try:
+                    detail = _nget(f"/ncc/adgroups/{gid}")
+                    for u in _urls_from(detail):
+                        out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
+                except Exception as e:
+                    _err("brand-adgroup-detail", e)
                 uniq_u = list(dict.fromkeys(g_urls))
                 brand_lines.append(f"    · {cname} / {gname}: {len(uniq_u)}URL {uniq_u[:5]}")
             try:
@@ -168,7 +176,7 @@ def naver_landing_urls():
     if special_camps:
         print(f"  [네이버] 비(非)파워링크 캠페인: {special_camps}")
     if brand_lines:
-        print("  [네이버] 브랜드검색 광고그룹별 추출 URL:")
+        print("  [네이버] 브랜드검색 광고그룹별 추출 URL(비즈채널 랜딩 포함):")
         for ln in brand_lines:
             print(ln)
     if ad_keys:
