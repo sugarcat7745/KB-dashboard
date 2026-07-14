@@ -27,9 +27,10 @@ UA = {"User-Agent": "Mozilla/5.0 (compatible; KB-LandingCheck/1.0)"}
 
 # 정상 페이지에 흔히 있는 문구(있으면 가점 · 없으면 '확인요' 메모만, 실패로는 안 봄)
 EXPECT = ["법무법인", "lawfirmkb", "변호사", "kb"]
-# 명백한 오류 문구(있으면 실패)
+# 명백한 오류 문구(화면에 보이는 텍스트에 있으면 실패). ⚠️ <script>/<style> 안은 제외해서 검사한다
+# — 예: 문의폼 JS의 "An error has occurred..." 같은 코드 문구가 정상 페이지를 오탐시키는 것을 방지.
 ERR_TXT = ["페이지를 찾을 수 없", "not found", "404 error", "요청하신 페이지",
-           "점검 중", "서비스 점검", "존재하지 않는", "삭제된 게시물", "error has occurred"]
+           "점검 중", "서비스 점검", "존재하지 않는", "삭제된 게시물"]
 # 점검 제외 호스트(추적·광고서버·이미지·소셜 — 랜딩이 아님)
 SKIP_HOST = ("naver.com", "naver.net", "pstatic.net", "google.com", "googleadservices",
              "doubleclick", "gstatic", "googlesyndication", "googleusercontent", "adcr.",
@@ -108,11 +109,15 @@ def naver_landing_urls():
     def _bump(d, k, n=1):
         d[k] = d.get(k, 0) + n
 
+    brand_lines, special_camps = [], []   # 진단: 브랜드검색 상세 · 비(非)파워링크 캠페인 목록
+
     for c in camps:
         cid = c.get("nccCampaignId")
         cname = c.get("name", "")
         ctp = c.get("campaignTp", "?")   # 예: WEB_SITE(파워링크), BRAND_SEARCH(브랜드검색) 등
         _bump(tp_camp, ctp)
+        if ctp != "WEB_SITE":
+            special_camps.append(f"{cname}[{ctp}]")
         # 캠페인 단위 확장소재
         try:
             exts = _nget(f"/ncc/ad-extensions?ownerId={cid}")
@@ -132,6 +137,7 @@ def naver_landing_urls():
         for g in grps:
             gid = g.get("nccAdgroupId")
             gname = g.get("name", "")
+            g_urls = []
             try:
                 ads = _nget(f"/ncc/ads?nccAdgroupId={gid}")
                 n_ad += len(ads); _bump(tp_ad, ctp, len(ads))
@@ -140,9 +146,12 @@ def naver_landing_urls():
                         ad_keys.update(ad.keys())
                     # 소재 객체 전체를 재귀 탐색(pc/mobile final, 브랜드검색 등 구조 차이 대응)
                     for u in _urls_from(ad):
-                        out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp)
+                        out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
             except Exception as e:
                 _err("ads", e)
+            if ctp == "BRAND_SEARCH":   # 브랜드검색: 광고그룹별 추출 URL 낱낱이 기록
+                uniq_u = list(dict.fromkeys(g_urls))
+                brand_lines.append(f"    · {cname} / {gname}: {len(uniq_u)}URL {uniq_u[:5]}")
             try:
                 exts = _nget(f"/ncc/ad-extensions?ownerId={gid}")
                 n_ext += len(exts)
@@ -156,6 +165,12 @@ def naver_landing_urls():
     print(f"  [네이버] 캠페인유형별 캠페인수: {tp_camp}")
     print(f"  [네이버] 캠페인유형별 소재수: {tp_ad}")
     print(f"  [네이버] 캠페인유형별 추출URL: {tp_url}")
+    if special_camps:
+        print(f"  [네이버] 비(非)파워링크 캠페인: {special_camps}")
+    if brand_lines:
+        print("  [네이버] 브랜드검색 광고그룹별 추출 URL:")
+        for ln in brand_lines:
+            print(ln)
     if ad_keys:
         print(f"  [네이버] 소재 객체 키: {sorted(ad_keys)}")
     if errs:
@@ -210,16 +225,18 @@ def check_url(url):
     try:
         r = requests.get(url, headers=UA, timeout=20, allow_redirects=True)
         status = r.status_code
-        text = (r.text or "")[:30000].lower()
-        err = next((t for t in ERR_TXT if t in text), "")
-        has_expect = any(e in text for e in EXPECT)
+        raw = (r.text or "")
+        # 오류문구 검사는 '화면에 보이는' 텍스트로만 — <script>/<style> 코드 내용 제외(오탐 방지)
+        visible = re.sub(r'(?is)<(script|style)[^>]*>.*?</\1>', ' ', raw)[:30000].lower()
+        err = next((t for t in ERR_TXT if t in visible), "")
+        has_expect = any(e in raw.lower() for e in EXPECT)
         ms = int(r.elapsed.total_seconds() * 1000)
-        ok = (status == 200) and (not err) and (len(text) > 500)
+        ok = (status == 200) and (not err) and (len(raw) > 500)
         if status != 200:
             note = f"HTTP {status}"
         elif err:
             note = f"오류문구:{err}"
-        elif len(text) <= 500:
+        elif len(raw) <= 500:
             note = "빈 페이지 의심"
         elif not has_expect:
             note = "정상(기대문구 없음·확인권장)"
