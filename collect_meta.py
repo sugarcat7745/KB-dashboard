@@ -35,7 +35,7 @@ def fetch_meta(token, act, since, until):
     """광고계정 일별 성과(비용·노출·클릭) — level=account, time_increment=1. 페이지네이션 처리."""
     url = f"{GRAPH}/{act}/insights"
     params = {
-        "fields": "spend,impressions,clicks",
+        "fields": "spend,impressions,clicks,actions",
         "level": "account",
         "time_increment": 1,
         "time_range": json.dumps({"since": since, "until": until}),
@@ -49,13 +49,18 @@ def fetch_meta(token, act, since, until):
         if "error" in j:
             raise RuntimeError(f"메타 API 오류: {j['error'].get('message', j['error'])}")
         for d in j.get("data", []):
+            # 전환 = 픽셀 커스텀 전환(offsite_conversion.custom.*) 합. KB는 폼전환 등을 이걸로 집계.
+            conv = 0
+            for a in d.get("actions", []):
+                if str(a.get("action_type", "")).startswith("offsite_conversion"):
+                    conv += int(float(a.get("value", 0) or 0))
             rows.append({
                 "date": pd.to_datetime(d["date_start"]),
                 "media": MEDIA,
                 "cost": float(d.get("spend", 0) or 0),          # 메타 spend = 계정통화(KRW) 원단위
                 "impressions": int(float(d.get("impressions", 0) or 0)),
                 "clicks": int(float(d.get("clicks", 0) or 0)),
-                "conversions": 0,
+                "conversions": conv,
             })
         nxt = j.get("paging", {}).get("next")
         if not nxt:
