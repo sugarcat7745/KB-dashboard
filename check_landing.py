@@ -109,7 +109,7 @@ def naver_landing_urls():
     def _bump(d, k, n=1):
         d[k] = d.get(k, 0) + n
 
-    brand_lines, special_camps = [], []   # 진단: 브랜드검색 상세 · 비(非)파워링크 캠페인 목록
+    brand_lines, special_camps, brand_raw = [], [], []   # 진단: 브랜드검색 상세 · 비파워링크 목록 · 소재 원본구조
 
     for c in camps:
         cid = c.get("nccCampaignId")
@@ -144,6 +144,8 @@ def naver_landing_urls():
                 for ad in ads:
                     if isinstance(ad, dict):
                         ad_keys.update(ad.keys())
+                    if ctp == "BRAND_SEARCH" and not brand_raw and isinstance(ad, dict):
+                        brand_raw.append(json.dumps(ad, ensure_ascii=False))   # 랜딩 필드 위치 파악용
                     # 소재 객체 전체를 재귀 탐색(pc/mobile final, 브랜드검색 등 구조 차이 대응)
                     for u in _urls_from(ad):
                         out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
@@ -171,6 +173,8 @@ def naver_landing_urls():
         print("  [네이버] 브랜드검색 광고그룹별 추출 URL:")
         for ln in brand_lines:
             print(ln)
+    if brand_raw:
+        print(f"  [네이버] 브랜드검색 소재 원본(랜딩 필드 확인용): {brand_raw[0][:1800]}")
     if ad_keys:
         print(f"  [네이버] 소재 객체 키: {sorted(ad_keys)}")
     if errs:
@@ -208,14 +212,31 @@ def google_landing_urls():
                 out.append(("소재", f"{r.campaign.name}/{r.ad_group.name}", str(u)))
     except Exception as e:
         print("  [구글] 소재 조회 실패:", str(e)[:200])
-    # 확장소재(asset) final URLs — best effort
-    try:
-        q = "SELECT asset.final_urls, asset.type FROM asset WHERE asset.type = 'SITELINK'"
-        for r in ga.search(customer_id=cid, query=q):
-            for u in r.asset.final_urls:
-                out.append(("확장소재", "sitelink", str(u)))
-    except Exception as e:
-        print("  [구글] 확장소재 조회 생략:", str(e)[:120])
+    # 확장소재(사이트링크) — ⚠️ 라이브러리의 모든 asset이 아니라 '실제 연결·활성(ENABLED)'된
+    #   사이트링크만. (FROM asset 로 긁으면 캠페인에서 제거해도 자산이 남아 옛 URL이 계속 잡힘)
+    #   계정/캠페인/광고그룹 3단계 연결을 모두 확인.
+    link_qs = [
+        ("customer_asset",
+         "SELECT asset.final_urls FROM customer_asset "
+         "WHERE customer_asset.field_type = 'SITELINK' AND customer_asset.status = 'ENABLED'"),
+        ("campaign_asset",
+         "SELECT asset.final_urls, campaign.name FROM campaign_asset "
+         "WHERE campaign_asset.field_type = 'SITELINK' AND campaign_asset.status = 'ENABLED'"),
+        ("ad_group_asset",
+         "SELECT asset.final_urls, campaign.name FROM ad_group_asset "
+         "WHERE ad_group_asset.field_type = 'SITELINK' AND ad_group_asset.status = 'ENABLED'"),
+    ]
+    seen_sl = set()
+    for lvl, q in link_qs:
+        try:
+            for r in ga.search(customer_id=cid, query=q):
+                cname = getattr(getattr(r, "campaign", None), "name", "") or "sitelink"
+                for u in r.asset.final_urls:
+                    if str(u) not in seen_sl:
+                        seen_sl.add(str(u))
+                        out.append(("확장소재", cname, str(u)))
+        except Exception as e:
+            print(f"  [구글] 사이트링크({lvl}) 조회 생략:", str(e)[:120])
     print(f"  [구글] URL {len(out)}건 추출")
     return out
 
