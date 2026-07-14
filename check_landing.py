@@ -285,7 +285,8 @@ def manual_landing_urls():
         for line in src.splitlines():
             s = line.split("#", 1)[0].strip()
             if s.startswith("http"):
-                out.append(("브랜드검색", "수동등록", s))
+                # 대시보드에서 브랜드검색 캠페인(00.브검) 아래 '수동등록' 그룹으로 묶이도록
+                out.append(("브랜드검색", "00.브검/수동등록", s))
     try:
         if os.path.exists("brand_landings.txt"):
             with open("brand_landings.txt", encoding="utf-8") as f:
