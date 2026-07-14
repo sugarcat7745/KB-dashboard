@@ -1,9 +1,11 @@
 name: collect-mobon
 
 # 모비온(MOBON) 광고 일별 성과를 매일 수집 → BigQuery(ad_etc, media='모비온').
+# ⚠️ 모비온 API는 '고정 공인 IP 화이트리스트'만 허용 → GitHub Actions(가변 IP)는 리포트 403.
+#    고정 IP(GCP egress/프록시) 확보 + 모비온 등록 완료 전까지 스케줄 비활성(수동 실행만).
 on:
-  schedule:
-    - cron: "10 20 * * *"     # UTC 20:10 = KST 05:10 (메타 04:40 뒤, ad_etc 순차 쓰기)
+  # schedule:
+  #   - cron: "10 20 * * *"   # UTC 20:10 = KST 05:10 — 고정 IP 준비되면 활성화
   workflow_dispatch: {}
 
 concurrency:
