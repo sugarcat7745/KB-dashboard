@@ -845,22 +845,63 @@ def render_landing_status():
         medias = [m for m in ["네이버", "구글"] if m in set(df["media"])]
         fails = int((~df["ok"]).sum())
         total = len(df)
-        dot = "🟢" if fails == 0 else "🔴"
-        try:
-            last = pd.to_datetime(df["ts"].max()) + pd.Timedelta(hours=9)   # UTC→KST
-            when = last.strftime("%m/%d %H:%M")
-        except Exception:
-            when = "-"
 
-        seg = []
+        # ── 점검 신선도(마지막 점검이 얼마나 됐나) ──
+        mins = None
+        try:
+            ts_utc = pd.to_datetime(df["ts"].max())
+            now_utc = pd.Timestamp.utcnow().tz_localize(None)
+            mins = max(0, int((now_utc - ts_utc).total_seconds() // 60))
+        except Exception:
+            mins = None
+        if mins is None:
+            rel = "점검 시각 미상"
+        elif mins < 1:
+            rel = "방금 점검"
+        elif mins < 60:
+            rel = f"{mins}분 전 점검"
+        elif mins < 1440:
+            rel = f"{mins // 60}시간 전 점검"
+        else:
+            rel = f"{mins // 1440}일 전 점검"
+        stale = (mins is not None and mins > 90)   # 매시 점검인데 90분 초과면 감시 지연
+
+        # ── 실시간 감시 배너(항상 표시) ──
+        if fails == 0:
+            dotc, bg, bd, word = GOOD, "#F0FBF6", "#CDEEE0", "정상"
+        else:
+            dotc, bg, bd, word = CORAL, "#FFF5F5", "#F5C6C6", f"오류 {fails}곳"
+        chips = ""
         for m in medias:
             sub = df[df["media"] == m]
             o = int(sub["ok"].sum()); t = len(sub)
-            seg.append(f"{m} {o}/{t}" + ("" if o == t else " 🔴"))
-        status = "정상" if fails == 0 else f"오류 {fails}건"
-        label = f"{dot} 광고 랜딩 {status}   ·   " + "   ".join(seg) + f"   ·   점검 {when}"
+            cc = GOOD if o == t else CORAL
+            chips += (f'<span style="display:inline-flex;align-items:center;gap:5px;background:#fff;'
+                      f'border:1px solid {LINE};border-radius:999px;padding:3px 10px;margin-right:6px;'
+                      f'font-size:12.5px;color:{TXT};white-space:nowrap;">'
+                      f'<span style="width:7px;height:7px;border-radius:50%;background:{cc};"></span>'
+                      f'{m} {o}/{t}</span>')
+        stale_chip = ""
+        if stale:
+            stale_chip = ('<span style="background:#FFF4E6;border:1px solid #FFD8A8;color:#E8590C;'
+                          'border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;'
+                          'white-space:nowrap;">⚠️ 점검 지연</span>')
+        banner = (
+            f'<style>@keyframes kblive{{0%{{box-shadow:0 0 0 0 {dotc}66}}'
+            f'70%{{box-shadow:0 0 0 7px {dotc}00}}100%{{box-shadow:0 0 0 0 {dotc}00}}}}</style>'
+            f'<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;background:{bg};'
+            f'border:1px solid {bd};border-radius:12px;padding:10px 16px;margin:2px 0 8px;">'
+            f'<span style="width:11px;height:11px;border-radius:50%;background:{dotc};'
+            f'animation:kblive 1.8s infinite;flex:none;"></span>'
+            f'<span style="font-weight:800;font-size:15px;color:{TXT};letter-spacing:-.2px;'
+            f'margin-right:4px;">광고 랜딩 {word}</span>'
+            f'{chips}'
+            f'<span style="margin-left:auto;font-size:12.5px;color:{"#E8590C" if stale else MUTED};'
+            f'white-space:nowrap;">🕐 {rel} · {total}개 감시</span>'
+            f'{stale_chip}</div>')
+        st.markdown(banner, unsafe_allow_html=True)
 
-        with st.expander(label, expanded=False):
+        with st.expander("랜딩 자세히 보기 — 문제 · 전체 탐색", expanded=False):
             # ── ① 문제 우선 ──
             if fails > 0:
                 bad = df[~df["ok"]].copy()
