@@ -272,7 +272,7 @@ def main():
         rows.append({"ts": ts, "media": media, "source_type": stype, "source_name": sname,
                      "url": url, "status": c["status"], "final_url": c["final"],
                      "ms": c["ms"], "ok": c["ok"], "note": c["note"]})
-        print(f"  {'✅' if c['ok'] else '❌'} [{media}/{stype}] {url} → {c['status']} · {c['note']}")
+        print(f"  {'✅' if c['ok'] else '❌'} [{media}/{stype}] {sname} · {url} → {c['status']} · {c['note']}")
         if not c["ok"]:
             fails.append(f"[{media}/{stype}] {sname}\n    {url}\n    → {c['note']}")
         time.sleep(0.1)
