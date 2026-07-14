@@ -785,6 +785,150 @@ def load_budget(day=None):
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=1800)
+def load_landing():
+    """광고 랜딩 자동점검(landing_check)의 최신 스냅샷 한 배치.
+       매시 GitHub Actions가 네이버·구글 소재·확장소재 랜딩을 점검해 적재한다."""
+    try:
+        tbl = f"`{BQ_PROJECT}.{BQ_DATASET}.landing_check`"
+        sql = f"""
+        SELECT media, source_type, source_name, url, status, final_url, ms, ok, note, ts
+        FROM {tbl}
+        WHERE ts = (SELECT MAX(ts) FROM {tbl})
+        ORDER BY media, source_name, url
+        """
+        return bq(sql)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _land_bool(v):
+    """BQ BOOL이 문자열로 와도 안전하게 참/거짓 판정."""
+    if isinstance(v, str):
+        return v.strip().lower() in ("true", "t", "1", "yes")
+    return bool(v)
+
+
+def _land_disp(url):
+    """표시용 URL: 스킴·쿼리 제거 + 한글 경로(%..) 디코드. href엔 원본을 그대로 쓴다."""
+    base = str(url).split("?")[0].replace("https://", "").replace("http://", "")
+    try:
+        from urllib.parse import unquote
+        return unquote(base)
+    except Exception:
+        return base
+
+
+def render_landing_status():
+    """탭 위에 항상 떠 있는 '광고 랜딩 실시간 상태' 스트립 + 드릴다운.
+       한 줄 접이식(펼치면): ① 문제 우선(깨진 것 먼저) ② 전체 탐색(매체→캠페인→그룹→소재).
+       탭 밖(모든 탭 위)에서 렌더되므로 예외가 화면을 깨지 않게 통째로 방어한다."""
+    try:
+        df = load_landing()
+        if df is None or df.empty:
+            return
+        df = df.copy()
+        df["ok"] = df["ok"].apply(_land_bool)
+
+        def _camp(s):
+            return s.split("/")[0].strip() if isinstance(s, str) and s else "(기타)"
+
+        def _grp(r):
+            s = r["source_name"]
+            if isinstance(s, str) and "/" in s:
+                return s.split("/", 1)[1].strip()
+            return r["source_type"] or "기타"
+
+        df["camp"] = df["source_name"].apply(_camp)
+        df["grp"] = df.apply(_grp, axis=1)
+
+        medias = [m for m in ["네이버", "구글"] if m in set(df["media"])]
+        fails = int((~df["ok"]).sum())
+        total = len(df)
+        dot = "🟢" if fails == 0 else "🔴"
+        try:
+            last = pd.to_datetime(df["ts"].max()) + pd.Timedelta(hours=9)   # UTC→KST
+            when = last.strftime("%m/%d %H:%M")
+        except Exception:
+            when = "-"
+
+        seg = []
+        for m in medias:
+            sub = df[df["media"] == m]
+            o = int(sub["ok"].sum()); t = len(sub)
+            seg.append(f"{m} {o}/{t}" + ("" if o == t else " 🔴"))
+        status = "정상" if fails == 0 else f"오류 {fails}건"
+        label = f"{dot} 광고 랜딩 {status}   ·   " + "   ".join(seg) + f"   ·   점검 {when}"
+
+        with st.expander(label, expanded=False):
+            # ── ① 문제 우선 ──
+            if fails > 0:
+                bad = df[~df["ok"]].copy()
+                bad["path"] = bad["url"].apply(lambda u: u.split("?")[0])
+                seen, items = set(), []
+                for _, r in bad.iterrows():
+                    key = (r["media"], r["camp"], r["path"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(r)
+                rows = ""
+                for r in items:
+                    disp = _land_disp(r["path"])
+                    loc = r["camp"] + (f' › {r["grp"]}' if r["grp"] not in (r["source_type"], "기타") else "")
+                    rows += (
+                        f'<div style="margin-top:8px;font-size:13px;line-height:1.5;">'
+                        f'<span style="color:{MUTED};">[{r["media"]}] {loc} · {r["source_type"]}</span><br>'
+                        f'<a href="{r["url"]}" target="_blank" style="color:{TXT};text-decoration:none;'
+                        f'border-bottom:1px solid {LINE};">{disp}</a>'
+                        f'<span style="color:{CORAL};font-weight:700;"> → {r["note"]}</span></div>')
+                st.markdown(
+                    f'<div style="border:1px solid {CORAL};background:#FFF5F5;border-radius:10px;'
+                    f'padding:12px 16px;margin:2px 0 14px;">'
+                    f'<b style="color:{CORAL};font-size:14px;">🔴 지금 고칠 것 {len(items)}곳</b>{rows}</div>',
+                    unsafe_allow_html=True)
+            else:
+                st.markdown(
+                    f'<div style="color:{GOOD};font-weight:600;font-size:14px;margin:2px 0 12px;">'
+                    f'✅ 모든 광고 랜딩 정상 ({total}개 소재)</div>', unsafe_allow_html=True)
+
+            # ── ② 전체 탐색 (매체 → 캠페인 → 그룹 → 소재) ──
+            st.markdown(f'<div style="font-size:13px;font-weight:700;color:{TXT};margin-bottom:4px;">전체 탐색</div>',
+                        unsafe_allow_html=True)
+            m_sel = st.radio("매체", medias, horizontal=True, label_visibility="collapsed", key="land_media")
+            sub = df[df["media"] == m_sel]
+            camp_stats = []
+            for c, g in sub.groupby("camp"):
+                o = int(g["ok"].sum()); t = len(g)
+                camp_stats.append((c, o, t, o < t))
+            camp_stats.sort(key=lambda x: (not x[3], x[0]))   # 문제 캠페인 먼저, 그다음 이름순
+            labels = {}
+            for c, o, t, bad_ in camp_stats:
+                labels[f'{"🔴 " if bad_ else ""}{c}  ({o}/{t})'] = c
+            if labels:
+                sel_lab = st.selectbox("캠페인", list(labels.keys()), key=f"land_camp_{m_sel}")
+                csel = labels.get(sel_lab)
+                cg = sub[sub["camp"] == csel]
+                html = ""
+                for grp, g in sorted(cg.groupby("grp"), key=lambda kv: (bool(kv[1]["ok"].all()), kv[0])):
+                    o = int(g["ok"].sum()); t = len(g)
+                    gdot = "🟢" if o == t else f"🔴 {t-o}"
+                    html += (f'<div style="margin:10px 0 4px;font-weight:600;color:{TXT};">› {grp} '
+                             f'<span style="color:{MUTED};font-weight:400;">{gdot} ({o}/{t})</span></div>')
+                    for _, r in g.iterrows():
+                        disp = _land_disp(r["url"])
+                        emo = "✅" if r["ok"] else "❌"
+                        note = "" if r["ok"] else f'<span style="color:{CORAL};font-weight:700;"> → {r["note"]}</span>'
+                        tag = "" if r["source_type"] == "소재" else f'<span style="color:{FAINT};font-size:11px;">[{r["source_type"]}]</span> '
+                        html += (f'<div style="font-size:12.5px;padding:2px 0 2px 14px;line-height:1.5;">'
+                                 f'{emo} {tag}<a href="{r["url"]}" target="_blank" '
+                                 f'style="color:{MUTED};text-decoration:none;">{disp}</a>{note}</div>')
+                st.markdown(html, unsafe_allow_html=True)
+            st.caption("매시 자동 점검 · 자사 도메인 랜딩만 표시(네이버 내부 링크 제외) · 시각 KST")
+    except Exception:
+        return
+
+
 def load_annual():
     try:
         ws = get_gc().open_by_key(AD_SHEET_ID).worksheet("연간요약")
@@ -5187,6 +5331,7 @@ def main():
     top_labels = ["요약", "광고", "실적", "유입", "변경", "AI"]
     if can_qna:
         top_labels = top_labels + ["QnA"]
+    render_landing_status()   # 모든 탭 위 항상 표시되는 광고 랜딩 실시간 상태 바
     top = st.tabs(top_labels)
 
     def _safe(fn, label):
