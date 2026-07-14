@@ -109,7 +109,7 @@ def naver_landing_urls():
     def _bump(d, k, n=1):
         d[k] = d.get(k, 0) + n
 
-    brand_lines, special_camps, brand_raw = [], [], []   # 진단: 브랜드검색 상세 · 비파워링크 목록 · 소재 원본구조
+    brand_lines, special_camps = [], []   # 진단: 브랜드검색 광고그룹별 추출 URL · 비파워링크 캠페인 목록
 
     for c in camps:
         cid = c.get("nccCampaignId")
@@ -144,8 +144,6 @@ def naver_landing_urls():
                 for ad in ads:
                     if isinstance(ad, dict):
                         ad_keys.update(ad.keys())
-                    if ctp == "BRAND_SEARCH" and not brand_raw and isinstance(ad, dict):
-                        brand_raw.append(json.dumps(ad, ensure_ascii=False))   # 랜딩 필드 위치 파악용
                     # 소재 객체 전체를 재귀 탐색(pc/mobile final, 브랜드검색 등 구조 차이 대응)
                     for u in _urls_from(ad):
                         out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
@@ -173,8 +171,6 @@ def naver_landing_urls():
         print("  [네이버] 브랜드검색 광고그룹별 추출 URL:")
         for ln in brand_lines:
             print(ln)
-    if brand_raw:
-        print(f"  [네이버] 브랜드검색 소재 원본(랜딩 필드 확인용): {brand_raw[0][:1800]}")
     if ad_keys:
         print(f"  [네이버] 소재 객체 키: {sorted(ad_keys)}")
     if errs:
@@ -270,6 +266,32 @@ def check_url(url):
         return {"status": 0, "final": url, "ms": 0, "ok": False, "note": f"요청실패:{str(e)[:80]}"}
 
 
+def manual_landing_urls():
+    """API로 랜딩이 안 나오는 소재(예: 네이버 브랜드검색 — /ncc/ads가 썸네일·소재ID만 주고
+       클릭 랜딩 주소는 안 줌)를 수동 등록해 함께 점검한다.
+       레포의 brand_landings.txt(한 줄에 URL 1개, # 뒤는 주석) + 선택적 BRAND_LANDINGS 환경변수.
+       → (source_type, source_name, url) 리스트. 매체는 호출부에서 '네이버'로 태깅."""
+    out = []
+
+    def _add(src):
+        for line in src.splitlines():
+            s = line.split("#", 1)[0].strip()
+            if s.startswith("http"):
+                out.append(("브랜드검색", "수동등록", s))
+    try:
+        if os.path.exists("brand_landings.txt"):
+            with open("brand_landings.txt", encoding="utf-8") as f:
+                _add(f.read())
+    except Exception as e:
+        print("  [수동] brand_landings.txt 읽기 생략:", str(e)[:120])
+    env = os.environ.get("BRAND_LANDINGS", "")
+    if env:
+        _add(env.replace(",", "\n"))
+    if out:
+        print(f"  [수동] 브랜드검색 등 수동 랜딩 {len(out)}건")
+    return out
+
+
 def save_bq(rows):
     from google.cloud import bigquery
     from google.oauth2 import service_account
@@ -291,6 +313,7 @@ def main():
     print("=== 랜딩 URL 수집 ===")
     items = [("네이버", *t) for t in naver_landing_urls()]
     items += [("구글", *t) for t in google_landing_urls()]
+    items += [("네이버", *t) for t in manual_landing_urls()]   # 브랜드검색 등 수동 등록분
 
     # 제외 호스트 필터 + 중복 제거
     seen, uniq = set(), []
