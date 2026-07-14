@@ -1,0 +1,29 @@
+name: admin-scrape
+
+# 관리자(그누보드 /adm/) 접속로그·게시판 스캔 → 이상 IP 탐지 준비. 수동 실행 전용.
+# 고정 IP 프록시(MOBON_PROXY=34.171.14.1) 경유. 관리자 계정은 Secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "방문로그 조회 일수(기본 7)"
+        required: false
+        default: "7"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 관리자 스캔
+        env:
+          ADMIN_ID:    ${{ secrets.ADMIN_ID }}
+          ADMIN_PW:    ${{ secrets.ADMIN_PW }}
+          MOBON_PROXY: ${{ secrets.MOBON_PROXY }}
+          DAYS:        ${{ inputs.days }}
+        run: python scrape_admin.py
