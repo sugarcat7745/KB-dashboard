@@ -99,20 +99,27 @@ def naver_landing_urls():
     n_grp = n_ad = n_ext = 0
     errs = {}          # 엔드포인트별 첫 오류 샘플
     ad_keys = set()    # 소재 객체의 상위 키(값 아님) — URL이 어디 있는지 힌트
+    # 캠페인 유형(campaignTp)별 커버리지 — 브랜드검색까지 소재·URL이 실제로 잡히는지 확인
+    tp_camp, tp_ad, tp_url = {}, {}, {}
 
     def _err(tag, e):
         errs.setdefault(tag, str(e)[:140])
 
+    def _bump(d, k, n=1):
+        d[k] = d.get(k, 0) + n
+
     for c in camps:
         cid = c.get("nccCampaignId")
         cname = c.get("name", "")
+        ctp = c.get("campaignTp", "?")   # 예: WEB_SITE(파워링크), BRAND_SEARCH(브랜드검색) 등
+        _bump(tp_camp, ctp)
         # 캠페인 단위 확장소재
         try:
             exts = _nget(f"/ncc/ad-extensions?ownerId={cid}")
             n_ext += len(exts)
             for ex in exts:
                 for u in _urls_from(ex):
-                    out.append(("확장소재", f"{cname}", u))
+                    out.append(("확장소재", f"{cname}", u)); _bump(tp_url, ctp)
         except Exception as e:
             _err("ext(campaign)", e)
         # 광고그룹 → 소재 · 그룹 확장소재
@@ -127,13 +134,13 @@ def naver_landing_urls():
             gname = g.get("name", "")
             try:
                 ads = _nget(f"/ncc/ads?nccAdgroupId={gid}")
-                n_ad += len(ads)
+                n_ad += len(ads); _bump(tp_ad, ctp, len(ads))
                 for ad in ads:
                     if isinstance(ad, dict):
                         ad_keys.update(ad.keys())
                     # 소재 객체 전체를 재귀 탐색(pc/mobile final, 브랜드검색 등 구조 차이 대응)
                     for u in _urls_from(ad):
-                        out.append(("소재", f"{cname}/{gname}", u))
+                        out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp)
             except Exception as e:
                 _err("ads", e)
             try:
@@ -141,11 +148,14 @@ def naver_landing_urls():
                 n_ext += len(exts)
                 for ex in exts:
                     for u in _urls_from(ex):
-                        out.append(("확장소재", f"{cname}/{gname}", u))
+                        out.append(("확장소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp)
             except Exception as e:
                 _err("ext(adgroup)", e)
             time.sleep(0.05)
     print(f"  [네이버] 광고그룹 {n_grp} · 소재 {n_ad} · 확장소재 {n_ext} · 원본URL {len(out)}건")
+    print(f"  [네이버] 캠페인유형별 캠페인수: {tp_camp}")
+    print(f"  [네이버] 캠페인유형별 소재수: {tp_ad}")
+    print(f"  [네이버] 캠페인유형별 추출URL: {tp_url}")
     if ad_keys:
         print(f"  [네이버] 소재 객체 키: {sorted(ad_keys)}")
     if errs:
