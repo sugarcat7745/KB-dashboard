@@ -32,6 +32,12 @@ BASE = "https://api-center.mobon.net"
 COLS = ["date", "media", "cost", "impressions", "clicks", "conversions"]
 
 
+# 모비온은 '고정 공인 IP'만 허용 → GitHub(가변 IP)에서는 고정 IP 프록시(GCP VM)를 경유한다.
+# MOBON_PROXY 예: http://user:pass@34.171.14.1:8888 (없으면 직접 호출 = 고정 IP 환경에서 실행 시)
+_P = (os.environ.get("MOBON_PROXY") or "").strip()
+PROXIES = {"http": _P, "https": _P} if _P else None
+
+
 def _accounts():
     raw = (os.environ.get("MOBON_ACCOUNTS") or "").strip()
     if not raw:
@@ -45,7 +51,7 @@ def _accounts():
 def _token(uid, pw, device):
     r = requests.post(f"{BASE}/api/token",
                       params={"userid": uid, "password": pw, "device_name": device},
-                      headers={"Accept": "application/json"}, timeout=30)
+                      headers={"Accept": "application/json"}, proxies=PROXIES, timeout=30)
     j = r.json()
     if j.get("result_code") != 200 or not j.get("data"):
         raise RuntimeError(f"모비온 토큰 실패({uid}): {j.get('result_code')} {j.get('result_msg', '')}")
@@ -55,7 +61,8 @@ def _token(uid, pw, device):
 def _report(tok, s, e):
     r = requests.post(f"{BASE}/api/report/ad/stats",
                       params={"sDate": s, "eDate": e, "groupByType": "days"},
-                      headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"}, timeout=90)
+                      headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"},
+                      proxies=PROXIES, timeout=90)
     j = r.json()
     if j.get("result_code") != 200:
         raise RuntimeError(f"모비온 리포트 실패: {j.get('result_code')} {j.get('result_msg', '')}")

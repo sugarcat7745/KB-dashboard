@@ -26,5 +26,6 @@ jobs:
         env:
           MOBON_ACCOUNTS:    ${{ secrets.MOBON_ACCOUNTS }}
           MOBON_START_DATE:  ${{ secrets.MOBON_START_DATE }}
+          MOBON_PROXY:       ${{ secrets.MOBON_PROXY }}
           GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
         run: python collect_mobon.py
