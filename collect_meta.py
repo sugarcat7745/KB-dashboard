@@ -101,7 +101,8 @@ def load_to_bq(df):
 def main():
     kst = timezone(timedelta(hours=9))
     yday = datetime.now(kst).date() - timedelta(days=1)     # 오늘은 집계 미완 → 어제까지
-    since = os.environ.get("META_START_DATE", "2026-06-01")
+    # ⚠️ 워크플로가 미설정 Secret을 빈 문자열("")로 넘기므로 get의 기본값이 안 먹힌다 → or 로 처리
+    since = (os.environ.get("META_START_DATE") or "").strip() or "2026-06-01"
     until = str(yday)
     token, act = os.environ["META_ACCESS_TOKEN"], _act()
 
