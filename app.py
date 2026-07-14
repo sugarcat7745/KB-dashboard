@@ -1008,8 +1008,9 @@ def load_etc():
     if len(vals) < 2:
         return pd.DataFrame(columns=cols)
     header = [h.strip() for h in vals[0]]
-    # 메타는 ad_etc 자동수집분(collect_meta.py)을 쓰므로 시트에서는 읽지 않는다(중복·수기오류 방지).
-    media_list = ["카카오모먼트", "모비온"]
+    # 메타·모비온은 ad_etc 자동수집분(collect_meta.py·collect_mobon.py)을 쓰므로 시트에서 읽지 않는다.
+    #   카카오모먼트만 아직 시트 수기(공식대행사 API 권한 승인 대기).
+    media_list = ["카카오모먼트"]
     idx = {}
     for i, h in enumerate(header):
         for m in media_list:
