@@ -27,9 +27,10 @@ UA = {"User-Agent": "Mozilla/5.0 (compatible; KB-LandingCheck/1.0)"}
 
 # 정상 페이지에 흔히 있는 문구(있으면 가점 · 없으면 '확인요' 메모만, 실패로는 안 봄)
 EXPECT = ["법무법인", "lawfirmkb", "변호사", "kb"]
-# 명백한 오류 문구(있으면 실패)
+# 명백한 오류 문구(화면에 보이는 텍스트에 있으면 실패). ⚠️ <script>/<style> 안은 제외해서 검사한다
+# — 예: 문의폼 JS의 "An error has occurred..." 같은 코드 문구가 정상 페이지를 오탐시키는 것을 방지.
 ERR_TXT = ["페이지를 찾을 수 없", "not found", "404 error", "요청하신 페이지",
-           "점검 중", "서비스 점검", "존재하지 않는", "삭제된 게시물", "error has occurred"]
+           "점검 중", "서비스 점검", "존재하지 않는", "삭제된 게시물"]
 # 점검 제외 호스트(추적·광고서버·이미지·소셜 — 랜딩이 아님)
 SKIP_HOST = ("naver.com", "naver.net", "pstatic.net", "google.com", "googleadservices",
              "doubleclick", "gstatic", "googlesyndication", "googleusercontent", "adcr.",
@@ -108,11 +109,15 @@ def naver_landing_urls():
     def _bump(d, k, n=1):
         d[k] = d.get(k, 0) + n
 
+    brand_lines, special_camps = [], []   # 진단: 브랜드검색 광고그룹별 추출 URL · 비파워링크 캠페인 목록
+
     for c in camps:
         cid = c.get("nccCampaignId")
         cname = c.get("name", "")
         ctp = c.get("campaignTp", "?")   # 예: WEB_SITE(파워링크), BRAND_SEARCH(브랜드검색) 등
         _bump(tp_camp, ctp)
+        if ctp != "WEB_SITE":
+            special_camps.append(f"{cname}[{ctp}]")
         # 캠페인 단위 확장소재
         try:
             exts = _nget(f"/ncc/ad-extensions?ownerId={cid}")
@@ -132,6 +137,7 @@ def naver_landing_urls():
         for g in grps:
             gid = g.get("nccAdgroupId")
             gname = g.get("name", "")
+            g_urls = []
             try:
                 ads = _nget(f"/ncc/ads?nccAdgroupId={gid}")
                 n_ad += len(ads); _bump(tp_ad, ctp, len(ads))
@@ -140,9 +146,12 @@ def naver_landing_urls():
                         ad_keys.update(ad.keys())
                     # 소재 객체 전체를 재귀 탐색(pc/mobile final, 브랜드검색 등 구조 차이 대응)
                     for u in _urls_from(ad):
-                        out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp)
+                        out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
             except Exception as e:
                 _err("ads", e)
+            if ctp == "BRAND_SEARCH":   # 브랜드검색: 광고그룹별 추출 URL 낱낱이 기록
+                uniq_u = list(dict.fromkeys(g_urls))
+                brand_lines.append(f"    · {cname} / {gname}: {len(uniq_u)}URL {uniq_u[:5]}")
             try:
                 exts = _nget(f"/ncc/ad-extensions?ownerId={gid}")
                 n_ext += len(exts)
@@ -156,6 +165,12 @@ def naver_landing_urls():
     print(f"  [네이버] 캠페인유형별 캠페인수: {tp_camp}")
     print(f"  [네이버] 캠페인유형별 소재수: {tp_ad}")
     print(f"  [네이버] 캠페인유형별 추출URL: {tp_url}")
+    if special_camps:
+        print(f"  [네이버] 비(非)파워링크 캠페인: {special_camps}")
+    if brand_lines:
+        print("  [네이버] 브랜드검색 광고그룹별 추출 URL:")
+        for ln in brand_lines:
+            print(ln)
     if ad_keys:
         print(f"  [네이버] 소재 객체 키: {sorted(ad_keys)}")
     if errs:
@@ -193,14 +208,31 @@ def google_landing_urls():
                 out.append(("소재", f"{r.campaign.name}/{r.ad_group.name}", str(u)))
     except Exception as e:
         print("  [구글] 소재 조회 실패:", str(e)[:200])
-    # 확장소재(asset) final URLs — best effort
-    try:
-        q = "SELECT asset.final_urls, asset.type FROM asset WHERE asset.type = 'SITELINK'"
-        for r in ga.search(customer_id=cid, query=q):
-            for u in r.asset.final_urls:
-                out.append(("확장소재", "sitelink", str(u)))
-    except Exception as e:
-        print("  [구글] 확장소재 조회 생략:", str(e)[:120])
+    # 확장소재(사이트링크) — ⚠️ 라이브러리의 모든 asset이 아니라 '실제 연결·활성(ENABLED)'된
+    #   사이트링크만. (FROM asset 로 긁으면 캠페인에서 제거해도 자산이 남아 옛 URL이 계속 잡힘)
+    #   계정/캠페인/광고그룹 3단계 연결을 모두 확인.
+    link_qs = [
+        ("customer_asset",
+         "SELECT asset.final_urls FROM customer_asset "
+         "WHERE customer_asset.field_type = 'SITELINK' AND customer_asset.status = 'ENABLED'"),
+        ("campaign_asset",
+         "SELECT asset.final_urls, campaign.name FROM campaign_asset "
+         "WHERE campaign_asset.field_type = 'SITELINK' AND campaign_asset.status = 'ENABLED'"),
+        ("ad_group_asset",
+         "SELECT asset.final_urls, campaign.name FROM ad_group_asset "
+         "WHERE ad_group_asset.field_type = 'SITELINK' AND ad_group_asset.status = 'ENABLED'"),
+    ]
+    seen_sl = set()
+    for lvl, q in link_qs:
+        try:
+            for r in ga.search(customer_id=cid, query=q):
+                cname = getattr(getattr(r, "campaign", None), "name", "") or "sitelink"
+                for u in r.asset.final_urls:
+                    if str(u) not in seen_sl:
+                        seen_sl.add(str(u))
+                        out.append(("확장소재", cname, str(u)))
+        except Exception as e:
+            print(f"  [구글] 사이트링크({lvl}) 조회 생략:", str(e)[:120])
     print(f"  [구글] URL {len(out)}건 추출")
     return out
 
@@ -210,16 +242,18 @@ def check_url(url):
     try:
         r = requests.get(url, headers=UA, timeout=20, allow_redirects=True)
         status = r.status_code
-        text = (r.text or "")[:30000].lower()
-        err = next((t for t in ERR_TXT if t in text), "")
-        has_expect = any(e in text for e in EXPECT)
+        raw = (r.text or "")
+        # 오류문구 검사는 '화면에 보이는' 텍스트로만 — <script>/<style> 코드 내용 제외(오탐 방지)
+        visible = re.sub(r'(?is)<(script|style)[^>]*>.*?</\1>', ' ', raw)[:30000].lower()
+        err = next((t for t in ERR_TXT if t in visible), "")
+        has_expect = any(e in raw.lower() for e in EXPECT)
         ms = int(r.elapsed.total_seconds() * 1000)
-        ok = (status == 200) and (not err) and (len(text) > 500)
+        ok = (status == 200) and (not err) and (len(raw) > 500)
         if status != 200:
             note = f"HTTP {status}"
         elif err:
             note = f"오류문구:{err}"
-        elif len(text) <= 500:
+        elif len(raw) <= 500:
             note = "빈 페이지 의심"
         elif not has_expect:
             note = "정상(기대문구 없음·확인권장)"
@@ -230,6 +264,32 @@ def check_url(url):
         return {"status": 0, "final": url, "ms": 20000, "ok": False, "note": "타임아웃"}
     except Exception as e:
         return {"status": 0, "final": url, "ms": 0, "ok": False, "note": f"요청실패:{str(e)[:80]}"}
+
+
+def manual_landing_urls():
+    """API로 랜딩이 안 나오는 소재(예: 네이버 브랜드검색 — /ncc/ads가 썸네일·소재ID만 주고
+       클릭 랜딩 주소는 안 줌)를 수동 등록해 함께 점검한다.
+       레포의 brand_landings.txt(한 줄에 URL 1개, # 뒤는 주석) + 선택적 BRAND_LANDINGS 환경변수.
+       → (source_type, source_name, url) 리스트. 매체는 호출부에서 '네이버'로 태깅."""
+    out = []
+
+    def _add(src):
+        for line in src.splitlines():
+            s = line.split("#", 1)[0].strip()
+            if s.startswith("http"):
+                out.append(("브랜드검색", "수동등록", s))
+    try:
+        if os.path.exists("brand_landings.txt"):
+            with open("brand_landings.txt", encoding="utf-8") as f:
+                _add(f.read())
+    except Exception as e:
+        print("  [수동] brand_landings.txt 읽기 생략:", str(e)[:120])
+    env = os.environ.get("BRAND_LANDINGS", "")
+    if env:
+        _add(env.replace(",", "\n"))
+    if out:
+        print(f"  [수동] 브랜드검색 등 수동 랜딩 {len(out)}건")
+    return out
 
 
 def save_bq(rows):
@@ -253,6 +313,7 @@ def main():
     print("=== 랜딩 URL 수집 ===")
     items = [("네이버", *t) for t in naver_landing_urls()]
     items += [("구글", *t) for t in google_landing_urls()]
+    items += [("네이버", *t) for t in manual_landing_urls()]   # 브랜드검색 등 수동 등록분
 
     # 제외 호스트 필터 + 중복 제거
     seen, uniq = set(), []
