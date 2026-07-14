@@ -31,6 +31,7 @@ COLUMN_MAP = {
     "date": "date", "media": "media", "campaign": "campaign", "adgroup": "adgroup",
     "keyword": "keyword", "impressions": "impressions", "clicks": "clicks",
     "cost": "cost", "cpc": "cpc", "ctr": "ctr", "top_imp_pct": "top_imp_pct",
+    "conversions": "conversions",
 }
 
 # ── 구글 인증 ──────────────────────────────────────────
@@ -57,7 +58,8 @@ def fetch_google(client, start, end):
         "SELECT segments.date, campaign.name, ad_group.name, "
         "ad_group_criterion.keyword.text, "
         "metrics.impressions, metrics.clicks, metrics.cost_micros, "
-        "metrics.average_cpc, metrics.ctr, metrics.top_impression_percentage "
+        "metrics.average_cpc, metrics.ctr, metrics.top_impression_percentage, "
+        "metrics.conversions "
         "FROM keyword_view "
         f"WHERE segments.date BETWEEN '{start}' AND '{end}'"
     )
@@ -77,6 +79,7 @@ def fetch_google(client, start, end):
             "cpc": m.average_cpc / 1_000_000,                  # 원
             "ctr": round(m.ctr * 100, 2),                      # %
             "top_imp_pct": round(m.top_impression_percentage * 100, 2),  # 상단노출비율 %
+            "conversions": int(round(m.conversions)),          # 전환수(기여, 반올림 정수)
         })
     return pd.DataFrame(rows)
 
