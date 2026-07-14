@@ -78,7 +78,10 @@ def _nhdr(method, uri):
 
 
 def _nget(uri):
-    r = requests.get(NBASE + uri, headers=_nhdr("GET", uri), timeout=30)
+    # ⚠️ 네이버 SearchAd 서명은 쿼리스트링을 제외한 '경로'로만 계산해야 함.
+    #    쿼리를 포함해 서명하면 쿼리가 붙은 엔드포인트(/ncc/adgroups?... 등)가 403.
+    path = uri.split("?", 1)[0]
+    r = requests.get(NBASE + uri, headers=_nhdr("GET", path), timeout=30)
     r.raise_for_status()
     return r.json()
 
