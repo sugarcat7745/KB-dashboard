@@ -110,7 +110,6 @@ def naver_landing_urls():
         d[k] = d.get(k, 0) + n
 
     brand_lines, special_camps = [], []   # 진단: 브랜드검색 광고그룹별 추출 URL · 비파워링크 캠페인 목록
-    brand_probe = {}   # 브랜드검색 랜딩 우회 탐색용: 첫 브랜드 소재의 id들
 
     for c in camps:
         cid = c.get("nccCampaignId")
@@ -145,15 +144,20 @@ def naver_landing_urls():
                 for ad in ads:
                     if isinstance(ad, dict):
                         ad_keys.update(ad.keys())
-                    if ctp == "BRAND_SEARCH" and not brand_probe and isinstance(ad, dict):
-                        brand_probe = {"cid": cid, "gid": gid, "adId": ad.get("nccAdId"),
-                                       "dittoId": (ad.get("ad") or {}).get("dittoId")}
                     # 소재 객체 전체를 재귀 탐색(pc/mobile final, 브랜드검색 등 구조 차이 대응)
                     for u in _urls_from(ad):
                         out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
             except Exception as e:
                 _err("ads", e)
-            if ctp == "BRAND_SEARCH":   # 브랜드검색: 광고그룹별 추출 URL 낱낱이 기록
+            if ctp == "BRAND_SEARCH":
+                # 브랜드검색 랜딩은 소재(/ncc/ads)엔 썸네일뿐 → 광고그룹 상세의 비즈채널
+                # (pcChannelKey 등)에 실제 랜딩 URL이 있음. adgroup 상세에서 추출해 점검한다.
+                try:
+                    detail = _nget(f"/ncc/adgroups/{gid}")
+                    for u in _urls_from(detail):
+                        out.append(("소재", f"{cname}/{gname}", u)); _bump(tp_url, ctp); g_urls.append(u)
+                except Exception as e:
+                    _err("brand-adgroup-detail", e)
                 uniq_u = list(dict.fromkeys(g_urls))
                 brand_lines.append(f"    · {cname} / {gname}: {len(uniq_u)}URL {uniq_u[:5]}")
             try:
@@ -172,28 +176,9 @@ def naver_landing_urls():
     if special_camps:
         print(f"  [네이버] 비(非)파워링크 캠페인: {special_camps}")
     if brand_lines:
-        print("  [네이버] 브랜드검색 광고그룹별 추출 URL:")
+        print("  [네이버] 브랜드검색 광고그룹별 추출 URL(비즈채널 랜딩 포함):")
         for ln in brand_lines:
             print(ln)
-    # ── 브랜드검색 랜딩 '우회 탐색' 진단: 랜딩 URL이 어느 엔드포인트에 있는지 실측 ──
-    if brand_probe:
-        bp = brand_probe
-        probes = [
-            ("adgroup 상세", f"/ncc/adgroups/{bp.get('gid')}"),
-            ("ad 상세", f"/ncc/ads/{bp.get('adId')}"),
-            ("ad-extensions(campaign)", f"/ncc/ad-extensions?ownerId={bp.get('cid')}"),
-            ("ad-extensions(adgroup)", f"/ncc/ad-extensions?ownerId={bp.get('gid')}"),
-            ("ad-extensions(ad)", f"/ncc/ad-extensions?ownerId={bp.get('adId')}"),
-        ]
-        print(f"  [브랜드검색 probe] dittoId={bp.get('dittoId')}")
-        for tag, uri in probes:
-            try:
-                data = _nget(uri)
-                blob = json.dumps(data, ensure_ascii=False)
-                hits = sorted(u for u in _urls_from(data) if "gfa.naver" not in u and "pstatic" not in u)
-                print(f"  [브랜드검색 probe] {tag}: 비이미지URL={hits[:6]} · 원문={blob[:600]}")
-            except Exception as e:
-                print(f"  [브랜드검색 probe] {tag} 실패: {str(e)[:150]}")
     if ad_keys:
         print(f"  [네이버] 소재 객체 키: {sorted(ad_keys)}")
     if errs:
