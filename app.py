@@ -1547,7 +1547,10 @@ def fig_theme(fig, h=240):
     return fig
 
 def thin_xticks(fig, labels, target=10):
-    """x축 라벨이 너무 많으면 일정 간격만 표시 (한글 라벨 유지)."""
+    """x축 라벨 정리. ⚠️ 'YY.MM'(예:25.08)처럼 숫자로 보이는 라벨을 Plotly가 '수치축'으로
+       오해하면 2025월들이 25.xx, 2026월들이 26.xx로 뭉치고 사이에 큰 빈 구간이 생겨 그래프가
+       망가진다 → 항상 범주(category)축으로 고정해 균등 간격을 보장. 라벨이 많으면 일정 간격만 표시."""
+    fig.update_xaxes(type="category")
     n = len(labels)
     if n <= target:
         return fig
@@ -2907,14 +2910,16 @@ def render_inquiries():
     thin_xticks(fig, bym["_lbl"])
     st.plotly_chart(fig_theme(fig, 300), use_container_width=True, config={"displayModeBar": False})
 
-    # 일자별 문의·수임 추이 (선택 기간)
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 일자별</div>', unsafe_allow_html=True)
-    byd = inqf.groupby(inqf["date"].dt.date).agg(문의=("name", "size"), 수임=("contracted", "sum")).reset_index()
+    # 일자별 문의·상담·수임 추이 (선택 기간)
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-calendar-day"></i> 일자별 문의 · 상담 · 수임</div>', unsafe_allow_html=True)
+    byd = inqf.groupby(inqf["date"].dt.date).agg(
+        문의=("name", "size"), 상담=("consulted", "sum"), 수임=("contracted", "sum")).reset_index()
     byd["_lbl"] = pd.to_datetime(byd["date"]).apply(lambda d: f"{d.month}/{d.day}")
     fd = go.Figure()
-    fd.add_trace(go.Bar(x=byd["_lbl"], y=byd["문의"], name="문의", marker_color=GOLD))
+    fd.add_trace(go.Bar(x=byd["_lbl"], y=byd["문의"], name="문의", marker_color="rgba(49,130,246,0.22)"))
+    fd.add_trace(go.Scatter(x=byd["_lbl"], y=byd["상담"], name="상담", mode="lines+markers", line=dict(color=GOLD_B, width=2)))
     fd.add_trace(go.Scatter(x=byd["_lbl"], y=byd["수임"], name="수임", mode="lines+markers", line=dict(color=TEAL, width=2), yaxis="y2"))
-    fd.update_layout(yaxis=dict(title="문의"), yaxis2=dict(overlaying="y", side="right", showgrid=False, title="수임", color=TEAL),
+    fd.update_layout(yaxis=dict(title="문의·상담"), yaxis2=dict(overlaying="y", side="right", showgrid=False, title="수임", color=TEAL),
                      legend=dict(orientation="h", y=1.14))
     thin_xticks(fd, byd["_lbl"])
     st.plotly_chart(fig_theme(fd, 280), use_container_width=True, config={"displayModeBar": False})
