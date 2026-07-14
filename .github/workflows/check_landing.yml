@@ -1,0 +1,47 @@
+name: check-landing
+
+# 광고 소재·확장소재의 랜딩 URL을 매시 점검. 오류(404 등) 발견 시 워크플로 실패
+# → GitHub이 소유자에게 실패 메일 발송 + 상세 이슈 생성.
+on:
+  schedule:
+    - cron: "5 * * * *"     # 매시 :05 (KST 무관, UTC 매시)
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests google-ads google-cloud-bigquery google-auth
+      - name: 랜딩 점검
+        env:
+          NAVER_API_KEY:           ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:        ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID:       ${{ secrets.NAVER_CUSTOMER_ID }}
+          GOOGLE_DEVELOPER_TOKEN:  ${{ secrets.GOOGLE_DEVELOPER_TOKEN }}
+          GOOGLE_CLIENT_ID:        ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET:    ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN:    ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GOOGLE_LOGIN_CUSTOMER_ID: ${{ secrets.GOOGLE_LOGIN_CUSTOMER_ID }}
+          GOOGLE_CUSTOMER_ID:      ${{ secrets.GOOGLE_CUSTOMER_ID }}
+          GCP_SA_JSON:             ${{ secrets.GCP_SA_JSON }}
+        run: python check_landing.py
+
+      # 오류 발견(스텝 실패) 시 상세 이슈 생성. 실패 메일은 GitHub이 자동 발송.
+      - name: 오류 시 알림 이슈
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DETAIL="$(cat landing_failures.txt 2>/dev/null || echo '상세는 실행 로그 참조')"
+          gh issue create \
+            --title "🔴 랜딩 오류 감지 ($(date -u +'%F %H:%MZ'))" \
+            --body "$(printf '광고 랜딩 점검에서 오류가 발견되었습니다.\n\n%s\n\n로그: %s/%s/actions/runs/%s' "$DETAIL" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}")" \
+            || echo "이슈 생성 건너뜀"
