@@ -1,11 +1,16 @@
 name: check-landing
 
 # 광고 소재·확장소재의 랜딩 URL을 매시 점검. 오류(404 등) 발견 시 워크플로 실패
-# → GitHub이 소유자에게 실패 메일 발송 + 상세 이슈 생성.
+# → 지정 메일(ojk@nanomkt.co.kr)로 알림 + GitHub 자동 메일/이슈.
 on:
   schedule:
     - cron: "5 * * * *"     # 매시 :05 (KST 무관, UTC 매시)
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mail_test:
+        description: "메일 발송 테스트 (체크하면 지금 테스트 메일 1통 보냄)"
+        type: boolean
+        default: false
 
 jobs:
   check:
@@ -34,7 +39,55 @@ jobs:
           GCP_SA_JSON:             ${{ secrets.GCP_SA_JSON }}
         run: python check_landing.py
 
-      # 오류 발견(스텝 실패) 시 상세 이슈 생성. 실패 메일은 GitHub이 자동 발송.
+      # ── 오류 시 지정 메일 발송 (받는사람: ojk@nanomkt.co.kr) ──
+      # 보내는 계정 SMTP 정보는 GitHub Secrets에 등록: MAIL_USERNAME, MAIL_PASSWORD
+      # (선택) MAIL_SERVER, MAIL_PORT — 미설정 시 Gmail(smtp.gmail.com:465) 기본.
+      - name: 실패 상세 준비
+        if: failure() && github.event_name == 'schedule'
+        run: |
+          {
+            echo 'FAILDETAIL<<__EOF__'
+            cat landing_failures.txt 2>/dev/null || echo '상세는 실행 로그를 확인하세요.'
+            echo '__EOF__'
+          } >> "$GITHUB_ENV"
+
+      - name: 오류 시 메일 발송
+        if: failure() && github.event_name == 'schedule'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER || 'smtp.gmail.com' }}
+          server_port: ${{ secrets.MAIL_PORT || '465' }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: KB 랜딩점검 <${{ secrets.MAIL_USERNAME }}>
+          to: ojk@nanomkt.co.kr
+          subject: "🔴 [KB] 광고 랜딩 오류 감지"
+          body: |
+            광고 랜딩 자동점검에서 오류가 발견되었습니다.
+
+            ${{ env.FAILDETAIL }}
+
+            실행 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      # 수동 실행 시 'mail_test' 체크하면 즉시 테스트 메일 1통 (설정 확인용)
+      - name: 메일 발송 테스트
+        if: github.event_name == 'workflow_dispatch' && inputs.mail_test == true
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.MAIL_SERVER || 'smtp.gmail.com' }}
+          server_port: ${{ secrets.MAIL_PORT || '465' }}
+          secure: true
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          from: KB 랜딩점검 <${{ secrets.MAIL_USERNAME }}>
+          to: ojk@nanomkt.co.kr
+          subject: "✅ [KB] 랜딩점검 메일 테스트"
+          body: |
+            이 메일이 도착하면 랜딩 오류 알림 메일 설정이 정상입니다.
+            실제 오류가 생기면 이 주소(ojk@nanomkt.co.kr)로 알림이 갑니다.
+
+      # 오류 발견 시 상세 이슈도 생성(메일과 별개 기록).
       - name: 오류 시 알림 이슈
         if: failure() && github.event_name == 'schedule'
         env:
