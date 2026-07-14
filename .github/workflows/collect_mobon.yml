@@ -1,0 +1,28 @@
+name: collect-mobon
+
+# 모비온(MOBON) 광고 일별 성과를 매일 수집 → BigQuery(ad_etc, media='모비온').
+on:
+  schedule:
+    - cron: "10 20 * * *"     # UTC 20:10 = KST 05:10 (메타 04:40 뒤, ad_etc 순차 쓰기)
+  workflow_dispatch: {}
+
+concurrency:
+  group: bq-ad-etc-write       # ad_etc 동시 쓰기 방지(메타와 공유)
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests pandas google-cloud-bigquery google-auth pyarrow db-dtypes
+      - name: 모비온 수집
+        env:
+          MOBON_ACCOUNTS:    ${{ secrets.MOBON_ACCOUNTS }}
+          MOBON_START_DATE:  ${{ secrets.MOBON_START_DATE }}
+          GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
+        run: python collect_mobon.py
