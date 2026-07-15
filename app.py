@@ -4533,10 +4533,11 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
     return sysp, usr
 
 
-def qna_gen_answer(title, keyword, cat, client=None, verified=None, model=MODEL_CHAT):
+def qna_gen_answer(title, keyword, cat, client=None, verified=None, model=MODEL_INSIGHT):
     """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환.
     실패 시 None(병렬 호출 대비 st.* 미사용). client 지정 시 그 클라이언트 사용.
-    verified: 인용 허용 검증 조문 목록(이 밖은 쓰지 말라고 지시). model: 기본 Sonnet."""
+    verified: 인용 허용 검증 조문 목록(이 밖은 쓰지 말라고 지시).
+    model: 기본 Haiku(원고 답변 생성=하이쿠, 비용 1/3). 소넷을 쓰려면 명시적으로 넘김."""
     if not HAS_ANTHROPIC:
         return None
     cli = client or _qna_client()
