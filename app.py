@@ -4588,6 +4588,7 @@ def qna_make_one(keyword, cat, existing, client=None):
         qs = qna_gen_questions(keyword, cat, existing, n=3, client=client)
         title = next((q for q in qs if "|" in q), None) or f"{keyword} 변호사 | 처벌과 대응은?"
         ans = qna_gen_answer(title, core, cat, client=client, verified=qna_laws_for(cat))
+        # 답변 생성 모델은 qna_gen_answer 기본값(하이쿠)을 따름 — 비용 1/3
         if not ans:
             return None
         body = qna_build_html(core, ans.get("intro3", []),
@@ -4600,6 +4601,54 @@ def qna_make_one(keyword, cat, existing, client=None):
 QNA_REGIONS = ["서울", "부산", "인천", "대구", "대전", "광주", "울산", "수원", "성남",
                "용인", "고양", "창원", "청주", "천안", "전주", "김해", "포항", "제주",
                "의정부", "안산", "평택", "화성", "부천"]
+
+
+def qna_localize_region(item, region, client=None):
+    """검수 완료한 기본 원고 → 지역판 1개(가벼운 하이쿠 각색).
+    본문 섹션·법조문·형량은 그대로 재사용하고, 도입 3줄만 지역 맥락으로 다시 쓰고
+    첫 섹션 앞에 지역 안내 문단 1개를 덧붙인다 → 중복글 아닌 고유글.
+    AI 실패 시 '복제+지역명'으로 폴백(업로드는 절대 안 끊기게)."""
+    core = str(item.get("core", "")).strip()
+    cat = item.get("cat", "")
+    ans = item.get("ans", {}) or {}
+    rkw = f"{region} {core}".strip()                       # 예: '서울 폭행'
+    base_title = str(item.get("title", "")).strip()
+    rtitle = base_title if base_title.startswith(region) else f"{region} {base_title}".strip()
+
+    def _pack(new_ans):
+        secs = new_ans.get("sections", [])
+        return {"kw": rkw, "cat": cat, "core": rkw, "title": rtitle, "ans": new_ans,
+                "region": region,
+                "body": qna_build_html(rkw, new_ans.get("intro3", []),
+                                       [(s["sub"], s["paras"]) for s in secs])}
+
+    try:
+        deep = json.loads(json.dumps(ans, ensure_ascii=False))   # 원본 보존용 깊은 복사
+    except Exception:
+        deep = dict(ans)
+    try:
+        cli = client or _qna_client()
+        base_intro = "\n".join(str(x) for x in ans.get("intro3", []))
+        sysp = (f"너는 법무법인 KB(형사전문)의 지역 특화 QnA 편집자다. '{core}' 기본 원고를 "
+                f"'{region}' 지역 독자용으로 자연스럽게 손본다. 규칙:\n"
+                f"1) 사실·법조문·형량·처벌 내용은 절대 바꾸거나 새로 만들지 말 것.\n"
+                f"2) 도입 3줄을 {region} 지역 맥락(지역 접근성·상담 편의 등 일반적 표현)으로 다시 쓸 것.\n"
+                f"3) 본문 맨 앞에 넣을 2~3문장짜리 '{region} 지역 안내' 문단 1개를 만들 것(구체 관할·주소 지어내지 말 것).\n"
+                f'JSON만 출력: {{"intro3":["..","..",".."],"region_para":".."}}')
+        m = cli.messages.create(model=MODEL_INSIGHT, max_tokens=700, system=sysp,
+              messages=[{"role": "user", "content": f"[기본 도입 3줄]\n{base_intro}"}])
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+        ni = [str(x).strip() for x in d.get("intro3", []) if str(x).strip()][:3]
+        if ni:
+            deep["intro3"] = ni
+        rp = str(d.get("region_para", "")).strip()
+        secs = deep.get("sections", [])
+        if rp and secs:
+            secs[0]["paras"] = [rp] + list(secs[0].get("paras", []))
+        return _pack(deep)
+    except Exception:
+        return _pack(deep)   # 폴백: 지역명만 붙인 복제(도입·본문은 원본 그대로)
 
 
 def qna_reco_keywords(cat, corpus, demand, n=10):
@@ -4768,7 +4817,7 @@ def _qna_reset_item_flags():
         st.session_state.pop(k, None)
 
 
-def _qna_append_post(wid, g):
+def _qna_append_post(wid, g, region=""):
     """게시 직후 qna_posts에 1행 추가 → 분류별 글 수·중복대조에 즉시 반영.
     (다음 qna-sync가 라이브에서 전체 재수집해 WRITE_TRUNCATE로 재조정하므로 중복 없음)."""
     try:
@@ -4782,7 +4831,7 @@ def _qna_append_post(wid, g):
             ("base_kw", "STRING"), ("title", "STRING"),
             ("has5", "INTEGER"), ("body_len", "INTEGER"))]
         client.load_table_from_json([{
-            "wr_id": str(wid), "cat": g.get("cat", ""), "region": "",
+            "wr_id": str(wid), "cat": g.get("cat", ""), "region": str(region or ""),
             "base_kw": g.get("core", ""), "title": g.get("title", ""),
             "has5": int(len(secs) >= 5), "body_len": int(blen),
         }], tid, job_config=bigquery.LoadJobConfig(
@@ -5131,31 +5180,65 @@ def render_qna():
                 if st.session_state.get(f"qna_confirm_{i}") and not st.session_state.get(f"qna_posted_{i}")]
     if not cid:
         st.info("업로드하려면 Streamlit Secrets에 [qna_board] id/pw 를 추가하세요.")
-    if st.button(f"✅ 승인한 {len(approved)}개 일괄 업로드", key="qna_batch_up",
+    # 지역판 자동 동반 업로드 — 승인 글마다 지역 각색본 1개를 검수 없이 함께 게시(23개 도시 순환)
+    region_on = st.checkbox(
+        "🏙️ 승인 글마다 지역판 1개도 자동 생성·업로드 (하이쿠 각색 · 검수 없이 바로 게시)",
+        value=True, key="qna_region_auto",
+        help="기본글을 올릴 때 같은 내용을 지역 맥락으로 살짝 각색한 글을 도시별로 하나씩 자동 게시합니다. "
+             "본문·법조문은 그대로 재사용하고 도입부만 지역용으로 바뀝니다.")
+    up_label = (f"✅ 승인한 {len(approved)}개 + 지역판 {len(approved)}개 일괄 업로드"
+                if region_on else f"✅ 승인한 {len(approved)}개 일괄 업로드")
+    if st.button(up_label, key="qna_batch_up",
                  disabled=not (approved and cid), type="primary"):
-        prog = st.progress(0.0); done = 0
+        try:
+            _rcli = _qna_client()
+        except Exception:
+            _rcli = None
+        import random
+        rstart = random.randint(0, len(QNA_REGIONS) - 1)   # 배치마다 다른 도시부터 순환
+
+        def _up_one(g, region=""):
+            """원고 1개 업로드 + 사후처리(qna_posts 반영·변경로그). 성공 시 wr_id."""
+            _secs = [(s["sub"], s["paras"]) for s in g["ans"].get("sections", [])]
+            _detail = qna_detail_html(g["core"], _secs)
+            _summary = qna_summary_html(g["ans"].get("intro3", []))
+            _wid = qna_upload(g["title"], g["cat"], _detail, _summary,
+                              [g["core"], g["cat"], "형사전문변호사"])
+            _qna_append_post(_wid, g, region)
+            try:
+                _tag = f"지역={region} · " if region else ""
+                log_change(st.session_state.get("auth_user", "admin"), "QnA",
+                           f"QnA 게시: {g['title']}", f"{_tag}wr_id={_wid} 분류={g['cat']}",
+                           "지역 자동 생성" if region else "실수요 기반 원고")
+            except Exception:
+                pass
+            return _wid
+
+        prog = st.progress(0.0); done = 0; rdone = 0; rfail = 0
         for n, i in enumerate(approved):
             g = items[i]
             try:
-                _secs = [(s["sub"], s["paras"]) for s in g["ans"].get("sections", [])]
-                _detail = qna_detail_html(g["core"], _secs)
-                _summary = qna_summary_html(g["ans"].get("intro3", []))
-                wid = qna_upload(g["title"], g["cat"], _detail, _summary,
-                                 [g["core"], g["cat"], "형사전문변호사"])
+                wid = _up_one(g)
                 st.session_state[f"qna_posted_{i}"] = wid; done += 1
                 if g.get("_did"):   # 저장분을 게시완료 표시 → 다시 불러와도 중복 업로드 방지
                     qna_mark_posted(g["_did"], wid)
-                _qna_append_post(wid, g)   # qna_posts에 즉시 반영 → 분류별 글 수 갱신
-                try:
-                    log_change(st.session_state.get("auth_user", "admin"), "QnA",
-                               f"QnA 게시: {g['title']}", f"wr_id={wid} 분류={g['cat']}", "실수요 기반 원고")
-                except Exception:
-                    pass
+                # ── 지역판 1개 자동 동반 업로드(검수 없이) ──
+                if region_on:
+                    region = QNA_REGIONS[(rstart + n) % len(QNA_REGIONS)]
+                    try:
+                        twin = qna_localize_region(g, region, client=_rcli)
+                        _up_one(twin, region=region); rdone += 1
+                    except Exception as re_:
+                        rfail += 1
+                        st.warning(f"[{region} {g['core']}] 지역판 업로드 실패: {re_}")
             except Exception as e:
                 st.error(f"[{g['title']}] 업로드 실패: {e}")
             prog.progress((n + 1) / len(approved))
-        st.success(f"{done}/{len(approved)}개 업로드 완료")
-        if done:
+        msg = f"기본 {done}/{len(approved)}개 업로드 완료"
+        if region_on:
+            msg += f" · 지역판 {rdone}개 게시" + (f"(실패 {rfail})" if rfail else "")
+        st.success(msg)
+        if done or rdone:
             try:
                 qna_corpus.clear()   # 게시글 수(분류 버튼)·중복대조 즉시 갱신
             except Exception:
