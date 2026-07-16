@@ -85,14 +85,27 @@ def bq_client():
 
 def main():
     check_env()
+    from datetime import datetime, timezone
+    bq = bq_client()
+    table_id = f"{PROJECT}.{DATASET}.{TABLE}"
+
+    # 자가 게이트: 마스터는 '주 1회' 목적(키워드명 거의 안 바뀜·15만개라 무거움).
+    # collect_all이 하루 여러 번 부르므로, 최근 N일 내 갱신됐으면 무거운 API 호출 없이 스킵.
+    gate_days = float(os.environ.get("MASTER_MIN_AGE_DAYS", "6"))
+    try:
+        t = bq.get_table(table_id)
+        if t.modified:
+            age_h = (datetime.now(timezone.utc) - t.modified).total_seconds() / 3600
+            if age_h < gate_days * 24:
+                print(f"스킵: {TABLE} 최근 {age_h:.0f}h 전 갱신(주1회 목적·{gate_days}일 게이트)"); return
+    except Exception:
+        pass   # 테이블 없음 등 → 계속 진행(최초 적재)
+
     print("[마스터 수집] 네이버 키워드 마스터 요청…")
     df = fetch_master()
     if df.empty:
         print("수집 데이터 없음 — 적재 건너뜀"); return
     print(f"  → 키워드 {len(df):,}개")
-
-    bq = bq_client()
-    table_id = f"{PROJECT}.{DATASET}.{TABLE}"
 
     # 안전장치: 잘린 다운로드로 마스터가 훼손되는 것 방지.
     # 새로 파싱한 df 건수가 기존 테이블 건수의 70% 미만이면 적재 중단(실패).

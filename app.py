@@ -537,7 +537,7 @@ def run_safe_sql(sql):
               "merge", "grant", "revoke", " call ", ";", "--", "/*"]
     if any(b in low for b in banned):
         return {"error": "읽기 전용 SELECT만 허용됩니다 (변경·주석·다중문 금지)."}
-    other = ["login_log", "ai_usage_log", "ad_budget", "users", "naver_kw_master", "ad_etc"]
+    other = ["login_log", "ai_usage_log", "ad_budget", "users", "naver_kw_master", "ad_etc", "inq"]
     if any(t in low for t in other):
         return {"error": "이 도구는 ad_keyword 테이블만 조회할 수 있습니다."}
     if "ad_keyword" not in low:
@@ -1152,7 +1152,8 @@ def load_inquiries():
     try:
         df = bq_fresh(f"SELECT date, name, keyword, category, consulted, contracted, valid, ym "
                       f"FROM `{BQ_PROJECT}.{BQ_DATASET}.inq`")
-        if df is not None and not df.empty:
+        # 비었거나 비정상적으로 적은 행(부분/오염)이면 신뢰하지 않고 시트로 폴백
+        if df is not None and not df.empty and len(df) >= 100:
             df = df.copy()
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
             for c in ("consulted", "contracted", "valid"):
@@ -1170,61 +1171,14 @@ def load_inquiries():
 
 @st.cache_data(ttl=600)
 def _load_inquiries_from_sheet():
-    """통합문의 마스터 시트 '단일 소스'에서 직접 집계(동기화 원본·폴백).
-       · 문의 = 내용(이름/검색키워드) 있는 줄
-       · 상담 = M(상담)열에 텍스트 있으면 1건   · 수임 = N(수임완료및입금)열에 텍스트 있으면 1건
-       · 캠페인 = K(카테고리)열  · 날짜 = B(문의일자, 캐리포워드)
-       ※ 캠페인 성과(축1) 전용 — 사건 매출(축2)은 계약시트(load_contracts) 별도."""
-    def pdate(s):
-        s = "".join(ch for ch in str(s) if ch.isdigit())
-        return pd.to_datetime(s, format="%y%m%d", errors="coerce") if len(s) == 6 else pd.NaT
+    """통합문의 시트 직접 집계(동기화 원본·폴백). 정규화는 inq_norm.normalize_inq 공유
+       → sync_inq(BQ 적재)와 '같은 코드'라 BQ 경로/시트 경로가 어긋나지 않는다."""
+    from inq_norm import normalize_inq
     try:
-        ws = get_gc().open_by_key(INQ_SHEET_ID).worksheet("통합문의")
-        vals = ws.get_all_values()
+        vals = get_gc().open_by_key(INQ_SHEET_ID).worksheet("통합문의").get_all_values()
     except Exception:
         return pd.DataFrame()
-    if not vals:
-        return pd.DataFrame()
-    raw = pd.DataFrame(vals)
-    hr = next((i for i in range(min(10, len(raw)))
-               if any("문의일자" in str(v) for v in raw.iloc[i])), None)
-    if hr is None:
-        return pd.DataFrame()
-    hdr = [str(v).strip() for v in raw.iloc[hr].tolist()]
-    def fidx(*keys, exclude=()):
-        return next((j for j, v in enumerate(hdr)
-                     if any(k in str(v) for k in keys) and not any(e in str(v) for e in exclude)), None)
-    di = fidx("문의일자")
-    ni = fidx("이름")
-    ki = fidx("검색키워드", "키워드")
-    ti = fidx("카테고리")
-    si = fidx("상담", exclude=("상담사무소", "상담시간", "상담료"))
-    wi = fidx("수임", exclude=("전환", "수임당"))
-    body = raw.iloc[hr+1:].reset_index(drop=True)
-    def col(i):
-        return body[i].astype(str).str.strip() if (i is not None and i in body.columns) else pd.Series([""] * len(body))
-    def nonempty(i):  # 지정 컬럼에 텍스트가 있으면 True (형님 기준: M·N열 텍스트 = 1건)
-        if i is None or i not in body.columns:
-            return pd.Series([False] * len(body))
-        s = body[i].astype(str).str.strip()
-        return (s != "") & (s.str.lower() != "nan")
-    d = pd.DataFrame({
-        "date": body[di].apply(pdate) if (di is not None and di in body.columns) else pd.NaT,
-        "name": col(ni),
-        "keyword": col(ki),
-        "category": col(ti) if (ti is not None and ti in body.columns) else "",
-        "consulted": nonempty(si),
-        "contracted": nonempty(wi),
-        "valid": nonempty(si) | nonempty(wi),   # 유효문의 = 상담 또는 수임으로 이어진 문의
-    })
-    d["date"] = d["date"].ffill()
-    has_content = (d["name"].str.strip() != "") | (d["keyword"].str.strip() != "")
-    d = d[d["date"].notna() & has_content].reset_index(drop=True)
-    d["category"] = d["category"].replace(CAT_ALIAS)   # 학폭→학교폭력 등 표기 통일(캠페인과 동일 별칭)
-    d["category"] = d["category"].replace({"": "(미분류)", "nan": "(미분류)"})
-    d["_ym"] = d["date"].dt.to_period("M").astype(str)
-    d["name"] = d["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
-    return d
+    return normalize_inq(vals)
 
 _CONTRACT_COLS = ["_amt", "_paid", "_unpaid", "_date", "_y", "_m", "_ym",
                   "_type_raw", "_inflow", "_is_new", "_name", "_type", "_cid", "_split_n"]
