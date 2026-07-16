@@ -22,6 +22,12 @@ jobs:
         run: pip install google-cloud-bigquery google-auth pandas pyarrow db-dtypes
       - name: 상담메일 수집
         env:
+          # 지메일 경로: MAIL_IMAP_HOST=imap.gmail.com · MAIL_ID=<지메일> · MAIL_PW=<앱비밀번호> · MAIL_FOLDER=INBOX
+          MAIL_IMAP_HOST:    ${{ secrets.MAIL_IMAP_HOST }}
+          MAIL_ID:           ${{ secrets.MAIL_ID }}
+          MAIL_PW:           ${{ secrets.MAIL_PW }}
+          MAIL_FOLDER:       ${{ secrets.MAIL_FOLDER }}
+          # (구)네이버 직결 폴백 — MAIL_* 없으면 사용
           NAVER_MAIL_ID:     ${{ secrets.NAVER_MAIL_ID }}
           NAVER_MAIL_PW:     ${{ secrets.NAVER_MAIL_PW }}
           NAVER_MAIL_FOLDER: ${{ secrets.NAVER_MAIL_FOLDER }}

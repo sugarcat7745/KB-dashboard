@@ -109,6 +109,10 @@ jobs:
         if: ${{ !cancelled() }}
         continue-on-error: true
         env:
+          MAIL_IMAP_HOST:    ${{ secrets.MAIL_IMAP_HOST }}
+          MAIL_ID:           ${{ secrets.MAIL_ID }}
+          MAIL_PW:           ${{ secrets.MAIL_PW }}
+          MAIL_FOLDER:       ${{ secrets.MAIL_FOLDER }}
           NAVER_MAIL_ID:     ${{ secrets.NAVER_MAIL_ID }}
           NAVER_MAIL_PW:     ${{ secrets.NAVER_MAIL_PW }}
           NAVER_MAIL_FOLDER: ${{ secrets.NAVER_MAIL_FOLDER }}

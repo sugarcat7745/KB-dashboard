@@ -11,11 +11,14 @@
   - 실패(로그인 차단 등)해도 통합 수집을 깨지 않도록 '경고 후 스킵(exit 0)'. 차단은 조용할 수 있으니
     freshness_guard가 아닌 이 스텝의 로그로 확인.
 
-필요 env (GitHub Secrets)
-  NAVER_MAIL_ID   : 네이버 아이디(또는 이메일 앞부분). 예: lawkbsw
-  NAVER_MAIL_PW   : IMAP 비밀번호(2단계 인증이면 '애플리케이션 비밀번호')
+필요 env (GitHub Secrets) — 지메일 경로 권장(네이버 보호조치 우회):
+  MAIL_IMAP_HOST  : IMAP 서버. 지메일=imap.gmail.com (미설정 시 imap.naver.com)
+  MAIL_ID         : 로그인 아이디. 지메일=전체주소(kb.consult@gmail.com 등)
+  MAIL_PW         : 비밀번호. 지메일=2단계인증 후 '앱 비밀번호'(16자리, 공백 제거)
+  MAIL_FOLDER     : (선택) 폴더/라벨. 지메일 기본 INBOX / 네이버 기본 '온라인상담문의'
   GCP_SA_JSON     : 서비스계정 JSON 전체
-  NAVER_MAIL_FOLDER : (선택) 상담 폴더명. 기본 '온라인상담문의'(부분일치로 탐색)
+  (구) NAVER_MAIL_ID/PW/FOLDER : MAIL_* 미설정 시 네이버 직결 폴백
+흐름: 홈페이지 폼→lawkbsw@naver.com→(네이버 자동전달)→지메일 INBOX→여기서 수집.
 """
 import os, re, json, base64, imaplib, email
 from datetime import datetime, timezone, timedelta
@@ -27,8 +30,13 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 
 PROJECT, DATASET, TABLE = "kb-dashboard-499704", "kb_ads", "consult_raw"
-IMAP_HOST, IMAP_PORT = "imap.naver.com", 993
-FOLDER_HINT = (os.environ.get("NAVER_MAIL_FOLDER") or "온라인상담문의").strip()
+# 메일 서버 무관(네이버 IMAP이 보호조치로 막히면 '네이버→지메일 자동전달' 후 지메일에서 읽음).
+#   MAIL_IMAP_HOST/MAIL_ID/MAIL_PW/MAIL_FOLDER(신규) 우선, 없으면 기존 NAVER_MAIL_* 폴백.
+IMAP_HOST = (os.environ.get("MAIL_IMAP_HOST") or "imap.naver.com").strip()
+IMAP_PORT = 993
+_IS_NAVER = "naver" in IMAP_HOST.lower()
+FOLDER_HINT = (os.environ.get("MAIL_FOLDER") or os.environ.get("NAVER_MAIL_FOLDER")
+               or ("온라인상담문의" if _IS_NAVER else "INBOX")).strip()
 COLS = ["uid", "datetime", "date", "hour", "center", "category",
         "name", "phone", "region", "content_len", "content"]
 SCHEMA = [
@@ -246,20 +254,21 @@ def fetch_new(imap, raw_folder, seen_uids):
 
 
 def main():
-    uid = (os.environ.get("NAVER_MAIL_ID") or "").strip()
-    pw = os.environ.get("NAVER_MAIL_PW") or ""
+    uid = (os.environ.get("MAIL_ID") or os.environ.get("NAVER_MAIL_ID") or "").strip()
+    pw = os.environ.get("MAIL_PW") or os.environ.get("NAVER_MAIL_PW") or ""
     if not uid or not pw:
-        print("NAVER_MAIL_ID/PW 미설정 → 상담메일 수집 스킵(설정 전 안전)")
+        print("MAIL_ID/PW(또는 NAVER_MAIL_*) 미설정 → 상담메일 수집 스킵(설정 전 안전)")
         return
+    print(f"[상담메일] IMAP {IMAP_HOST} · 폴더 '{FOLDER_HINT}'")
     client = _client()
     existing = load_existing(client)
     seen = set(existing["uid"].astype(str)) if not existing.empty else set()
 
-    # 아이디는 'lawkbsw' / 'lawkbsw@naver.com' 두 형태를 순서대로 시도(형식 문제 자동 배제).
+    # 아이디 후보: 그대로 + (네이버면) '@naver.com' 붙인/뗀 형태를 순서대로 시도(형식 문제 자동 배제).
     ids = [uid]
     if "@" in uid:
         ids.append(uid.split("@")[0])
-    else:
+    elif _IS_NAVER:
         ids.append(f"{uid}@naver.com")
     imap, last_reason = None, ""
     for cand in ids:
@@ -276,15 +285,15 @@ def main():
                 pass
             imap = None
     if imap is None:
-        # 네이버 보호조치(로그인 차단)일 수 있음 → 통합 수집을 깨지 않게 경고 후 스킵
-        print(f"⚠️ IMAP 로그인 실패 → 스킵. 네이버 보호조치/IMAP 미설정/앱비밀번호 확인 필요.")
+        # 로그인 실패(네이버 보호조치/비번/앱비번 등) → 통합 수집을 깨지 않게 경고 후 스킵
+        print(f"⚠️ IMAP 로그인 실패 → 스킵. 보호조치/IMAP 미설정/비밀번호 확인 필요.")
         print(f"   서버 사유: {last_reason}")
         return
 
     try:
         raw_folder = find_folder(imap)
         if not raw_folder:
-            print(f"⚠️ '{FOLDER_HINT}' 폴더를 못 찾음 → 스킵. (환경설정에서 폴더명 확인)")
+            print(f"⚠️ '{FOLDER_HINT}' 폴더를 못 찾음 → 스킵. (폴더명/라벨 확인)")
             return
         rows, n_total, n_skip = fetch_new(imap, raw_folder, seen)
     finally:
@@ -293,7 +302,13 @@ def main():
         except Exception:
             pass
 
-    print(f"[상담메일] 폴더 총 {n_total}통 · 기존 {n_skip} · 신규 {len(rows)}통 파싱")
+    # 상담메일만 남김(지메일 INBOX처럼 다른 메일이 섞일 수 있는 경우 대비):
+    #   이름 또는 전화가 파싱된 건만 상담으로 인정. (뉴스레터 등은 이 필드가 없어 제외)
+    kept = [r for r in rows if str(r.get("name", "")).strip() or str(r.get("phone", "")).strip()]
+    n_drop = len(rows) - len(kept)
+    rows = kept
+    print(f"[상담메일] 폴더 총 {n_total}통 · 기존 {n_skip} · 신규 {len(rows)}건"
+          + (f" (상담 아님 {n_drop}건 제외)" if n_drop else ""))
     if not rows and existing.empty:
         print("  → 신규·기존 모두 없음. 적재 건너뜀"); return
 
