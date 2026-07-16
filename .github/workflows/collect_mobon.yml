@@ -3,9 +3,8 @@ name: collect-mobon
 # 모비온(MOBON) 광고 일별 성과를 매일 수집 → BigQuery(ad_etc, media='모비온').
 # ⚠️ 모비온 API는 '고정 공인 IP 화이트리스트'만 허용 → GCP 고정 IP VM(34.171.14.1)을
 #    프록시(MOBON_PROXY)로 경유해 호출. 해당 IP는 모비온 허용목록에 등록 완료됨.
+# 스케줄 제거 — 정시 수집은 collect_all(통합)이 담당. 여긴 수동 재실행용.
 on:
-  schedule:
-    - cron: "10 20 * * *"     # UTC 20:10 = KST 05:10 (메타 04:40 뒤, ad_etc 순차 쓰기)
   workflow_dispatch: {}
 
 concurrency:

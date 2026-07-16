@@ -1,9 +1,8 @@
 name: collect-meta
 
 # 메타(Facebook·Instagram) 광고 일별 성과를 매일 수집 → BigQuery(ad_etc, media='메타').
+# 스케줄 제거 — 정시 수집은 collect_all(통합)이 담당. 여긴 수동 재실행용.
 on:
-  schedule:
-    - cron: "40 19 * * *"     # UTC 19:40 = KST 04:40 (전일 집계 안정화 후)
   workflow_dispatch: {}
 
 concurrency:

@@ -1,14 +1,7 @@
 name: collect-naver-daily
 
+# 스케줄 제거 — 정시 수집은 collect_all(통합)이 담당. 여긴 수동 재실행용.
 on:
-  schedule:
-    # GitHub 무료 플랜은 예약을 수 시간 미룸 → 아침~오전에 여러 번 분산 시도(idempotent라 안전).
-    # 지연돼도 확인 시각(~KST 10시)엔 최신 데이터가 있도록 오전 백스톱 포함.
-    - cron: "37 21 * * *"   # UTC 21:37 = KST 06:37
-    - cron: "57 22 * * *"   # UTC 22:57 = KST 07:57
-    - cron: "37 23 * * *"   # UTC 23:37 = KST 08:37
-    - cron: "13 0 * * *"    # UTC 00:13 = KST 09:13 (백스톱)
-    - cron: "13 1 * * *"    # UTC 01:13 = KST 10:13 (백스톱·확인 직전)
   workflow_dispatch: {}
 
 concurrency:
