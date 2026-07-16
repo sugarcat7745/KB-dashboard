@@ -1,0 +1,32 @@
+name: kakao-biztoken
+
+# 1회용: 카카오 비즈니스 인가코드 → 비즈니스 토큰 발급 → 보고서 검증 → KAKAO_BIZ_TOKEN 시크릿 저장.
+# 비즈니스 토큰은 장기 재사용(재발급 불필요)이라 한 번만 실행하면 이후 collect_all이 자동수집.
+# ⚠️ 인가코드는 10분·1회용. 시크릿(KAKAO_REST_API_KEY·GH_PAT)을 먼저 넣고, 코드를 갓 받아 즉시 실행.
+# GH_PAT: 이 저장소 Secrets 쓰기 권한을 가진 fine-grained PAT (토큰을 시크릿에 저장하는 데 필요).
+on:
+  workflow_dispatch:
+    inputs:
+      code:
+        description: "카카오 비즈니스 인가코드 (business/authorize 후 ?code= 값)"
+        required: true
+
+jobs:
+  biztoken:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 비즈니스 토큰 발급 → 검증 → 시크릿 저장
+        env:
+          KAKAO_REST_API_KEY:  ${{ secrets.KAKAO_REST_API_KEY }}
+          KAKAO_CLIENT_SECRET: ${{ secrets.KAKAO_CLIENT_SECRET }}
+          KAKAO_AD_ACCOUNT_ID: ${{ secrets.KAKAO_AD_ACCOUNT_ID }}
+          KAKAO_AUTH_CODE:     ${{ github.event.inputs.code }}
+          GH_TOKEN:            ${{ secrets.GH_PAT }}
+          GH_REPO:             ${{ github.repository }}
+        run: python kakao_biztoken.py
