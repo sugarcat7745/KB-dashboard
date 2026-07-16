@@ -5245,6 +5245,88 @@ def render_qna():
 
 
 
+def render_spam():
+    """상담 품질·보안 — 의심 상담 자동 탐지(이름 기준). inq(통합문의) 라이브 기반.
+       전화·내용 기준 확장은 상담 이메일(네이버 IMAP) 연결 시."""
+    import re
+    tab_header("fa-shield-halved", "상담 품질·보안",
+               "의심 상담 자동 탐지(이름 기준) · 스팸 리드 걸러내기",
+               color="#C0392B", rgb="192,57,73")
+    df = load_inquiries()
+    if df is None or df.empty:
+        st.info("문의 데이터가 아직 없습니다."); return
+
+    COMPANYISH = ("법무", "청담", "변호사", "로펌", "대표", "팀장", "실장",
+                  "광고", "대출", "코인", "상담사", "문의", "홍길동")
+
+    def susp(n):
+        s = str(n).strip()
+        if not s:
+            return []
+        r = []
+        if len(s) <= 1:
+            r.append("한 글자")
+        if re.fullmatch(r"[.\-_·ㆍ~!@#$%^&*\s]+", s):
+            r.append("기호만")
+        if re.fullmatch(r"[A-Za-z]{1,2}\.?", s):
+            r.append("이니셜")
+        if any(k in s for k in COMPANYISH):
+            r.append("업체/직함성")
+        if re.search(r"\d", s):
+            r.append("숫자 포함")
+        if re.search(r"(http|www|\.com|텔레|카톡|@)", s, re.I):
+            r.append("링크/연락처")
+        return r
+
+    d = df.copy()
+    d["_susp"] = d["name"].apply(susp)
+    sus = d[d["_susp"].map(len) > 0]
+    vc = d[d["name"].str.strip() != ""]["name"].value_counts()
+    rep = vc[vc >= 3]
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("전체 문의", f"{len(d):,}")
+    c2.metric("🔴 의심 이름", f"{len(sus):,}")
+    c3.metric("🔁 반복 이름(3회+)", f"{len(rep):,}")
+    st.divider()
+
+    st.markdown("**🔴 의심 이름 상담** — 이름이 비정상(기호·이니셜·업체명·숫자 등)")
+    if sus.empty:
+        st.caption("의심 이름 없음.")
+    else:
+        show = sus.sort_values("date", ascending=False).head(200)
+        rows = ""
+        for _, r in show.iterrows():
+            dt = r["date"].strftime("%y-%m-%d") if pd.notna(r["date"]) else ""
+            rows += (f"<tr><td style='padding:4px 8px'>{dt}</td>"
+                     f"<td style='padding:4px 8px;font-weight:700;color:{CORAL}'>{r['name']}</td>"
+                     f"<td style='padding:4px 8px;color:{MUTED}'>{' · '.join(r['_susp'])}</td>"
+                     f"<td style='padding:4px 8px'>{r['keyword']}</td>"
+                     f"<td style='padding:4px 8px'>{r['category']}</td></tr>")
+        st.markdown(
+            f"<table style='width:100%;border-collapse:collapse;font-size:12.5px'>"
+            f"<tr style='color:{MUTED}'><td style='padding:4px 8px'>날짜</td><td style='padding:4px 8px'>이름</td>"
+            f"<td style='padding:4px 8px'>사유</td><td style='padding:4px 8px'>키워드</td>"
+            f"<td style='padding:4px 8px'>분류</td></tr>{rows}</table>", unsafe_allow_html=True)
+        st.caption(f"상위 {len(show)}건 표시 (총 {len(sus)}건)")
+    st.divider()
+
+    st.markdown("**🔁 반복 제출 이름** — 같은 이름 3회 이상 (봇 또는 동명이인 — 눈으로 확인)")
+    if rep.empty:
+        st.caption("반복 이름 없음.")
+    else:
+        rr = ""
+        for nm, cnt in rep.head(60).items():
+            rr += (f"<tr><td style='padding:4px 8px;font-weight:700'>{nm}</td>"
+                   f"<td style='padding:4px 8px;text-align:right;color:{MUTED}'>{cnt}회</td></tr>")
+        st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:13px'>{rr}</table>",
+                    unsafe_allow_html=True)
+    st.divider()
+    st.caption("※ 지금은 '이름' 기준입니다. 전화번호·내용(중복 템플릿)까지 잡으려면 상담 이메일(네이버 IMAP) "
+               "연결이 필요해요 — 연결하면 '같은 번호·다른 이름', '반복 번호', '스팸 문구'까지 자동 탐지하고 "
+               "차단완료 체크·블랙리스트도 함께 붙입니다.")
+
+
 def render_changelog():
     tab_header("fa-clipboard-list", "변경사항",
                "대시보드 · 광고 · 전략 — 무엇을 언제 왜 바꿨는지 기록",
@@ -5470,12 +5552,14 @@ def main():
             _safe(render_etc, "기타매체")
 
     with top[2]:
-        p = st.radio("구분", ["계약", "문의"], horizontal=True,
+        p = st.radio("구분", ["계약", "문의", "상담보안"], horizontal=True,
                      label_visibility="collapsed", key="nav_perf")
         if p == "계약":
             _safe(render_contracts, "계약 매출 분석")
-        else:
+        elif p == "문의":
             _safe(render_inquiries, "문의 분석")
+        else:
+            _safe(render_spam, "상담 품질·보안")
 
     with top[3]:
         _safe(render_ga4, "유입 분석(GA4)")
