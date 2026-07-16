@@ -75,6 +75,16 @@ jobs:
           GCP_SA_JSON:      ${{ secrets.GCP_SA_JSON }}
         run: python collect_mobon.py
 
+      - name: 카카오모먼트 수집
+        id: kakao
+        if: ${{ !cancelled() }}
+        env:
+          KAKAO_BIZ_TOKEN:     ${{ secrets.KAKAO_BIZ_TOKEN }}
+          KAKAO_AD_ACCOUNT_ID: ${{ secrets.KAKAO_AD_ACCOUNT_ID }}
+          KAKAO_START_DATE:    ${{ secrets.KAKAO_START_DATE }}
+          GCP_SA_JSON:         ${{ secrets.GCP_SA_JSON }}
+        run: python collect_kakao.py
+
       - name: 네이버 키워드마스터
         id: master
         if: ${{ !cancelled() }}
@@ -100,5 +110,5 @@ jobs:
         run: |
           gh issue create \
             --title "⚠️ 통합 수집(collect-all) 실패 ($(date -u +%F))" \
-            --body "네이버=${{ steps.naver.outcome }} · 구글=${{ steps.google.outcome }} · 메타=${{ steps.meta.outcome }} · 모비온=${{ steps.mobon.outcome }} · 마스터=${{ steps.master.outcome }} · 문의동기화=${{ steps.inq.outcome }} / 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --body "네이버=${{ steps.naver.outcome }} · 구글=${{ steps.google.outcome }} · 메타=${{ steps.meta.outcome }} · 모비온=${{ steps.mobon.outcome }} · 카카오=${{ steps.kakao.outcome }} · 마스터=${{ steps.master.outcome }} · 문의동기화=${{ steps.inq.outcome }} / 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             || echo "이슈 생성 건너뜀"
