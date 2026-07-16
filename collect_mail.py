@@ -255,12 +255,30 @@ def main():
     existing = load_existing(client)
     seen = set(existing["uid"].astype(str)) if not existing.empty else set()
 
-    try:
-        imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
-        imap.login(uid, pw)
-    except Exception as e:
+    # 아이디는 'lawkbsw' / 'lawkbsw@naver.com' 두 형태를 순서대로 시도(형식 문제 자동 배제).
+    ids = [uid]
+    if "@" in uid:
+        ids.append(uid.split("@")[0])
+    else:
+        ids.append(f"{uid}@naver.com")
+    imap, last_reason = None, ""
+    for cand in ids:
+        try:
+            imap = imaplib.IMAP4_SSL(IMAP_HOST, IMAP_PORT)
+            imap.login(cand, pw)
+            break
+        except Exception as e:
+            # 서버가 돌려준 사유(비밀번호 아님)를 남김 — 보호조치/앱비번 안내 URL 등 진단용
+            last_reason = str(getattr(e, "args", [""])[0])[:200] if getattr(e, "args", None) else str(e)[:120]
+            try:
+                imap.logout()
+            except Exception:
+                pass
+            imap = None
+    if imap is None:
         # 네이버 보호조치(로그인 차단)일 수 있음 → 통합 수집을 깨지 않게 경고 후 스킵
-        print(f"⚠️ IMAP 로그인 실패 → 스킵. 네이버 보호조치/비밀번호 확인 필요. ({type(e).__name__})")
+        print(f"⚠️ IMAP 로그인 실패 → 스킵. 네이버 보호조치/IMAP 미설정/앱비밀번호 확인 필요.")
+        print(f"   서버 사유: {last_reason}")
         return
 
     try:
