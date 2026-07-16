@@ -76,8 +76,9 @@ def fetch_kakao(token, acct, s_date, e_date):
     return pd.DataFrame(rows, columns=COLS)
 
 
-def load_to_bq(df):
-    """ad_etc에서 기존 카카오모먼트행 제거 → 신규 합쳐 WRITE_TRUNCATE. 스키마는 기존 표 그대로 유지."""
+def load_to_bq(df, win_start):
+    """ad_etc의 카카오모먼트 '수집 구간(win_start~)'만 신규로 교체하고 그 이전 이력은 보존 →
+    WRITE_TRUNCATE. 스키마는 기존 표 그대로 유지."""
     info = json.loads(os.environ["GCP_SA_JSON"])
     creds = service_account.Credentials.from_service_account_info(info)
     client = bigquery.Client(project=PROJECT, credentials=creds)
@@ -98,7 +99,15 @@ def load_to_bq(df):
             df["date"] = pd.to_datetime(df["date"]).dt.date
         else:
             existing["date"] = pd.to_datetime(existing["date"])
-    keep = existing[existing["media"].astype(str).str.strip() != MEDIA] if not existing.empty else existing
+    # ⚠️ 카카오는 '수집 구간(win_start~)'만 교체하고, 그 이전(과거 CSV 이력)은 보존한다.
+    #    (API가 과거 전체를 안 주므로 전량 삭제하면 과거 이력이 사라짐 → 반드시 과거 보존)
+    if not existing.empty:
+        is_kakao = existing["media"].astype(str).str.strip() == MEDIA
+        ex_dates = pd.to_datetime(existing["date"], errors="coerce")
+        ws = pd.Timestamp(win_start)
+        keep = existing[(~is_kakao) | (ex_dates < ws)]
+    else:
+        keep = existing
     final = pd.concat([keep[COLS], df[COLS]], ignore_index=True)
 
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
@@ -125,7 +134,7 @@ def main():
         print("  → 데이터 없음. 적재 건너뜀"); return
     print(f"  → {len(df)}일치 · 총광고비 {df['cost'].sum():,.0f}원 · "
           f"노출 {df['impressions'].sum():,} · 클릭 {df['clicks'].sum():,}")
-    n_new, n_total = load_to_bq(df)
+    n_new, n_total = load_to_bq(df, s_date)
     print(f"[적재 완료] 카카오모먼트 {n_new}행 갱신 · ad_etc 총 {n_total}행")
 
 

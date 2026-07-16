@@ -1,0 +1,30 @@
+name: recover-kakao
+
+# 1회성: 지워진 카카오모먼트 과거 이력(2026-06-01 이전)을 BigQuery 타임트래블로 복구.
+on:
+  workflow_dispatch:
+    inputs:
+      asof:
+        description: "타임트래블 기준 시각 UTC (기본 2026-07-16 05:00:00)"
+        required: false
+        default: "2026-07-16 05:00:00"
+
+concurrency:
+  group: bq-ad-etc-write
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install pandas google-cloud-bigquery google-auth pyarrow db-dtypes
+      - name: 카카오 과거 이력 복구
+        env:
+          GCP_SA_JSON:   ${{ secrets.GCP_SA_JSON }}
+          RECOVER_ASOF:  ${{ github.event.inputs.asof }}
+        run: python recover_kakao.py
