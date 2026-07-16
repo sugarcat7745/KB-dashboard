@@ -1147,7 +1147,30 @@ def load_inq_for_date(day):
 
 @st.cache_data(ttl=600)
 def load_inquiries():
-    """통합문의 마스터 시트 '단일 소스'에서 직접 집계.
+    """문의 집계 — 동기화본 BQ(kb_ads.inq) 우선(빠름), 없거나 비면 시트 직접읽기로 폴백.
+       (시트→BQ 동기화는 collect_all 내 sync_inq.py가 수행. 결과 컬럼은 시트 로더와 동일.)"""
+    try:
+        df = bq_fresh(f"SELECT date, name, keyword, category, consulted, contracted, valid, ym "
+                      f"FROM `{BQ_PROJECT}.{BQ_DATASET}.inq`")
+        if df is not None and not df.empty:
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            for c in ("consulted", "contracted", "valid"):
+                df[c] = df[c].astype(bool)
+            df["name"] = df["name"].fillna("").astype(str)
+            df["keyword"] = df["keyword"].fillna("").astype(str)
+            df["category"] = df["category"].fillna("(미분류)").astype(str)
+            df = df.rename(columns={"ym": "_ym"})
+            df = df[df["date"].notna()].reset_index(drop=True)
+            return df[["date", "name", "keyword", "category", "consulted", "contracted", "valid", "_ym"]]
+    except Exception:
+        pass
+    return _load_inquiries_from_sheet()
+
+
+@st.cache_data(ttl=600)
+def _load_inquiries_from_sheet():
+    """통합문의 마스터 시트 '단일 소스'에서 직접 집계(동기화 원본·폴백).
        · 문의 = 내용(이름/검색키워드) 있는 줄
        · 상담 = M(상담)열에 텍스트 있으면 1건   · 수임 = N(수임완료및입금)열에 텍스트 있으면 1건
        · 캠페인 = K(카테고리)열  · 날짜 = B(문의일자, 캐리포워드)
