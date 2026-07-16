@@ -1,0 +1,29 @@
+name: collect-mail
+
+# 상담 이메일(네이버 IMAP '온라인상담문의' 폴더) → BigQuery(consult_raw) 수집.
+# 평소엔 collect-all이 순차로 함께 돌리고, 여기 스케줄/수동은 '단독 재실행용'.
+# UID 증분 수집이라 자주 돌려도 가볍고 멱등. (로그인 차단 시 조용히 스킵)
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: bq-consult-write
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install google-cloud-bigquery google-auth pandas pyarrow db-dtypes
+      - name: 상담메일 수집
+        env:
+          NAVER_MAIL_ID:     ${{ secrets.NAVER_MAIL_ID }}
+          NAVER_MAIL_PW:     ${{ secrets.NAVER_MAIL_PW }}
+          NAVER_MAIL_FOLDER: ${{ secrets.NAVER_MAIL_FOLDER }}
+          GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
+        run: python collect_mail.py

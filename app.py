@@ -5245,41 +5245,258 @@ def render_qna():
 
 
 
+COMPANYISH = ("법무", "청담", "변호사", "로펌", "대표", "팀장", "실장",
+              "광고", "대출", "코인", "상담사", "문의", "홍길동")
+
+
+def _name_susp(n):
+    """이름 이상 신호 목록(비면 정상). 이름 기준 스팸 탐지에 공용."""
+    import re
+    s = str(n).strip()
+    if not s:
+        return []
+    r = []
+    if len(s) <= 1:
+        r.append("한 글자")
+    if re.fullmatch(r"[.\-_·ㆍ~!@#$%^&*\s]+", s):
+        r.append("기호만")
+    if re.fullmatch(r"[A-Za-z]{1,2}\.?", s):
+        r.append("이니셜")
+    if any(k in s for k in COMPANYISH):
+        r.append("업체/직함성")
+    if re.search(r"\d", s):
+        r.append("숫자 포함")
+    if re.search(r"(http|www|\.com|텔레|카톡|@|select |union )", s, re.I):
+        r.append("링크/코드")
+    return r
+
+
+@st.cache_data(ttl=600)
+def load_consult():
+    """상담 원문(consult_raw, 네이버 IMAP 수집)을 로드. 없으면 빈 DF.
+       개인정보(전화·상담내용)라 로그인 뒤 화면에서만 쓰인다."""
+    try:
+        df = bq_fresh(
+            f"SELECT date, datetime, hour, center, category, name, phone, region, "
+            f"content_len, content FROM `{BQ_PROJECT}.{BQ_DATASET}.consult_raw`")
+    except Exception:
+        return pd.DataFrame()
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df["phone"] = df["phone"].astype(str).str.strip()
+    df["name"] = df["name"].astype(str).str.strip()
+    df["content"] = df["content"].astype(str)
+    return df
+
+
+def load_blocklist():
+    """차단 목록(consult_block). 없으면 빈 DF."""
+    try:
+        df = bq_fresh(f"SELECT key, kind, note, ts FROM `{BQ_PROJECT}.{BQ_DATASET}.consult_block`")
+        return df if df is not None and not df.empty else pd.DataFrame(columns=["key", "kind", "note", "ts"])
+    except Exception:
+        return pd.DataFrame(columns=["key", "kind", "note", "ts"])
+
+
+def save_blocklist(items):
+    """차단 목록 전체 교체(WRITE_TRUNCATE load job — 무료티어 안전, DML 아님).
+       items: [{'key','kind','note'}] 리스트."""
+    from google.cloud import bigquery
+    client = get_bq()
+    tid = f"{BQ_PROJECT}.{BQ_DATASET}.consult_block"
+    schema = [bigquery.SchemaField("key", "STRING"), bigquery.SchemaField("kind", "STRING"),
+              bigquery.SchemaField("note", "STRING"), bigquery.SchemaField("ts", "STRING")]
+    ts = datetime.now().isoformat(timespec="seconds")
+    rows = [{"key": str(it["key"]).strip(), "kind": str(it.get("kind", "")),
+             "note": str(it.get("note", "")), "ts": str(it.get("ts") or ts)}
+            for it in items if str(it.get("key", "")).strip()]
+    client.load_table_from_json(
+        rows, tid, job_config=bigquery.LoadJobConfig(
+            schema=schema, write_disposition="WRITE_TRUNCATE",
+            create_disposition="CREATE_IF_NEEDED")).result()
+
+
 def render_spam():
-    """상담 품질·보안 — 의심 상담 자동 탐지(이름 기준). inq(통합문의) 라이브 기반.
-       전화·내용 기준 확장은 상담 이메일(네이버 IMAP) 연결 시."""
+    """상담 품질·보안 — 스팸/이상 상담 자동 탐지.
+       상담메일(consult_raw)이 있으면 전화·내용까지, 없으면 문의시트(이름)만."""
     import re
     tab_header("fa-shield-halved", "상담 품질·보안",
-               "의심 상담 자동 탐지(이름 기준) · 스팸 리드 걸러내기",
+               "스팸·이상 상담 자동 탐지 · 차단 목록 관리",
                color="#C0392B", rgb="192,57,73")
+
+    cdf = load_consult()
+    block = load_blocklist()
+    block_keys = set(block["key"].astype(str).str.strip()) if not block.empty else set()
+
+    if cdf.empty:
+        _render_spam_name_only()
+        st.divider()
+        st.caption("※ 지금은 '이름' 기준(문의시트)입니다. 전화·내용(중복 템플릿)까지는 상담메일이 "
+                   "consult_raw에 쌓이면 자동으로 켜집니다 — 네이버 IMAP 수집(collect_mail)이 처음 도는 뒤부터요.")
+        return
+
+    d = cdf.copy()
+    d["_valid_ph"] = d["phone"].str.match(r"01[016789]\d{7,8}$")
+    d["_name_susp"] = d["name"].apply(_name_susp)
+
+    # 같은 번호·다른 이름 (유효번호 중, 한 번호에 서로 다른 이름 2개+)
+    same = []
+    for ph, g in d[d["_valid_ph"] & (d["phone"] != "")].groupby("phone"):
+        names = sorted(set(n for n in g["name"] if n))
+        if len(names) >= 2:
+            same.append((ph, len(g), names))
+    same.sort(key=lambda x: -x[1])
+
+    # 반복 번호 (같은 번호 3회+)
+    pv = d[d["phone"] != ""]["phone"].value_counts()
+    rep_ph = pv[pv >= 3]
+
+    # 무효/비정상 번호
+    bad = d[(d["phone"] != "") & (~d["_valid_ph"])]
+    nophone = d[d["phone"] == ""]
+
+    # 중복 템플릿 (상담내용이 글자 그대로 3회+ AND 서로 다른 번호 2개+ → 여러 발신자의 대량 스팸)
+    #   한 사람이 반복 제출한 건은 '반복번호'에서 이미 잡으므로 번호 2개+ 조건으로 분리.
+    d["_fp"] = d["content"].map(lambda s: re.sub(r"\s", "", str(s)))
+    dup = []
+    for fp, g in d[d["_fp"].str.len() >= 8].groupby("_fp"):
+        if len(g) >= 3 and g["phone"].nunique() >= 2:
+            dup.append((fp, len(g), g["phone"].nunique(), g["content"].iloc[0]))
+    dup.sort(key=lambda x: -x[1])
+
+    # 이름 이상
+    name_sus = d[d["_name_susp"].map(len) > 0]
+
+    n_blocked = int(d["phone"].isin(block_keys).sum() + d["name"].isin(block_keys).sum())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("전체 상담", f"{len(d):,}")
+    c2.metric("🔴 같은번호·다른이름", f"{len(same):,}")
+    c3.metric("🔁 반복번호(3회+)", f"{len(rep_ph):,}")
+    c4.metric("🚫 차단 목록", f"{len(block_keys):,}")
+    st.caption(f"상담메일(consult_raw) 기준 · 이름이상 {len(name_sus):,} · 무효번호 {len(bad):,} · "
+               f"번호없음 {len(nophone):,} · 중복템플릿 {len(dup):,}종")
+    st.divider()
+
+    def _badge(key):
+        return " <span style='color:#fff;background:#C0392B;border-radius:4px;padding:1px 5px;" \
+               "font-size:10px'>차단됨</span>" if str(key).strip() in block_keys else ""
+
+    # 1) 같은 번호·다른 이름
+    st.markdown("**🔴 같은 번호·다른 이름** — 한 번호로 여러 이름 제출(봇/도용 강한 신호)")
+    if not same:
+        st.caption("없음.")
+    else:
+        rr = ""
+        for ph, cnt, names in same[:80]:
+            rr += (f"<tr><td style='padding:4px 8px;font-weight:700;color:{CORAL}'>{ph}{_badge(ph)}</td>"
+                   f"<td style='padding:4px 8px;text-align:right'>{cnt}회</td>"
+                   f"<td style='padding:4px 8px;color:{MUTED}'>{', '.join(names)[:70]}</td></tr>")
+        st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:12.5px'>"
+                    f"<tr style='color:{MUTED}'><td style='padding:4px 8px'>번호</td>"
+                    f"<td style='padding:4px 8px;text-align:right'>제출</td>"
+                    f"<td style='padding:4px 8px'>이름들</td></tr>{rr}</table>", unsafe_allow_html=True)
+        if len(same) > 80:
+            st.caption(f"상위 80개 표시 (총 {len(same)}개 번호)")
+    st.divider()
+
+    # 2) 반복 번호
+    st.markdown("**🔁 반복 번호** — 같은 번호 3회 이상")
+    if rep_ph.empty:
+        st.caption("없음.")
+    else:
+        rr = ""
+        for ph, cnt in rep_ph.head(60).items():
+            nm = sorted(set(n for n in d[d["phone"] == ph]["name"] if n))
+            rr += (f"<tr><td style='padding:4px 8px;font-weight:700'>{ph}{_badge(ph)}</td>"
+                   f"<td style='padding:4px 8px;text-align:right'>{cnt}회</td>"
+                   f"<td style='padding:4px 8px;color:{MUTED}'>{', '.join(nm)[:60]}</td></tr>")
+        st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:12.5px'>{rr}</table>",
+                    unsafe_allow_html=True)
+    st.divider()
+
+    # 3) 중복 템플릿
+    st.markdown("**🧬 중복 템플릿** — 상담내용이 글자 그대로 반복 + 여러 번호(대량 봇 스팸)")
+    if not dup:
+        st.caption("없음.")
+    else:
+        rr = ""
+        for fp, cnt, nph, sample in dup[:30]:
+            rr += (f"<tr><td style='padding:4px 8px;text-align:right;font-weight:700;color:{CORAL}'>{cnt}회</td>"
+                   f"<td style='padding:4px 8px;text-align:right;color:{MUTED}'>번호 {nph}</td>"
+                   f"<td style='padding:4px 8px;color:{MUTED}'>{str(sample)[:70]}</td></tr>")
+        st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:12px'>"
+                    f"<tr style='color:{MUTED}'><td style='padding:4px 8px;text-align:right'>반복</td>"
+                    f"<td style='padding:4px 8px;text-align:right'>서로다른번호</td>"
+                    f"<td style='padding:4px 8px'>내용(예시)</td></tr>{rr}</table>", unsafe_allow_html=True)
+    st.divider()
+
+    # 4) 무효/이상 번호 + 이름 이상 (요약)
+    with st.expander(f"⛔ 무효·비정상 번호 {len(bad):,}건 · 🔴 이름 이상 {len(name_sus):,}건 보기"):
+        if not bad.empty:
+            st.markdown("**무효/비정상 전화번호** (형식이 휴대폰 번호가 아님)")
+            bb = ""
+            for _, r in bad.sort_values("date", ascending=False).head(60).iterrows():
+                dt = r["date"].strftime("%y-%m-%d") if pd.notna(r["date"]) else ""
+                bb += (f"<tr><td style='padding:3px 8px'>{dt}</td>"
+                       f"<td style='padding:3px 8px'>{r['phone']}</td>"
+                       f"<td style='padding:3px 8px;color:{MUTED}'>{r['name']}</td>"
+                       f"<td style='padding:3px 8px;color:{MUTED}'>{r['center']}</td></tr>")
+            st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:12px'>{bb}</table>",
+                        unsafe_allow_html=True)
+        if not name_sus.empty:
+            st.markdown("**이름 이상** (기호·이니셜·업체명·코드 등)")
+            ns = ""
+            for _, r in name_sus.sort_values("date", ascending=False).head(60).iterrows():
+                dt = r["date"].strftime("%y-%m-%d") if pd.notna(r["date"]) else ""
+                ns += (f"<tr><td style='padding:3px 8px'>{dt}</td>"
+                       f"<td style='padding:3px 8px;font-weight:700;color:{CORAL}'>{r['name']}</td>"
+                       f"<td style='padding:3px 8px;color:{MUTED}'>{' · '.join(r['_name_susp'])}</td>"
+                       f"<td style='padding:3px 8px'>{r['phone']}</td></tr>")
+            st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:12px'>{ns}</table>",
+                        unsafe_allow_html=True)
+    st.divider()
+
+    # 5) 차단 목록 관리(블랙리스트) — 자동 후보에서 골라 저장(BQ에 영구 보관)
+    st.markdown("**🚫 차단 목록 관리** — 차단한 번호/이름을 체크해 저장하면 위 표에 `차단됨` 배지로 표시됩니다.")
+    cand = []
+    for ph, _, _ in same:
+        cand.append(ph)
+    cand += [str(p) for p in rep_ph.index]
+    cand += [str(p) for p in bad["phone"].unique() if str(p).strip()]
+    cand = list(dict.fromkeys(cand))                     # 순서 유지 dedup
+    options = sorted(set(cand) | block_keys)
+    with st.form("blocklist_form"):
+        picked = st.multiselect("차단할 번호/이름 (자동 후보 + 기존 차단목록)",
+                                 options=options, default=sorted(block_keys))
+        extra = st.text_input("직접 추가(쉼표로 여러 개 — 번호나 이름)", "")
+        memo = st.text_input("메모(선택)", "")
+        saved = st.form_submit_button("차단 목록 저장")
+    if saved:
+        keys = list(picked) + [x.strip() for x in re.split(r"[,\s]+", extra) if x.strip()]
+        keys = list(dict.fromkeys(k for k in keys if k))
+        items = [{"key": k, "kind": ("전화" if re.fullmatch(r"\d{6,}", k) else "이름"),
+                  "note": memo} for k in keys]
+        try:
+            save_blocklist(items)
+            st.success(f"차단 목록 {len(items)}개 저장 완료.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"저장 실패: {type(e).__name__}. 잠시 후 다시 시도해 주세요.")
+
+    st.caption("※ 차단은 실제로는 홈페이지/광고 쪽에서 막아야 해요. 여기 목록은 '무엇을 차단했는지' 기록·표시용입니다. "
+               "consult_raw는 상담메일에서 매일 자동 갱신됩니다.")
+
+
+def _render_spam_name_only():
+    """상담메일(consult_raw)이 아직 없을 때 — 문의시트(이름) 기준 탐지."""
     df = load_inquiries()
     if df is None or df.empty:
         st.info("문의 데이터가 아직 없습니다."); return
-
-    COMPANYISH = ("법무", "청담", "변호사", "로펌", "대표", "팀장", "실장",
-                  "광고", "대출", "코인", "상담사", "문의", "홍길동")
-
-    def susp(n):
-        s = str(n).strip()
-        if not s:
-            return []
-        r = []
-        if len(s) <= 1:
-            r.append("한 글자")
-        if re.fullmatch(r"[.\-_·ㆍ~!@#$%^&*\s]+", s):
-            r.append("기호만")
-        if re.fullmatch(r"[A-Za-z]{1,2}\.?", s):
-            r.append("이니셜")
-        if any(k in s for k in COMPANYISH):
-            r.append("업체/직함성")
-        if re.search(r"\d", s):
-            r.append("숫자 포함")
-        if re.search(r"(http|www|\.com|텔레|카톡|@)", s, re.I):
-            r.append("링크/연락처")
-        return r
-
     d = df.copy()
-    d["_susp"] = d["name"].apply(susp)
+    d["_susp"] = d["name"].apply(_name_susp)
     sus = d[d["_susp"].map(len) > 0]
     vc = d[d["name"].str.strip() != ""]["name"].value_counts()
     rep = vc[vc >= 3]
@@ -5321,10 +5538,6 @@ def render_spam():
                    f"<td style='padding:4px 8px;text-align:right;color:{MUTED}'>{cnt}회</td></tr>")
         st.markdown(f"<table style='width:100%;border-collapse:collapse;font-size:13px'>{rr}</table>",
                     unsafe_allow_html=True)
-    st.divider()
-    st.caption("※ 지금은 '이름' 기준입니다. 전화번호·내용(중복 템플릿)까지 잡으려면 상담 이메일(네이버 IMAP) "
-               "연결이 필요해요 — 연결하면 '같은 번호·다른 이름', '반복 번호', '스팸 문구'까지 자동 탐지하고 "
-               "차단완료 체크·블랙리스트도 함께 붙입니다.")
 
 
 def render_changelog():
