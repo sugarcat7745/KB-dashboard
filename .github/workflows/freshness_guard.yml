@@ -1,8 +1,8 @@
 name: freshness-guard
 
-# 어제(KST) 광고 데이터가 BigQuery에 있는지 확인하고, 없으면 스스로 재수집 + 알림.
+# 어제(KST) 데이터가 BigQuery에 있는지 확인하고, 없으면 collect_all을 재실행 + 알림.
 # GitHub 예약 지연/스킵으로 '아침에 어제 데이터 없음'이 반복되던 것을 자가치유한다.
-# (실패 알림은 '실패'만 잡지만, 이건 '조용히 안 돈 경우'까지 잡는다)
+# 검증 범위: 네이버·구글(ad_keyword) + 메타·모비온(ad_etc) + 문의(inq 행수). 재수집=collect_all 하나로.
 on:
   schedule:
     - cron: "30 1 * * *"   # UTC 01:30 = KST 10:30 (확인 시각 직후)
@@ -10,7 +10,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: bq-ad-keyword-write     # 수집기와 같은 그룹 → 동시 쓰기 방지
+  group: freshness-guard
   cancel-in-progress: false
 
 jobs:
@@ -18,21 +18,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: write        # collect_all 재실행(dispatch)용
       issues: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install deps
-        run: pip install requests google-ads google-cloud-bigquery pandas pyarrow db-dtypes
-
-      - name: 어제 데이터 존재 확인
+      - name: 어제 데이터 존재 확인 (전 매체 + 문의)
         id: check
         env:
           GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
         run: |
+          pip install google-cloud-bigquery db-dtypes -q
           python - <<'PY'
           import os, json
           from datetime import datetime, timedelta, timezone
@@ -41,40 +35,32 @@ jobs:
           kst = timezone(timedelta(hours=9))
           y = (datetime.now(kst).date() - timedelta(days=1)).isoformat()
           info = json.loads(os.environ["GCP_SA_JSON"])
-          creds = service_account.Credentials.from_service_account_info(info)
-          c = bigquery.Client(project="kb-dashboard-499704", credentials=creds)
-          def cnt(media):
-              sql = f"SELECT COUNT(*) n FROM `kb-dashboard-499704.kb_ads.ad_keyword` WHERE media='{media}' AND date='{y}'"
-              return list(c.query(sql).result())[0]["n"]
-          nv, gg = cnt("네이버"), cnt("구글")
-          print(f"어제({y}) 행수 — 네이버:{nv} / 구글:{gg}")
+          c = bigquery.Client(project="kb-dashboard-499704",
+                              credentials=service_account.Credentials.from_service_account_info(info))
+          def kw(media):   # ad_keyword 어제 행수
+              return list(c.query(f"SELECT COUNT(*) n FROM `kb-dashboard-499704.kb_ads.ad_keyword` WHERE media='{media}' AND date='{y}'").result())[0]["n"]
+          def etc(media):  # ad_etc 어제 행수
+              return list(c.query(f"SELECT COUNT(*) n FROM `kb-dashboard-499704.kb_ads.ad_etc` WHERE media='{media}' AND date='{y}'").result())[0]["n"]
+          def inq_rows():
+              try: return list(c.query("SELECT COUNT(*) n FROM `kb-dashboard-499704.kb_ads.inq`").result())[0]["n"]
+              except Exception: return 0
+          nv, gg = kw("네이버"), kw("구글")
+          mt, mb = etc("메타"), etc("모비온")
+          iq = inq_rows()
+          # 카카오모먼트는 API 권한 대기라 검증 제외
+          miss = (nv == 0 or gg == 0 or mt == 0 or mb == 0 or iq < 100)
+          print(f"어제({y}) — 네이버:{nv} 구글:{gg} 메타:{mt} 모비온:{mb} · 문의행:{iq}")
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"naver_missing={'1' if nv==0 else '0'}\n")
-              f.write(f"google_missing={'1' if gg==0 else '0'}\n")
-              f.write(f"any_missing={'1' if (nv==0 or gg==0) else '0'}\n")
+              f.write(f"any_missing={'1' if miss else '0'}\n")
               f.write(f"ydate={y}\n")
+              f.write(f"detail=네이버{nv}·구글{gg}·메타{mt}·모비온{mb}·문의{iq}\n")
           PY
 
-      - name: 네이버 재수집 (누락 시)
-        if: steps.check.outputs.naver_missing == '1'
+      - name: 누락 시 collect_all 재실행
+        if: steps.check.outputs.any_missing == '1'
         env:
-          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
-          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
-          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
-          GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
-        run: python collect_naver.py
-
-      - name: 구글 재수집 (누락 시)
-        if: steps.check.outputs.google_missing == '1'
-        env:
-          GOOGLE_DEVELOPER_TOKEN: ${{ secrets.GOOGLE_DEVELOPER_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          GOOGLE_LOGIN_CUSTOMER_ID: ${{ secrets.GOOGLE_LOGIN_CUSTOMER_ID }}
-          GOOGLE_CUSTOMER_ID: ${{ secrets.GOOGLE_CUSTOMER_ID }}
-          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
-        run: python collect_google.py
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run collect_all.yml --ref main
 
       - name: 누락이었으면 알림 이슈
         if: steps.check.outputs.any_missing == '1'
@@ -82,6 +68,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue create \
-            --title "⚠️ 어제(${{ steps.check.outputs.ydate }}) 데이터 누락 → 자동 재수집함" \
-            --body "네이버 누락=${{ steps.check.outputs.naver_missing }}, 구글 누락=${{ steps.check.outputs.google_missing }}. freshness-guard가 재수집을 실행했습니다. 대시보드 새로고침으로 확인하세요. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --title "⚠️ 어제(${{ steps.check.outputs.ydate }}) 데이터 누락 → collect_all 자동 재실행" \
+            --body "상태: ${{ steps.check.outputs.detail }}. freshness-guard가 collect_all을 재실행했습니다. 대시보드 새로고침으로 확인하세요. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             || echo "이슈 생성 건너뜀"

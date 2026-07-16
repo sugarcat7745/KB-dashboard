@@ -1,98 +1,61 @@
 """통합문의 시트 → BigQuery(kb_ads.inq) 동기화.
-대시보드가 매번 구글시트를 live로 읽던 걸(느림), BQ 한 곳에서 빠르게 읽도록 미리 옮긴다.
-- app.py load_inquiries()의 정규화 규칙을 그대로 사용(결과 컬럼 동일).
-- WRITE_TRUNCATE 멱등(무료티어 DML 금지 준수) — 매 실행마다 전체 재적재로 자가치유.
-- ⚠️ 개인정보(이름)는 BQ(비공개)에만 적재하고, 실행 로그에는 절대 출력하지 않는다.
+- 정규화는 inq_norm.normalize_inq 공유(app.py 시트 폴백과 '같은 코드' → 값 안 갈림).
+- WRITE_TRUNCATE 멱등. ⚠️ 개인정보(이름)는 BQ(비공개)에만, 로그엔 집계 수치만.
+- 가드: 시트 빔/헤더변경/편집중 부분읽기로 행이 급감하면 덮어쓰기 중단(기존 스냅샷 보존)+실패
+  → collect_all이 실패로 잡아 이슈 알림. '조용한 오염'을 원천 차단.
 
-필요 env: GCP_SA_JSON (지금 광고수집이 쓰는 그 서비스계정 — 시트 뷰어 + BQ 쓰기 권한 이미 보유)
+필요 env: GCP_SA_JSON (+ 선택 INQ_MIN_ROWS 기본 100 · INQ_DROP_RATIO 기본 0.7)
 """
 import os, json
 import pandas as pd
 import gspread
 from google.oauth2 import service_account
 from google.cloud import bigquery
+from inq_norm import normalize_inq
 
 INQ_SHEET_ID = "1jvOGtJrkOQSV6qLFmbR72ueB8ebDnmk9C7Z_mNEOeNA"
 PROJECT, DATASET, TABLE = "kb-dashboard-499704", "kb_ads", "inq"
 SHEET_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly",
                 "https://www.googleapis.com/auth/drive.readonly"]
-CAT_ALIAS = {"일반형사": "형사", "음주운전": "음주", "외국인/출입국": "외국인", "교통사고": "교통",
-             "하자/보수": "하자보수", "의료분쟁": "의료", "학폭": "학교폭력"}
-
-
-def pdate(s):
-    s = "".join(ch for ch in str(s) if ch.isdigit())
-    return pd.to_datetime(s, format="%y%m%d", errors="coerce") if len(s) == 6 else pd.NaT
-
-
-def build_df(info):
-    gc = gspread.authorize(service_account.Credentials.from_service_account_info(info, scopes=SHEET_SCOPES))
-    vals = gc.open_by_key(INQ_SHEET_ID).worksheet("통합문의").get_all_values()
-    if not vals:
-        raise SystemExit("통합문의 시트가 비어있음")
-    raw = pd.DataFrame(vals)
-    hr = next((i for i in range(min(10, len(raw)))
-               if any("문의일자" in str(v) for v in raw.iloc[i])), None)
-    if hr is None:
-        raise SystemExit("헤더(문의일자) 행을 못 찾음")
-    hdr = [str(v).strip() for v in raw.iloc[hr].tolist()]
-
-    def fidx(*keys, exclude=()):
-        return next((j for j, v in enumerate(hdr)
-                     if any(k in str(v) for k in keys) and not any(e in str(v) for e in exclude)), None)
-    di, ni, ki = fidx("문의일자"), fidx("이름"), fidx("검색키워드", "키워드")
-    ti = fidx("카테고리")
-    si = fidx("상담", exclude=("상담사무소", "상담시간", "상담료"))
-    wi = fidx("수임", exclude=("전환", "수임당"))
-    body = raw.iloc[hr + 1:].reset_index(drop=True)
-
-    def col(i):
-        return body[i].astype(str).str.strip() if (i is not None and i in body.columns) else pd.Series([""] * len(body))
-
-    def nonempty(i):
-        if i is None or i not in body.columns:
-            return pd.Series([False] * len(body))
-        s = body[i].astype(str).str.strip()
-        return (s != "") & (s.str.lower() != "nan")
-
-    d = pd.DataFrame({
-        "date": body[di].apply(pdate) if (di is not None and di in body.columns) else pd.NaT,
-        "name": col(ni),
-        "keyword": col(ki),
-        "category": col(ti) if (ti is not None and ti in body.columns) else "",
-        "consulted": nonempty(si),
-        "contracted": nonempty(wi),
-        "valid": nonempty(si) | nonempty(wi),
-    })
-    d["date"] = d["date"].ffill()
-    has_content = (d["name"].str.strip() != "") | (d["keyword"].str.strip() != "")
-    d = d[d["date"].notna() & has_content].reset_index(drop=True)
-    d["category"] = d["category"].replace(CAT_ALIAS).replace({"": "(미분류)", "nan": "(미분류)"})
-    d["ym"] = d["date"].dt.to_period("M").astype(str)              # date가 datetime일 때 계산
-    d["name"] = d["name"].replace({"nan": "", "익명": ""}).fillna("").str.strip()
-    for c in ("consulted", "contracted", "valid"):
-        d[c] = d[c].astype(bool)
-    d["date"] = pd.to_datetime(d["date"]).dt.date                 # BQ DATE로
-    return d[["date", "name", "keyword", "category", "consulted", "contracted", "valid", "ym"]]
 
 
 def main():
     info = json.loads(os.environ["GCP_SA_JSON"])
-    d = build_df(info)
+    gc = gspread.authorize(service_account.Credentials.from_service_account_info(info, scopes=SHEET_SCOPES))
+    vals = gc.open_by_key(INQ_SHEET_ID).worksheet("통합문의").get_all_values()
+    d = normalize_inq(vals)
+    if d.empty:
+        raise SystemExit("⛔ 정규화 결과 0행(시트 빔/헤더 변경 의심) → inq 보존, 적재 중단")
+
     client = bigquery.Client(project=PROJECT,
                              credentials=service_account.Credentials.from_service_account_info(info))
+    tid = f"{PROJECT}.{DATASET}.{TABLE}"
+
+    # ── 가드: 기존 대비 급감이면 덮어쓰기 중단(부분읽기/편집중 오염 방지) ──
+    min_rows = int(os.environ.get("INQ_MIN_ROWS", "100"))
+    drop_ratio = float(os.environ.get("INQ_DROP_RATIO", "0.7"))
+    try:
+        prev = list(client.query(f"SELECT COUNT(*) n FROM `{tid}`").result())[0]["n"]
+    except Exception:
+        prev = None                      # 테이블 없음 → 최초 적재로 간주
+    if len(d) < min_rows:
+        raise SystemExit(f"⛔ 신규 {len(d)}행 < 최소 {min_rows}행 → 오염 의심, inq 보존")
+    if prev and len(d) < prev * drop_ratio:
+        raise SystemExit(f"⛔ 신규 {len(d)}행 < 기존 {prev}행의 {drop_ratio:.0%} → 급감, inq 보존")
+
+    out = d.rename(columns={"_ym": "ym"}).copy()
+    out["date"] = pd.to_datetime(out["date"]).dt.date          # BQ DATE로
     schema = [bigquery.SchemaField("date", "DATE"), bigquery.SchemaField("name", "STRING"),
               bigquery.SchemaField("keyword", "STRING"), bigquery.SchemaField("category", "STRING"),
               bigquery.SchemaField("consulted", "BOOL"), bigquery.SchemaField("contracted", "BOOL"),
               bigquery.SchemaField("valid", "BOOL"), bigquery.SchemaField("ym", "STRING")]
-    tid = f"{PROJECT}.{DATASET}.{TABLE}"
+    cols = ["date", "name", "keyword", "category", "consulted", "contracted", "valid", "ym"]
     client.load_table_from_dataframe(
-        d, tid, job_config=bigquery.LoadJobConfig(
-            write_disposition="WRITE_TRUNCATE", schema=schema)).result()
-    # 로그에는 집계 수치만(개인정보 미출력)
-    print(f"[inq 동기화 완료] {len(d)}행 · 월수 {d['ym'].nunique()} · "
-          f"상담 {int(d['consulted'].sum())} · 수임 {int(d['contracted'].sum())} · "
-          f"기간 {d['ym'].min()}~{d['ym'].max()}")
+        out[cols], tid,
+        job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE", schema=schema)).result()
+    print(f"[inq 동기화 완료] {len(out)}행 · 월수 {out['ym'].nunique()} · "
+          f"상담 {int(out['consulted'].sum())} · 수임 {int(out['contracted'].sum())} · "
+          f"기간 {out['ym'].min()}~{out['ym'].max()}" + (f" (기존 {prev}행)" if prev else ""))
 
 
 if __name__ == "__main__":
