@@ -1,14 +1,22 @@
 name: collect-all
 
-# 외부 스케줄러(cron-job.org 등)가 매일 정시에 '한 번' 찔러 네이버+구글을 순서대로 수집.
-# GitHub 자체 예약(cron)은 무료플랜에서 몇 시간씩 밀려 '출근 시각 보장'이 안 되므로,
-# 정시 실행이 확실한 외부 시계가 이 워크플로를 workflow_dispatch로 즉시 실행시킨다.
-# (기존 collect_naver/collect_google의 cron은 공짜 백업으로 그대로 유지)
+# ▶ 하루치 데이터 수집을 '한 워크플로에서 순차 실행'하는 통합 수집기.
+#   네이버·구글(ad_keyword) → 메타·모비온(ad_etc) → 네이버 키워드마스터 → 문의 시트→BQ 동기화.
+#   전부 멱등(WRITE_TRUNCATE/자기영역 교체)이라 여러 번 돌려도 안전.
+#
+# ▶ 스케줄 철학: GitHub 무료 cron은 몇 시간씩 밀림 → '정시 보장'은 Claude 루틴이
+#   workflow_dispatch로 즉시 실행 + 끝나고 누락 검증·재실행·보고까지 담당(주 트리거).
+#   아래 schedule은 루틴이 못 돌 때를 대비한 '무료 백업' 1개일 뿐(밀려도 idempotent).
+#
+# ▶ 개별 collect_*.yml은 스케줄 없이 '수동 재실행용'으로만 남겨둠(여긴 순차라 동시쓰기 충돌 없음).
+#   카카오모먼트는 API 권한 승인 후 한 스텝 추가 예정.
 on:
+  schedule:
+    - cron: "30 21 * * *"     # UTC 21:30 = KST 06:30 (백업 1개 — 주 트리거는 Claude 루틴 dispatch)
   workflow_dispatch: {}
 
 concurrency:
-  group: bq-ad-keyword-write      # 개별 수집기와 같은 그룹 → 동시 쓰기 방지
+  group: bq-ad-keyword-write   # 개별 수집기와 같은 그룹 → 동시 쓰기 방지
   cancel-in-progress: false
 
 jobs:
@@ -19,13 +27,11 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
       - name: Install deps
-        run: pip install requests google-ads google-cloud-bigquery pandas pyarrow db-dtypes
+        run: pip install requests google-ads google-cloud-bigquery google-auth gspread pandas pyarrow db-dtypes
 
       - name: 네이버 수집
         id: naver
@@ -38,24 +44,61 @@ jobs:
 
       - name: 구글 수집
         id: google
-        if: ${{ !cancelled() }}      # 네이버가 실패해도 구글은 시도
+        if: ${{ !cancelled() }}
         env:
-          GOOGLE_DEVELOPER_TOKEN: ${{ secrets.GOOGLE_DEVELOPER_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          GOOGLE_DEVELOPER_TOKEN:   ${{ secrets.GOOGLE_DEVELOPER_TOKEN }}
+          GOOGLE_CLIENT_ID:         ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET:     ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN:     ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           GOOGLE_LOGIN_CUSTOMER_ID: ${{ secrets.GOOGLE_LOGIN_CUSTOMER_ID }}
-          GOOGLE_CUSTOMER_ID: ${{ secrets.GOOGLE_CUSTOMER_ID }}
-          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          GOOGLE_CUSTOMER_ID:       ${{ secrets.GOOGLE_CUSTOMER_ID }}
+          GCP_SA_JSON:              ${{ secrets.GCP_SA_JSON }}
         run: python collect_google.py
 
-      # 둘 중 하나라도 실패하면 조용히 넘어가지 않도록 GitHub 이슈로 알림
+      - name: 메타 수집
+        id: meta
+        if: ${{ !cancelled() }}
+        env:
+          META_ACCESS_TOKEN:  ${{ secrets.META_ACCESS_TOKEN }}
+          META_AD_ACCOUNT_ID: ${{ secrets.META_AD_ACCOUNT_ID }}
+          META_START_DATE:    ${{ secrets.META_START_DATE }}
+          GCP_SA_JSON:        ${{ secrets.GCP_SA_JSON }}
+        run: python collect_meta.py
+
+      - name: 모비온 수집
+        id: mobon
+        if: ${{ !cancelled() }}
+        env:
+          MOBON_ACCOUNTS:   ${{ secrets.MOBON_ACCOUNTS }}
+          MOBON_START_DATE: ${{ secrets.MOBON_START_DATE }}
+          MOBON_PROXY:      ${{ secrets.MOBON_PROXY }}
+          GCP_SA_JSON:      ${{ secrets.GCP_SA_JSON }}
+        run: python collect_mobon.py
+
+      - name: 네이버 키워드마스터
+        id: master
+        if: ${{ !cancelled() }}
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
+        run: python collect_naver_master.py
+
+      - name: 문의 시트→BQ 동기화
+        id: inq
+        if: ${{ !cancelled() }}
+        env:
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+        run: python sync_inq.py
+
+      # 한 스텝이라도 실패하면 조용히 넘어가지 않게 GitHub 이슈로 알림
       - name: 실패 시 알림 이슈
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh issue create \
-            --title "⚠️ 아침 수집(collect-all) 실패 ($(date -u +%F))" \
-            --body "네이버=${{ steps.naver.outcome }}, 구글=${{ steps.google.outcome }}. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --title "⚠️ 통합 수집(collect-all) 실패 ($(date -u +%F))" \
+            --body "네이버=${{ steps.naver.outcome }} · 구글=${{ steps.google.outcome }} · 메타=${{ steps.meta.outcome }} · 모비온=${{ steps.mobon.outcome }} · 마스터=${{ steps.master.outcome }} · 문의동기화=${{ steps.inq.outcome }} / 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             || echo "이슈 생성 건너뜀"

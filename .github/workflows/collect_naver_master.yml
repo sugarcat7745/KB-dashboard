@@ -1,8 +1,7 @@
 name: collect-naver-master-daily
 
+# 스케줄 제거 — 정시 수집은 collect_all(통합)이 담당. 여긴 수동 재실행용.
 on:
-  schedule:
-    - cron: "0 20 * * *"   # UTC 매일 20:00 = KST 매일 05:00 (매일 — 새 키워드 이름이 하루 안에 붙게)
   workflow_dispatch: {}
 
 jobs:
