@@ -854,31 +854,27 @@ def render_landing_status():
             mins = max(0, int((now_utc - ts_utc).total_seconds() // 60))
         except Exception:
             mins = None
-        if mins is None:
-            rel = "점검 시각 미상"
-        elif mins < 1:
-            rel = "방금 점검"
-        elif mins < 60:
-            rel = f"{mins}분 전 점검"
-        elif mins < 1440:
-            rel = f"{mins // 60}시간 전 점검"
-        else:
-            rel = f"{mins // 1440}일 전 점검"
         stale = (mins is not None and mins > 90)   # 매시 점검인데 90분 초과면 감시 지연
 
-        # ── 상태 요약을 '접기 헤더 라벨'로 → 이 줄을 누르면 아래로 펼쳐진다(별도 버튼 없음) ──
+        # ── 상태 요약: 좌=랜딩 상태(정상 ok/total) · 우측 끝=오늘 날짜·작동 상태 ──
         dot = "🟢" if fails == 0 else "🔴"
         word = "정상" if fails == 0 else f"오류 {fails}곳"
-        seg = []
-        for m in medias:
-            sub = df[df["media"] == m]
-            o = int(sub["ok"].sum()); t = len(sub)
-            seg.append(f"{m} {o}/{t}" + ("" if o == t else " 🔴"))
-        seg_text = "   ".join(seg)
-        stale_txt = "   ·   ⚠️ 점검 지연" if stale else ""
-        label = f"{dot} 광고 랜딩 {word}   ·   {seg_text}   ·   🕐 {rel} · {total}개 감시{stale_txt}"
+        total_ok = int(df["ok"].sum())
+        try:
+            today = pd.Timestamp.now(tz="Asia/Seoul").strftime("%-m/%-d")
+        except Exception:
+            today = ""
+        right_txt = f"{today} 정상작동 중" if fails == 0 else f"{today} 점검 필요 {fails}곳"
+        if stale:
+            right_txt += " · ⚠️ 점검 지연"
+        st.markdown(
+            f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;'
+            f'font-size:14px;font-weight:600;color:{TXT};padding:2px 2px 4px;">'
+            f'<span>{dot} 광고 랜딩 {word} ({total_ok}/{total})</span>'
+            f'<span style="color:{MUTED};font-weight:500;font-size:12.5px;white-space:nowrap;">{right_txt}</span>'
+            f'</div>', unsafe_allow_html=True)
 
-        with st.expander(label, expanded=False):
+        with st.expander("자세히 보기", expanded=False):
             # ── ① 문제 우선 ──
             if fails > 0:
                 bad = df[~df["ok"]].copy()
