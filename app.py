@@ -2114,6 +2114,30 @@ def render_brief():
             if d0 in iq: iq[d0] = (int(r["q"]), int(r["s"]), int(r["w"]))
     cols_m = [m for m in order if m in seen] + [m for m in sorted(seen) if m not in order]
 
+    # ── 모비온 센터별(계정별) 광고비 — 이번달 (ad_mobon_center 있을 때만 표시) ──
+    try:
+        _mc = bq_fresh(f"SELECT center, cost FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_mobon_center` "
+                       f"WHERE date BETWEEN '{days[0]}' AND '{days[-1]}'")
+    except Exception:
+        _mc = None
+    if _mc is not None and not _mc.empty:
+        with st.expander(f"🎯 모비온 센터별 광고비 ({today.month}월) — 리타게팅 위주라 센터는 소액일 수 있음", expanded=False):
+            piv = _mc.groupby("center")["cost"].sum().sort_values(ascending=False)
+            tot = float(piv.sum())
+            h = ('<table style="width:100%;border-collapse:collapse;font-size:13px;">'
+                 f'<tr><td style="color:{MUTED};padding:4px 8px;">센터</td>'
+                 f'<td style="text-align:right;color:{MUTED};padding:4px 8px;">이번달 광고비</td>'
+                 f'<td style="text-align:right;color:{MUTED};padding:4px 8px;">비중</td></tr>')
+            for c, v in piv.items():
+                pct = (v / tot * 100) if tot else 0
+                h += (f'<tr><td style="padding:4px 8px;color:{TXT};font-weight:600;">{c}</td>'
+                      f'<td style="text-align:right;padding:4px 8px;">₩{int(v):,}</td>'
+                      f'<td style="text-align:right;padding:4px 8px;color:{MUTED};">{pct:.0f}%</td></tr>')
+            h += (f'<tr><td style="padding:4px 8px;font-weight:700;border-top:1px solid {LINE};">합계</td>'
+                  f'<td style="text-align:right;padding:4px 8px;font-weight:700;border-top:1px solid {LINE};">₩{int(tot):,}</td>'
+                  f'<td style="border-top:1px solid {LINE};"></td></tr></table>')
+            st.markdown(h, unsafe_allow_html=True)
+
     # ── 월 전체 일별 표 (매체별 · 주차 소계 · 전주대비) ──
     st.markdown(f'<div class="sec-title"><i class="fa-solid fa-table"></i> {today.month}월 일자별 전체</div>', unsafe_allow_html=True)
     mcolor = {"네이버": "#4A7FE0", "구글": "#C77B6B", "카카오모먼트": "#C9A227", "모비온": "#6E9E5E", "메타": "#5B6FC4"}

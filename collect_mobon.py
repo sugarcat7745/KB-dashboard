@@ -27,9 +27,11 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 
 PROJECT, DATASET, TABLE = "kb-dashboard-499704", "kb_ads", "ad_etc"
+TABLE_CENTER = "ad_mobon_center"        # 모비온 센터별(계정별) 일별 표(신규)
 MEDIA = "모비온"
 BASE = "https://api-center.mobon.net"
 COLS = ["date", "media", "cost", "impressions", "clicks", "conversions"]
+CENTER_COLS = ["date", "center", "cost", "impressions", "clicks", "conversions"]
 
 
 # 모비온은 '고정 공인 IP'만 허용 → GitHub(가변 IP)에서는 고정 IP 프록시(GCP VM)를 경유한다.
@@ -70,26 +72,45 @@ def _report(tok, s, e):
 
 
 def fetch_mobon(accounts, s, e, device):
-    """3개 계정 × 일자별 캠페인 통계 → 날짜 기준 합산."""
-    agg = {}   # 'YYYYMMDD' -> [cost, imp, clk, conv]
+    """계정(센터)별 × 일자별 통계 → (합산 DF[ad_etc용], 센터별 DF[ad_mobon_center용]).
+    센터 이름은 계정의 'name'(없으면 id)을 사용."""
+    agg = {}                       # 'YYYYMMDD' -> [cost,imp,clk,conv]
+    cen = {}                       # (center,'YYYYMMDD') -> [cost,imp,clk,conv]
     for a in accounts:
+        center = str(a.get("name") or a.get("id") or "기타").strip()
         tok = _token(a["id"], a["pw"], device)
         for row in _report(tok, s, e):
             d = str(row.get("statsDttm", "")).strip()
             if not (len(d) == 8 and d.isdigit()):     # 'TOTAL' 등 합계행 제외
                 continue
-            v = agg.setdefault(d, [0, 0, 0, 0])
-            v[0] += int(float(row.get("advrtsAmt", 0) or 0))
-            v[1] += int(float(row.get("viewCnt", 0) or 0))
-            v[2] += int(float(row.get("clickCnt", 0) or 0))
-            v[3] += int(float(row.get("convCnt", 0) or 0))
+            cost = int(float(row.get("advrtsAmt", 0) or 0)); imp = int(float(row.get("viewCnt", 0) or 0))
+            clk = int(float(row.get("clickCnt", 0) or 0)); conv = int(float(row.get("convCnt", 0) or 0))
+            v = agg.setdefault(d, [0, 0, 0, 0]); v[0] += cost; v[1] += imp; v[2] += clk; v[3] += conv
+            w = cen.setdefault((center, d), [0, 0, 0, 0]); w[0] += cost; w[1] += imp; w[2] += clk; w[3] += conv
         time.sleep(0.2)
-    rows = []
-    for d in sorted(agg):
-        c, i, k, cv = agg[d]
-        rows.append({"date": pd.to_datetime(d, format="%Y%m%d"), "media": MEDIA,
-                     "cost": float(c), "impressions": i, "clicks": k, "conversions": cv})
-    return pd.DataFrame(rows, columns=COLS)
+    tot = [{"date": pd.to_datetime(d, format="%Y%m%d"), "media": MEDIA, "cost": float(agg[d][0]),
+            "impressions": agg[d][1], "clicks": agg[d][2], "conversions": agg[d][3]} for d in sorted(agg)]
+    ctr = [{"date": pd.to_datetime(d, format="%Y%m%d"), "center": c, "cost": float(w[0]),
+            "impressions": w[1], "clicks": w[2], "conversions": w[3]} for (c, d), w in sorted(cen.items())]
+    return pd.DataFrame(tot, columns=COLS), pd.DataFrame(ctr, columns=CENTER_COLS)
+
+
+def load_center(cdf):
+    """모비온 센터별 표(ad_mobon_center) 전체 교체(WRITE_TRUNCATE). 모비온 전용 표라 통째 갱신."""
+    if cdf is None or cdf.empty:
+        return 0
+    info = json.loads(os.environ["GCP_SA_JSON"])
+    creds = service_account.Credentials.from_service_account_info(info)
+    client = bigquery.Client(project=PROJECT, credentials=creds)
+    tid = f"{PROJECT}.{DATASET}.{TABLE_CENTER}"
+    schema = [bigquery.SchemaField("date", "DATE"), bigquery.SchemaField("center", "STRING"),
+              bigquery.SchemaField("cost", "FLOAT"), bigquery.SchemaField("impressions", "INTEGER"),
+              bigquery.SchemaField("clicks", "INTEGER"), bigquery.SchemaField("conversions", "INTEGER")]
+    out = cdf.copy()
+    out["date"] = pd.to_datetime(out["date"]).dt.date
+    client.load_table_from_dataframe(out[CENTER_COLS], tid, job_config=bigquery.LoadJobConfig(
+        write_disposition="WRITE_TRUNCATE", schema=schema)).result()
+    return len(out)
 
 
 def load_to_bq(df):
@@ -135,12 +156,14 @@ def main():
     accounts = _accounts()
 
     print(f"[모비온 수집] 계정 {len(accounts)}개 · {since} ~ {yday} (KST 어제까지)")
-    df = fetch_mobon(accounts, s, e, device)
+    df, cdf = fetch_mobon(accounts, s, e, device)
     if df.empty:
         print("  → 데이터 없음. 적재 건너뜀"); return
-    print(f"  → {len(df)}일치 · 총광고비 {df['cost'].sum():,.0f}원 · 노출 {df['impressions'].sum():,} · 클릭 {df['clicks'].sum():,}")
+    print(f"  → {len(df)}일치 · 총광고비 {df['cost'].sum():,.0f}원 · 노출 {df['impressions'].sum():,} · "
+          f"클릭 {df['clicks'].sum():,} · 센터 {cdf['center'].nunique()}개")
     n_new, n_total = load_to_bq(df)
-    print(f"[적재 완료] 모비온 {n_new}행 갱신 · ad_etc 총 {n_total}행")
+    n_c = load_center(cdf)
+    print(f"[적재 완료] 모비온 {n_new}행 · ad_etc 총 {n_total}행 · 센터별 {n_c}행(ad_mobon_center)")
 
 
 if __name__ == "__main__":
