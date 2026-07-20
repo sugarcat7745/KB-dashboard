@@ -846,16 +846,6 @@ def render_landing_status():
         fails = int((~df["ok"]).sum())
         total = len(df)
 
-        # ── 점검 신선도(마지막 점검이 얼마나 됐나) ──
-        mins = None
-        try:
-            ts_utc = pd.to_datetime(df["ts"].max(), utc=True)      # BQ TIMESTAMP=UTC(aware)
-            now_utc = pd.Timestamp.now(tz="UTC")
-            mins = max(0, int((now_utc - ts_utc).total_seconds() // 60))
-        except Exception:
-            mins = None
-        stale = (mins is not None and mins > 90)   # 매시 점검인데 90분 초과면 감시 지연
-
         # ── 상태 요약: 좌=랜딩 상태(정상 ok/total) · 우측 끝=오늘 날짜·작동 상태 ──
         dot = "🟢" if fails == 0 else "🔴"
         word = "정상" if fails == 0 else f"오류 {fails}곳"
@@ -865,8 +855,6 @@ def render_landing_status():
         except Exception:
             today = ""
         right_txt = f"{today} 정상작동 중" if fails == 0 else f"{today} 점검 필요 {fails}곳"
-        if stale:
-            right_txt += " · ⚠️ 점검 지연"
         st.markdown(
             f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;'
             f'font-size:14px;font-weight:600;color:{TXT};padding:2px 2px 4px;">'
