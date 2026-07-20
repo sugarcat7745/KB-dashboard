@@ -4924,7 +4924,7 @@ def render_qna():
     existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
 
     # ── 게시 성과(GA4) — 어떤 QnA가 유입을 끌었나 (접이식) ──
-    if st.toggle("📈 게시한 QnA 성과 보기 (GA4 · 유입 기준)", key="qna_perf_toggle"):
+    if st.toggle("📈 Q&A 성과 보기 (GA4 · 유입 기준)", key="qna_perf_toggle"):
         _qna_perf_panel(corpus)
         st.divider()
 
