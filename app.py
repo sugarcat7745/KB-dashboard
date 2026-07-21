@@ -5317,20 +5317,117 @@ def _qna_render_compare(res):
                "Haiku가 🔴가 많거나 문단이 부실하면 품질 리스크가 큰 것.")
 
 
+@st.cache_data(ttl=300)
+def qna_publish_summary():
+    """생성(payload)·게시(posted) 오늘/이번주/이번달/누적 개수(KST 기준). 실패 시 None."""
+    try:
+        d = bq(f"""SELECT
+            COUNTIF(payload!='' AND DATE(ts,'Asia/Seoul')=CURRENT_DATE('Asia/Seoul')) gen_d,
+            COUNTIF(payload!='' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 6 DAY)) gen_w,
+            COUNTIF(payload!='' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 29 DAY)) gen_m,
+            COUNTIF(payload!='') gen_t,
+            COUNTIF(posted!='' AND DATE(ts,'Asia/Seoul')=CURRENT_DATE('Asia/Seoul')) post_d,
+            COUNTIF(posted!='' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 6 DAY)) post_w,
+            COUNTIF(posted!='' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 29 DAY)) post_m,
+            COUNTIF(posted!='') post_t
+          FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft`""")
+        return d.iloc[0].to_dict() if d is not None and not d.empty else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300)
+def qna_publish_daily(days=14):
+    """최근 N일 일별 생성·게시 개수(KST). 실패 시 None."""
+    try:
+        return bq(f"""SELECT CAST(DATE(ts,'Asia/Seoul') AS STRING) 날짜,
+                 COUNTIF(payload!='') 생성, COUNTIF(posted!='') 게시
+              FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft`
+              WHERE DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL {int(days)-1} DAY)
+              GROUP BY 날짜 ORDER BY 날짜""")
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300)
+def qna_recent_posts(n=40):
+    """최근 게시 이력(게시완료 마커 → 원본 draft에서 분류·제목 join). 실패 시 None."""
+    try:
+        return bq(f"""SELECT CAST(DATE(p.ts,'Asia/Seoul') AS STRING) 날짜, d.cat 분류, d.title 제목, p.posted wr_id
+              FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` p
+              JOIN `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` d ON p.id=d.id AND d.payload!=''
+              WHERE p.posted!='' ORDER BY p.ts DESC LIMIT {int(n)}""")
+    except Exception:
+        return None
+
+
+def _qna_stats_tab(corpus, cc):
+    """통계·성과 탭 — 생성/게시 추이 + 분야별 글수 + GA4 유입."""
+    st.markdown('<div class="big-section">생성·게시 추이 (KST)</div>', unsafe_allow_html=True)
+    s = qna_publish_summary()
+    if not s:
+        st.info("아직 통계 데이터가 없습니다. 원고를 생성·게시하면 여기에 집계됩니다.")
+    else:
+        r1 = st.columns(4)
+        r1[0].metric("오늘 생성", int(s["gen_d"])); r1[1].metric("이번주 생성", int(s["gen_w"]))
+        r1[2].metric("이번달 생성", int(s["gen_m"])); r1[3].metric("누적 생성", int(s["gen_t"]))
+        r2 = st.columns(4)
+        r2[0].metric("오늘 게시", int(s["post_d"])); r2[1].metric("이번주 게시", int(s["post_w"]))
+        r2[2].metric("이번달 게시", int(s["post_m"])); r2[3].metric("누적 게시", int(s["post_t"]))
+        dd = qna_publish_daily()
+        if dd is not None and not dd.empty:
+            st.caption("최근 14일 일별")
+            st.bar_chart(dd.set_index("날짜")[["생성", "게시"]])
+    st.divider()
+    st.markdown('<div class="big-section">분야별 게시글 수 (현재 게시판)</div>', unsafe_allow_html=True)
+    if cc is not None and len(cc):
+        st.bar_chart(pd.DataFrame({"글 수": cc.values}, index=cc.index))
+    else:
+        st.caption("게시판 코퍼스가 없습니다.")
+    st.divider()
+    with st.expander("📈 GA4 유입 성과 — 어떤 글이 방문을 끌었나"):
+        _qna_perf_panel(corpus)
+
+
+def _qna_auto_tab(corpus):
+    """자동 게시 탭 — 계획·현황·최근 게시 이력."""
+    st.markdown('<div class="big-section">자동 게시</div>', unsafe_allow_html=True)
+    st.caption("수요 높은 분야부터 돌아가며 매일 정해진 개수만큼 자동 생성→품질검사→게시합니다. "
+               "‘원고 생성’ 탭의 수동 작업과 별개로 돌고, 중복은 자동으로 피합니다.")
+    st.info("🛠️ 자동 게시 엔진은 준비 단계입니다(다음 배포에서 스케줄 가동). "
+            "**계획:** 매일 오전 10시(KST) · 하루 3~4개 · 분야 순환(수요순) · "
+            "미검증 법조문·저품질 글은 자동 스킵.")
+    st.markdown("**최근 게시 이력**")
+    rp = qna_recent_posts()
+    if rp is None or rp.empty:
+        st.caption("아직 게시 이력이 없습니다.")
+    else:
+        rp = rp.copy()
+        rp["보기"] = rp["wr_id"].apply(
+            lambda w: f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={w}")
+        st.dataframe(rp[["날짜", "분류", "제목", "보기"]], use_container_width=True, hide_index=True,
+                     column_config={"보기": st.column_config.LinkColumn("보기", display_text="열기")})
+
+
 def render_qna():
-    tab_header("fa-feather-pointed", "QnA 원고 생성", "실수요 기반 질문·답변 생성 · 검수 · 업로드",
+    tab_header("fa-feather-pointed", "QnA 관리", "원고 생성 · 자동 게시 · 통계",
                color="#CA8A04", rgb="202,138,4")
     corpus = qna_corpus()
     if corpus.empty:
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
     cc = corpus["cat"].value_counts() if not corpus.empty else pd.Series(dtype=int)
     existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
+    _t1, _t2, _t3 = st.tabs(["✍️ 원고 생성", "🤖 자동 게시", "📊 통계·성과"])
+    with _t1:
+        _qna_write_tab(corpus, cc, existing)
+    with _t2:
+        _qna_auto_tab(corpus)
+    with _t3:
+        _qna_stats_tab(corpus, cc)
 
-    # ── 게시 성과(GA4) — 어떤 QnA가 유입을 끌었나 (접이식) ──
-    if st.toggle("📈 Q&A 성과 보기 (GA4 · 유입 기준)", key="qna_perf_toggle"):
-        _qna_perf_panel(corpus)
-        st.divider()
 
+def _qna_write_tab(corpus, cc, existing):
+    """QnA 원고 생성·검수·업로드(기존 수동 흐름)."""
     # ── 1) 게시판 분류 선택 (현재 글 수 표시) ──
     st.markdown('<div class="big-section">1) 게시판 분류</div>', unsafe_allow_html=True)
     st.caption("괄호 안 숫자는 현재 등록된 글 수")
