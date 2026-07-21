@@ -1,7 +1,8 @@
 name: qna-autopost
 
-# QnA 자동 생성·게시. 처음엔 수동 실행(dry_run=true=게시 안 함, 초안만 생성)으로 검증하고,
-# 결과가 만족스러우면 dry_run=false로 실게시 + 아래 schedule 주석을 풀어 매일 자동 가동한다.
+# QnA 자동 생성. 매일 스케줄로 '생성만'(dry_run=게시 안 함) 돌려 대시보드 '자동 게시' 검수
+# 대기열에 쌓는다. 담당자가 대시보드에서 확인 후 '승인·게시'를 눌러야 홈페이지에 올라간다
+# (대표님 지시로 한 달간 전건 검수). 수동 실행 시 dry_run=false로 하면 즉시 게시도 가능.
 on:
   workflow_dispatch:
     inputs:
@@ -10,11 +11,11 @@ on:
         required: false
         default: "4"
       dry_run:
-        description: "게시 안 하고 초안만 저장? (true/false)"
+        description: "게시 안 하고 검수 대기열에만? (true/false)"
         required: false
         default: "true"
-  # schedule:
-  #   - cron: "0 1 * * *"   # 매일 01:00 UTC = KST 오전 10시 (검증 후 주석 해제)
+  schedule:
+    - cron: "0 1 * * *"   # 매일 01:00 UTC = KST 오전 10시 · 생성만(검수 대기열)
 
 concurrency:
   group: qna-autopost
