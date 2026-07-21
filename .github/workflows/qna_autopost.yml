@@ -1,0 +1,42 @@
+name: qna-autopost
+
+# QnA 자동 생성·게시. 처음엔 수동 실행(dry_run=true=게시 안 함, 초안만 생성)으로 검증하고,
+# 결과가 만족스러우면 dry_run=false로 실게시 + 아래 schedule 주석을 풀어 매일 자동 가동한다.
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "하루 생성 개수(분야 순환)"
+        required: false
+        default: "4"
+      dry_run:
+        description: "게시 안 하고 초안만 저장? (true/false)"
+        required: false
+        default: "true"
+  # schedule:
+  #   - cron: "0 1 * * *"   # 매일 01:00 UTC = KST 오전 10시 (검증 후 주석 해제)
+
+concurrency:
+  group: qna-autopost
+  cancel-in-progress: false
+
+jobs:
+  autopost:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install anthropic requests beautifulsoup4 google-cloud-bigquery
+      - name: 자동 생성·게시
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          QNA_ID: ${{ secrets.QNA_ID }}
+          QNA_PW: ${{ secrets.QNA_PW }}
+          # schedule로 자동 실행될 땐 inputs가 비므로 기본값 사용(N=4, DRYRUN=1)
+          AUTOPOST_N: ${{ github.event.inputs.n || '4' }}
+          AUTOPOST_DRYRUN: ${{ (github.event.inputs.dry_run == 'false') && '0' || '1' }}
+        run: python qna_autopost.py
