@@ -5377,6 +5377,24 @@ def qna_skip_draft(did):
         return False
 
 
+def qna_delete_post(wr_id):
+    """게시판(그누보드)에서 글 삭제. 글보기 페이지의 삭제 링크(토큰 포함)를 찾아 호출.
+    삭제 확인: 재조회 시 글이 사라졌는지로 판정. 성공 True."""
+    try:
+        s = _qna_session()
+        vurl = f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wr_id}"
+        view = s.get(vurl, timeout=30).text
+        m = re.search(r'(delete\.php\?[^"\'<> ]*\bwr_id=' + re.escape(str(wr_id)) + r'\b[^"\'<> ]*)', view)
+        url = (f"{QNA_BASE}/bbs/" + m.group(1).replace("&amp;", "&")) if m \
+            else f"{QNA_BASE}/bbs/delete.php?bo_table=QnA&wr_id={wr_id}"
+        s.get(url, timeout=30, headers={"Referer": vurl})
+        chk = s.get(vurl, timeout=30)
+        return chk.status_code == 404 or any(
+            x in chk.text for x in ("존재하지 않", "삭제된", "없는 게시물", "이미 삭제"))
+    except Exception:
+        return False
+
+
 @st.cache_data(ttl=300)
 def qna_recent_posts(n=40):
     """최근 게시 이력(게시완료 마커 → 원본 draft에서 분류·제목 join). 실패 시 None."""
@@ -5490,21 +5508,64 @@ def _qna_auto_tab(corpus):
                      column_config={"보기": st.column_config.LinkColumn("보기", display_text="열기")})
 
 
+def _qna_list_tab(corpus):
+    """게시글 목록 탭 — 홈페이지 QnA 글 목록 보기 + (확인 후) 삭제."""
+    st.markdown('<div class="big-section">게시글 목록</div>', unsafe_allow_html=True)
+    st.caption("홈페이지 QnA 게시판의 글 목록입니다. 삭제는 되돌릴 수 없으니 ‘삭제확인’을 체크한 뒤 진행하세요.")
+    if corpus is None or corpus.empty:
+        st.info("게시글이 없습니다.")
+        return
+    cid, _ = _qna_creds()
+    if not cid:
+        st.info("⚠️ 삭제하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
+    fcat = st.selectbox("분야 필터", ["전체"] + list(QNA_CATS), key="qna_list_cat")
+    df = corpus if fcat == "전체" else corpus[corpus["cat"].astype(str) == fcat]
+    try:
+        df = df.sort_values("wr_id", key=lambda s: pd.to_numeric(s, errors="coerce"), ascending=False)
+    except Exception:
+        pass
+    deleted = st.session_state.setdefault("qna_deleted", set())
+    df = df[~df["wr_id"].astype(str).isin(deleted)]
+    st.caption(f"{len(df)}건 (최신순, 최대 200건 표시)")
+    for _, r in df.head(200).iterrows():
+        wid, title, cat = str(r["wr_id"]), str(r["title"]), str(r["cat"])
+        c0, c1, c2 = st.columns([0.66, 0.14, 0.20], vertical_alignment="center")
+        c0.markdown(f"<span style='font-size:13px'>[{cat}] "
+                    f"<a href='{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wid}' "
+                    f"style='color:{GOLD}' target='_blank'>{title[:64]}</a></span>", unsafe_allow_html=True)
+        conf = c1.checkbox("삭제확인", key=f"del_ok_{wid}", label_visibility="collapsed")
+        if c2.button("🗑️ 삭제", key=f"del_{wid}", disabled=not (cid and conf)):
+            with st.spinner("삭제 중…"):
+                ok = qna_delete_post(wid)
+            if ok:
+                deleted.add(wid)
+                try:
+                    qna_corpus.clear()
+                except Exception:
+                    pass
+                st.success(f"삭제됨 (wr_id={wid})")
+                st.rerun()
+            else:
+                st.error("삭제 실패 — 게시판에서 직접 확인하세요.")
+
+
 def render_qna():
-    tab_header("fa-feather-pointed", "QnA 관리", "원고 생성 · 자동 게시 · 통계",
+    tab_header("fa-feather-pointed", "QnA 관리", "원고 생성 · 자동 게시 · 통계 · 목록",
                color="#CA8A04", rgb="202,138,4")
     corpus = qna_corpus()
     if corpus.empty:
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
     cc = corpus["cat"].value_counts() if not corpus.empty else pd.Series(dtype=int)
     existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
-    _t1, _t2, _t3 = st.tabs(["✍️ 원고 생성", "🤖 자동 게시", "📊 통계·성과"])
+    _t1, _t2, _t3, _t4 = st.tabs(["✍️ 원고 생성", "🤖 자동 게시", "📊 통계·성과", "🗂️ 게시글 목록"])
     with _t1:
         _qna_write_tab(corpus, cc, existing)
     with _t2:
         _qna_auto_tab(corpus)
     with _t3:
         _qna_stats_tab(corpus, cc)
+    with _t4:
+        _qna_list_tab(corpus)
 
 
 def _qna_write_tab(corpus, cc, existing):
