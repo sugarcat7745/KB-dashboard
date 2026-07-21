@@ -4663,8 +4663,10 @@ def qna_detail_html(keyword, sections, faq=None, table=None, cat=None, laws=None
         out.append('<p>&nbsp;</p><br />')
         ol = _qna_as_ordered(paras)                # '첫째/둘째…'면 진짜 순서 목록으로
         if ol:
-            lis = "".join(f'<li><span style="{S}">{x}</span></li>' for x in ol)
-            out.append(f'<ol>{lis}</ol><br /><p>&nbsp;</p><br />')
+            # 인라인 list-style로 번호를 강제(게시판 스킨이 li{list-style:none}로 번호를 숨기는 것 방지).
+            lis = "".join(f'<li style="list-style:decimal outside;font-size:18px;margin:0 0 8px;">'
+                          f'<span style="{S}">{x}</span></li>' for x in ol)
+            out.append(f'<ol style="padding-left:26px;margin:6px 0;">{lis}</ol><p>&nbsp;</p><br />')
         else:
             for p in paras:
                 out.append(f'<p><span style="{S}">{p}</span></p><br />')
