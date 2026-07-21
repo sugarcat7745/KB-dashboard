@@ -4492,8 +4492,23 @@ def _qna_clean_sub(keyword, sub):
     return s
 
 
-def qna_detail_html(keyword, sections):
-    """상세 답변 필드(wr_content) 본문 — 골격 없이 소제목+문단만(정상글 포맷).
+def _qna_faq_html(faq):
+    """FAQ(자주 묻는 질문) 블록 HTML — 상세 답변 맨 끝에 붙인다(GEO·롱테일 대응).
+    Q는 실제 검색 질의, A는 직답. 게시판 스킨 스타일(18px·<br/> 간격) 유지."""
+    items = [it for it in (faq or []) if str(it.get("q", "")).strip() and str(it.get("a", "")).strip()]
+    if not items:
+        return ""
+    out = ['<h2><span style="font-size: 18px;">자주 묻는 질문</span></h2><br />', '<p>&nbsp;</p><br />']
+    for it in items:
+        q = str(it.get("q", "")).strip(); a = str(it.get("a", "")).strip()
+        out.append(f'<p><span style="font-size: 18px;"><strong>Q. {q}</strong></span></p><br />')
+        out.append(f'<p><span style="font-size: 18px;">A. {a}</span></p><br />')
+        out.append('<p>&nbsp;</p><br />')
+    return "".join(out)
+
+
+def qna_detail_html(keyword, sections, faq=None):
+    """상세 답변 필드(wr_content) 본문 — 골격 없이 소제목+문단(+FAQ)만(정상글 포맷).
     개행문자를 넣지 않는다: 게시판이 자동 줄바꿈(nl2br)을 적용해도 <br> 이중이 안 되도록."""
     out = []
     for sub, paras in sections:
@@ -4503,10 +4518,11 @@ def qna_detail_html(keyword, sections):
         for p in paras:
             out.append(f'<p><span style="font-size: 18px;">{p}</span></p><br />')
             out.append('<p>&nbsp;</p><br />')
+    out.append(_qna_faq_html(faq))                 # FAQ는 본문 맨 끝
     return "".join(out)
 
 
-def qna_build_html(keyword, intro3, sections):
+def qna_build_html(keyword, intro3, sections, faq=None):
     """대시보드 미리보기용 — 게시판 스킨과 동일하게 핵심요약/상세 골격을 붙여 보여준다.
     (실제 업로드는 qna_summary_html/qna_detail_html을 각 필드로 따로 전송)"""
     summary = qna_summary_html(intro3)
@@ -4514,7 +4530,7 @@ def qna_build_html(keyword, intro3, sections):
         f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>핵심 요약 답변</h2></div>',
         f'<div class="v_box column" data-aos="fade-up"><p>{summary}</p></div>',
         f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>상세 답변</h2></div>',
-        f'<div class="v_box column" data-aos="fade-up">{qna_detail_html(keyword, sections)}</div>',
+        f'<div class="v_box column" data-aos="fade-up">{qna_detail_html(keyword, sections, faq)}</div>',
     ])
 
 
@@ -4572,6 +4588,7 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
             '{"sub":"실제 대응 순서","paras":["첫째, ...","둘째, ...","셋째, ...","넷째, ..."]},'
             '{"sub":"변호사 선임이 필요한 이유","paras":["...","..."]},'
             '{"sub":"법무법인 KB의 강점","paras":["...","..."]}],'
+            '"faq":[{"q":"실제 검색형 질문","a":"2~4문장 직답"}],'
             '"laws":["인용한 법조문(정확한 법명·조문번호만. 부가 설명·★표시 금지)"]}\n'
             "핵심 사항에는 반드시 관련 법조문을 인용하라. **법조문은 아래 [검증된 법조문] 목록 안에서만 골라 인용하고, "
             "목록에 없는 조문은 쓰지 마라.** 목록으로 충분히 답할 수 있으면 목록 밖 조문은 절대 쓰지 마라. "
@@ -4588,6 +4605,8 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
             "② 단조롭지 않게: 문장 길이와 구조(단문·복문)를 섞고, 같은 문장 패턴을 반복하지 마라. "
             "③ 근거 있게: 단정하지 말고 '~할 수 있습니다'로 쓰되, 왜 그런지 이유·맥락을 함께 밝혀라. "
             "④ '변호사 선임이 필요한 이유'·'법무법인 KB의 강점' 섹션은 각 2~3문장으로 짧게(홍보보다 실제 답에 밀도를 싣는다). "
+            "[FAQ] faq에는 이 주제로 사람들이 실제 검색·문의하는 질문 3~5개와 각 2~4문장 직답을 넣어라(본문과 겹치지 않는 구체 질문). "
+            "[표현 제약] '최고·유일·1위·No.1·승소 보장·무료' 같은 단정·보장·염가 표현은 쓰지 마라(과장은 신뢰를 떨어뜨린다). "
             "다만 위 [검증된 법조문] 제약은 그대로 지키고, 해당 사안과 무관한 조문을 억지로 늘리지 마라."
             + QNA_GEO_RULES)
     usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}" + vtxt
@@ -4653,7 +4672,7 @@ def qna_make_one(keyword, cat, existing, client=None):
         if not ans:
             return None
         body = qna_build_html(core, ans.get("intro3", []),
-                              [(s["sub"], s["paras"]) for s in ans.get("sections", [])])
+                              [(s["sub"], s["paras"]) for s in ans.get("sections", [])], ans.get("faq"))
         return {"kw": keyword, "cat": cat, "core": core, "title": title, "ans": ans, "body": body}
     except Exception:
         return None
@@ -4681,7 +4700,7 @@ def qna_localize_region(item, region, client=None):
         return {"kw": rkw, "cat": cat, "core": rkw, "title": rtitle, "ans": new_ans,
                 "region": region,
                 "body": qna_build_html(rkw, new_ans.get("intro3", []),
-                                       [(s["sub"], s["paras"]) for s in secs])}
+                                       [(s["sub"], s["paras"]) for s in secs], new_ans.get("faq"))}
 
     try:
         deep = json.loads(json.dumps(ans, ensure_ascii=False))   # 원본 보존용 깊은 복사
@@ -4937,6 +4956,14 @@ def _qna_show_one(col, label, cat, ans, accent, err=""):
             for p in sec.get("paras", []):
                 st.markdown(f"<div style='font-size:12.5px;color:{MUTED};margin-bottom:4px;line-height:1.55'>{p}</div>",
                             unsafe_allow_html=True)
+        faq = ans.get("faq", [])
+        if faq:
+            st.markdown("<div style='font-weight:700;margin-top:8px'>자주 묻는 질문</div>", unsafe_allow_html=True)
+            for it in faq:
+                q = str(it.get("q", "")).strip(); a = str(it.get("a", "")).strip()
+                if q and a:
+                    st.markdown(f"<div style='font-size:12.5px;margin-bottom:4px'><b>Q.</b> {q}<br>"
+                                f"<span style='color:{MUTED}'><b>A.</b> {a}</span></div>", unsafe_allow_html=True)
         vr = qna_laws_for(cat)
         laws = ans.get("laws", [])
         if laws:
@@ -5175,7 +5202,7 @@ def render_qna():
     it["ans"]["intro3"] = intro3
     it["ans"]["sections"] = sections
     it["ans"]["laws"] = laws
-    it["body"] = qna_build_html(core, intro3, [(s["sub"], s["paras"]) for s in sections])
+    it["body"] = qna_build_html(core, intro3, [(s["sub"], s["paras"]) for s in sections], it["ans"].get("faq"))
 
     # 법조문 검증 표시 (미검증=빨강, 검증됨=회색+공식링크)
     need, okl = _split_laws(it)
@@ -5262,10 +5289,10 @@ def render_qna():
         def _up_one(g, region=""):
             """원고 1개 업로드 + 사후처리(qna_posts 반영·변경로그). 성공 시 wr_id."""
             _secs = [(s["sub"], s["paras"]) for s in g["ans"].get("sections", [])]
-            _detail = qna_detail_html(g["core"], _secs)
+            _detail = qna_detail_html(g["core"], _secs, g["ans"].get("faq"))
             _summary = qna_summary_html(g["ans"].get("intro3", []))
             _wid = qna_upload(g["title"], g["cat"], _detail, _summary,
-                              [g["core"], g["cat"], "형사전문변호사"])
+                              [g["core"], g["cat"], f"{g['cat']} 변호사"])
             _qna_append_post(_wid, g, region)
             try:
                 _tag = f"지역={region} · " if region else ""
