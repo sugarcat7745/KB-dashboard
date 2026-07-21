@@ -113,7 +113,10 @@ def pause_kw(kw):
 
 def new_bid_of(effective, rate):
     v = int(round(effective * (1 - rate) / 10.0)) * 10   # 10원 단위
-    return max(MIN_BID, v)
+    v = max(MIN_BID, v)
+    if v % 100 == 0:            # 딱 백원(00원) 단위면 +20원(라운드값 바로 위)
+        v += 20
+    return v
 
 
 def main():
