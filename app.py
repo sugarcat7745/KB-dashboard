@@ -4513,16 +4513,25 @@ def _qna_clean_sub(keyword, sub):
 
 def _qna_faq_html(faq):
     """FAQ(자주 묻는 질문) 블록 HTML — 상세 답변 맨 끝에 붙인다(GEO·롱테일 대응).
-    Q는 실제 검색 질의, A는 직답. 게시판 스킨 스타일(18px·<br/> 간격) 유지."""
+    Q는 실제 검색 질의, A는 직답. 게시판 스킨 스타일(18px·<br/> 간격) 유지.
+    ⭐ schema.org/FAQPage 마이크로데이터(itemscope/itemprop) 삽입 → 생성형 AI·검색이 Q/A를
+    '구조'로 읽는다. 별도 <script>가 아니라 기존 태그의 속성만 쓰므로 게시판 에디터가 지울 확률이 낮다
+    (지워지면 속성만 빠지고 본문은 그대로 → 무해). 사람이 보는 화면은 이전과 동일."""
     items = [it for it in (faq or []) if str(it.get("q", "")).strip() and str(it.get("a", "")).strip()]
     if not items:
         return ""
-    out = ['<h2><span style="font-size: 18px;">자주 묻는 질문</span></h2><br />', '<p>&nbsp;</p><br />']
+    S = "font-size: 18px;"
+    out = ['<div itemscope itemtype="https://schema.org/FAQPage">',
+           f'<h2><span style="{S}">자주 묻는 질문</span></h2><br />', '<p>&nbsp;</p><br />']
     for it in items:
         q = str(it.get("q", "")).strip(); a = str(it.get("a", "")).strip()
-        out.append(f'<p><span style="font-size: 18px;"><strong>Q. {q}</strong></span></p><br />')
-        out.append(f'<p><span style="font-size: 18px;">A. {a}</span></p><br />')
+        out.append('<div itemscope itemprop="mainEntity" itemtype="https://schema.org/Question">')
+        out.append(f'<p><span style="{S}"><strong>Q. <span itemprop="name">{q}</span></strong></span></p><br />')
+        out.append('<div itemscope itemprop="acceptedAnswer" itemtype="https://schema.org/Answer">')
+        out.append(f'<p><span style="{S}">A. <span itemprop="text">{a}</span></span></p><br />')
+        out.append('</div></div>')
         out.append('<p>&nbsp;</p><br />')
+    out.append('</div>')
     return "".join(out)
 
 
@@ -4677,8 +4686,10 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
             "[FAQ] faq에는 이 주제로 사람들이 실제 검색·문의하는 질문 3~5개와 각 2~4문장 직답을 넣어라(본문과 겹치지 않는 구체 질문). "
             "[수치] 이해에 도움되는 구체 기준·기간·비율·비용 수치를 본문에 담아라(법률 글은 구체 수치가 특히 중요). "
             "단, 검증 안 된 형량·금액 숫자는 지어내지 말 것(위 수치 정확성 규칙 준수). "
-            "[표] 표로 정리하면 이해가 쉬운 기준·요건·비교(처벌 기준, 요건 대조, '혼자 대응 vs 변호사 선임' 등)가 있으면 "
-            "table에 넣어라(headers 2~4열, rows 5행 이내). 마땅찮으면 headers·rows를 빈 배열로 둬라. "
+            "[표] 독자가 한눈에 비교·판단할 '사실·기준' 정보를 표로 정리하라(요건 대조, 절차 단계별 소요기간, "
+            "금액·비율·기한 기준, 처벌/청구 수위 대조 등). '혼자 대응 vs 변호사 선임' 같은 홍보성 비교표보다 "
+            "요건·기준·수치 중심의 정보성 표를 우선하라(생성형 AI가 인용하기 좋다). "
+            "headers 2~4열, rows 5행 이내. 마땅찮으면 headers·rows를 빈 배열로 둬라. "
             "[표현 제약] '최고·유일·1위·No.1·승소 보장·무료' 같은 단정·보장·염가 표현은 쓰지 마라(과장은 신뢰를 떨어뜨린다). "
             "다만 위 [검증된 법조문] 제약은 그대로 지키고, 해당 사안과 무관한 조문을 억지로 늘리지 마라."
             + QNA_GEO_RULES)
