@@ -5349,6 +5349,34 @@ def qna_publish_daily(days=14):
         return None
 
 
+def qna_auto_pending():
+    """자동 생성됐지만 아직 게시/스킵 안 된 원고(검수 대기열). user='auto', posted 마커 없는 것.
+    캐시 안 함(승인·삭제가 즉시 반영되게)."""
+    try:
+        return bq_fresh(f"""SELECT d.id, d.cat, d.title, d.payload, CAST(DATE(d.ts,'Asia/Seoul') AS STRING) 날짜
+              FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` d
+              WHERE d.user='auto' AND d.payload!=''
+                AND d.id NOT IN (SELECT id FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` WHERE posted!='')
+              ORDER BY d.ts DESC LIMIT 100""")
+    except Exception:
+        return None
+
+
+def qna_skip_draft(did):
+    """검수에서 '삭제(게시 안 함)' → posted='SKIP' 마커로 대기열에서 제외(멱등 append)."""
+    try:
+        from google.cloud import bigquery
+        client = get_bq()
+        client.load_table_from_json([{
+            "id": str(did), "batch": "", "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": "", "cat": "", "title": "", "payload": "", "posted": "SKIP"}],
+            f"{BQ_PROJECT}.{BQ_DATASET}.qna_draft", job_config=bigquery.LoadJobConfig(
+                schema=_qna_draft_schema(), write_disposition="WRITE_APPEND")).result()
+        return True
+    except Exception:
+        return False
+
+
 @st.cache_data(ttl=300)
 def qna_recent_posts(n=40):
     """최근 게시 이력(게시완료 마커 → 원본 draft에서 분류·제목 join). 실패 시 None."""
@@ -5390,21 +5418,74 @@ def _qna_stats_tab(corpus, cc):
 
 
 def _qna_auto_tab(corpus):
-    """자동 게시 탭 — 계획·현황·최근 게시 이력."""
-    st.markdown('<div class="big-section">자동 게시</div>', unsafe_allow_html=True)
-    st.caption("수요 높은 분야부터 돌아가며 매일 정해진 개수만큼 자동 생성→품질검사→게시합니다. "
-               "‘원고 생성’ 탭의 수동 작업과 별개로 돌고, 중복은 자동으로 피합니다.")
-    st.info("🛠️ 자동 게시 엔진은 준비 단계입니다(다음 배포에서 스케줄 가동). "
-            "**계획:** 매일 오전 10시(KST) · 하루 3~4개 · 분야 순환(수요순) · "
-            "미검증 법조문·저품질 글은 자동 스킵.")
+    """자동 게시 탭 — 매일 자동 생성된 원고의 '검수 대기열'(담당자 승인 시 게시) + 최근 게시 이력."""
+    st.markdown('<div class="big-section">자동 생성 · 검수 대기열</div>', unsafe_allow_html=True)
+    st.caption("매일 오전 10시 자동 생성된 원고입니다. 담당자가 내용을 확인하고 ‘승인·게시’를 눌러야 "
+               "홈페이지에 올라갑니다(대표님 지시로 한 달간 전건 검수). 부적합하면 ‘삭제’로 대기열에서 뺍니다.")
+    cid, _ = _qna_creds()
+    if not cid:
+        st.info("⚠️ 게시하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
+    pend = qna_auto_pending()
+    if pend is None or pend.empty:
+        st.success("검수 대기 중인 자동 생성 원고가 없습니다.")
+    else:
+        st.markdown(f"**검수 대기 {len(pend)}건**")
+        for _, r in pend.iterrows():
+            did, cat, title = str(r["id"]), str(r["cat"]), str(r["title"])
+            try:
+                item = json.loads(r["payload"])
+            except Exception:
+                continue
+            ans = item.get("ans", {}) or {}
+            core = item.get("core", "")
+            laws = ans.get("laws", [])
+            vr = qna_laws_for(cat)
+            need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
+            badge = f"🔴미검증 {len(need)}" if need else "✓조문검증"
+            with st.expander(f"[{cat}] {title}  ·  {badge}  ·  {r['날짜']}"):
+                if need:
+                    st.warning("미검증 조문: " + ", ".join(need) + " — 게시 전 확인 권장")
+                secs = [(s["sub"], s["paras"]) for s in ans.get("sections", [])]
+                related = _qna_related_html(cat, title, core, corpus)
+                body = qna_build_html(core, ans.get("intro3", []), secs,
+                                      ans.get("faq"), ans.get("table"), cat, laws)
+                components.html(f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
+                                f"padding:14px;max-height:420px;overflow:auto'>"
+                                f"<div style='color:{GOLD};font-weight:700'>[{cat}]</div>"
+                                f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>"
+                                f"{body}</div>", height=440, scrolling=True)
+                a1, a2, _a3 = st.columns([1.1, 1.1, 3])
+                if a1.button("✅ 승인·게시", key=f"auto_up_{did}", type="primary", disabled=not cid):
+                    try:
+                        detail = qna_detail_html(core, secs, ans.get("faq"), ans.get("table"), cat, laws, related)
+                        summary = qna_summary_html(ans.get("intro3", []))
+                        wid = qna_upload(title, cat, detail, summary, [core, cat, f"{cat} 변호사"])
+                        qna_mark_posted(did, wid)
+                        _qna_append_post(wid, item)
+                        try:
+                            log_change(st.session_state.get("auth_user", "admin"), "QnA",
+                                       f"자동생성 승인 게시: {title}", f"wr_id={wid} 분류={cat}", "자동 생성·담당자 승인")
+                        except Exception:
+                            pass
+                        try:
+                            qna_corpus.clear()
+                        except Exception:
+                            pass
+                        st.success(f"게시 완료 (wr_id={wid})")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"게시 실패: {e}")
+                if a2.button("🗑️ 삭제(게시 안 함)", key=f"auto_skip_{did}"):
+                    qna_skip_draft(did)
+                    st.rerun()
+    st.divider()
     st.markdown("**최근 게시 이력**")
     rp = qna_recent_posts()
     if rp is None or rp.empty:
         st.caption("아직 게시 이력이 없습니다.")
     else:
         rp = rp.copy()
-        rp["보기"] = rp["wr_id"].apply(
-            lambda w: f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={w}")
+        rp["보기"] = rp["wr_id"].apply(lambda w: f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={w}")
         st.dataframe(rp[["날짜", "분류", "제목", "보기"]], use_container_width=True, hide_index=True,
                      column_config={"보기": st.column_config.LinkColumn("보기", display_text="열기")})
 
