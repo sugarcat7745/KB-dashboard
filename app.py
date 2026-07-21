@@ -4746,8 +4746,31 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
     return good[:n] if good else ["(생성 오류: 조건에 맞는 질문 생성 실패 — 다시 시도하세요)"]
 
 
-def _qna_answer_prompt(title, keyword, cat, verified=None):
-    """답변 생성 프롬프트(system, user) 구성 — 생성·모델비교가 공유(중복 방지)."""
+def _qna_ref_brief(ref, max_chars=1600):
+    """레퍼런스 원고(ans dict) → 형식·깊이 참고용 요약 텍스트(토큰 절약). 없으면 ''.
+    전문을 넣지 않고 골격(요약·섹션 첫 문장·FAQ·표)만 뽑아 '이 형식·깊이로 쓰라'는 힌트로 쓴다."""
+    if not isinstance(ref, dict):
+        return ""
+    out = []
+    intro = ref.get("intro3") or []
+    if intro:
+        out.append("· 핵심요약: " + " / ".join(str(x) for x in intro[:3]))
+    for s in (ref.get("sections") or []):
+        paras = s.get("paras") or []
+        first = str(paras[0]).strip()[:170] if paras else ""
+        out.append(f"· [{str(s.get('sub','')).strip()}] {first}…")
+    faq = ref.get("faq") or []
+    if faq:
+        out.append("· FAQ 예: " + " | ".join(str(f.get("q", "")).strip() for f in faq[:4] if f.get("q")))
+    tbl = ref.get("table") or {}
+    if isinstance(tbl, dict) and tbl.get("headers"):
+        out.append("· 표 예: " + str(tbl.get("title", "")) + " (" + ", ".join(str(h) for h in tbl["headers"]) + ")")
+    return "\n".join(out)[:max_chars]
+
+
+def _qna_answer_prompt(title, keyword, cat, verified=None, ref=None):
+    """답변 생성 프롬프트(system, user) 구성 — 생성·모델비교가 공유(중복 방지).
+    ref: 같은 분류의 우수 원고(ans dict) — 있으면 형식·깊이 참고 예시로 주입(RAG)."""
     vtxt = ""
     if verified:
         def _vline(v):
@@ -4795,18 +4818,23 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
             "다만 위 [검증된 법조문] 제약은 그대로 지키고, 해당 사안과 무관한 조문을 억지로 늘리지 마라."
             + QNA_GEO_RULES + QNA_FIDELITY)
     usr = f"질문 제목: {title}\n키워드(소제목 접두): {keyword}\n분류: {cat}" + vtxt
+    rb = _qna_ref_brief(ref)
+    if rb:
+        usr += ("\n\n[참고 예시 — 아래는 같은 분류의 우수 원고 골격이다. 형식·깊이·구성·톤을 참고하되, "
+                "내용은 위 주제에 맞게 완전히 새로 써라(복사·재사용 금지)]\n" + rb)
     return sysp, usr
 
 
-def qna_gen_answer(title, keyword, cat, client=None, verified=None, model=MODEL_INSIGHT):
+def qna_gen_answer(title, keyword, cat, client=None, verified=None, model=MODEL_INSIGHT, ref=None):
     """Q → 구조화 A 초안 + 법조문 리스트. dict(intro3, sections, laws) 반환.
     실패 시 None(병렬 호출 대비 st.* 미사용). client 지정 시 그 클라이언트 사용.
     verified: 인용 허용 검증 조문 목록(이 밖은 쓰지 말라고 지시).
+    ref: 같은 분류 우수 원고(형식·깊이 참고, RAG).
     model: 기본 Haiku(원고 답변 생성=하이쿠, 비용 1/3). 소넷을 쓰려면 명시적으로 넘김."""
     if not HAS_ANTHROPIC:
         return None
     cli = client or _qna_client()
-    sysp, usr = _qna_answer_prompt(title, keyword, cat, verified)
+    sysp, usr = _qna_answer_prompt(title, keyword, cat, verified, ref)
     try:
         m = cli.messages.create(model=model, max_tokens=5000,
               system=sysp, messages=[{"role": "user", "content": usr}])
@@ -4846,13 +4874,14 @@ def _qna_cost_krw(model_key, it, ot):
     return round((it * in_r + ot * out_r) / 1_000_000 * 1400, 1)
 
 
-def qna_make_one(keyword, cat, existing, client=None):
-    """키워드 1개 → {kw,cat,core,title,ans,body} 완성본. 실패 시 None."""
+def qna_make_one(keyword, cat, existing, client=None, ref=None):
+    """키워드 1개 → {kw,cat,core,title,ans,body} 완성본. 실패 시 None.
+    ref: 같은 분류 우수 원고(형식·깊이 참고, RAG)."""
     try:
         core = re.sub(r"\s*변호사$", "", str(keyword)).strip()
         qs = qna_gen_questions(keyword, cat, existing, n=3, client=client)
-        title = next((q for q in qs if "|" in q), None) or f"{keyword} 변호사 | 처벌과 대응은?"
-        ans = qna_gen_answer(title, core, cat, client=client, verified=qna_laws_for(cat))
+        title = next((q for q in qs if "|" in q), None) or f"{keyword} 변호사 | 어떻게 대응해야 하나요?"
+        ans = qna_gen_answer(title, core, cat, client=client, verified=qna_laws_for(cat), ref=ref)
         # 답변 생성 모델은 qna_gen_answer 기본값(하이쿠)을 따름 — 비용 1/3
         if not ans:
             return None
@@ -4963,6 +4992,76 @@ def qna_reco_keywords(cat, corpus, demand, n=10):
         return out[:n]
     except Exception as e:
         return (demand_kws[:n] or [f"(추천 오류: {e})"])
+
+
+# ── 레퍼런스(우수 원고) 저장·조회 (BigQuery qna_reference) — RAG용 ─────────────
+#  사람이 '이 원고 좋다'고 저장하면, 이후 같은 분류 원고 생성 시 그 형식·깊이를 예시로 참고한다.
+#  (다른 로펌 글 리서치로 만든 '이상적 형식'을 우리 실제 우수 원고로 축적해 가는 자산)
+QNA_REFERENCE_SCHEMA = [("id", "STRING"), ("ts", "TIMESTAMP"), ("user", "STRING"),
+                        ("cat", "STRING"), ("title", "STRING"), ("payload", "STRING"), ("note", "STRING")]
+
+
+def _qna_ref_bqschema():
+    from google.cloud import bigquery
+    return [bigquery.SchemaField(n, t) for n, t in QNA_REFERENCE_SCHEMA]
+
+
+def qna_save_reference(user, cat, item, note=""):
+    """이 원고(item)의 답변(ans)을 '레퍼런스'로 BigQuery에 저장(WRITE_APPEND, 테이블 없으면 생성)."""
+    try:
+        import uuid
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.qna_reference"
+        ans = item.get("ans", {}) if isinstance(item, dict) else {}
+        row = {"id": uuid.uuid4().hex[:12],
+               "ts": datetime.now().isoformat(timespec="seconds"),
+               "user": str(user)[:50], "cat": str(cat)[:40],
+               "title": str(item.get("title", ""))[:300],
+               "payload": json.dumps(ans, ensure_ascii=False)[:900000],
+               "note": str(note)[:300]}
+        client.load_table_from_json([row], tid, job_config=bigquery.LoadJobConfig(
+            schema=_qna_ref_bqschema(), write_disposition="WRITE_APPEND",
+            create_disposition="CREATE_IF_NEEDED")).result()
+        try:
+            qna_reference_for.clear(); qna_reference_count.clear()
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=300)
+def qna_reference_for(cat, n=1):
+    """해당 분류의 최신 레퍼런스 답변(ans dict) 리스트. 없거나 테이블 없으면 []."""
+    try:
+        c = str(cat).replace("'", "")[:40]
+        df = bq(f"SELECT payload FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_reference` "
+                f"WHERE cat='{c}' AND payload!='' ORDER BY ts DESC LIMIT {int(n)}")
+        if df is None or df.empty:
+            return []
+        out = []
+        for _, r in df.iterrows():
+            try:
+                out.append(json.loads(r["payload"]))
+            except Exception:
+                pass
+        return out
+    except Exception:
+        return []
+
+
+@st.cache_data(ttl=300)
+def qna_reference_count(cat):
+    """해당 분류 레퍼런스 개수(테이블 없으면 0)."""
+    try:
+        c = str(cat).replace("'", "")[:40]
+        df = bq(f"SELECT COUNT(*) n FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_reference` "
+                f"WHERE cat='{c}' AND payload!=''")
+        return int(df.iloc[0]["n"]) if df is not None and not df.empty else 0
+    except Exception:
+        return 0
 
 
 # ── 생성한 원고 저장·불러오기 (BigQuery qna_draft, append-only) ─────────────
@@ -5307,13 +5406,14 @@ def render_qna():
                 client = _qna_client()
             except Exception:
                 client = None
+            _ref = (qna_reference_for(sel) or [None])[0]   # 같은 분류 우수 원고(RAG) — 스레드 밖 메인에서 미리 조회
             with st.spinner(f"{len(use)}개 원고 동시 생성 중… (1분 내외)"):
                 with ThreadPoolExecutor(max_workers=5) as ex:
-                    items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client), use))
+                    items = list(ex.map(lambda k: qna_make_one(k, sel, existing, client, _ref), use))
                     # 실패(None)한 키워드는 1회 재시도 — 일시적 생성 실패로 개수가 줄지 않게
                     fail_idx = [i for i, it in enumerate(items) if not it]
                     if fail_idx:
-                        retry = list(ex.map(lambda i: qna_make_one(use[i], sel, existing, client), fail_idx))
+                        retry = list(ex.map(lambda i: qna_make_one(use[i], sel, existing, client, _ref), fail_idx))
                         for i, it in zip(fail_idx, retry):
                             items[i] = it
             ok = [it for it in items if it]
@@ -5502,6 +5602,18 @@ def render_qna():
                 f"<div style='color:{GOLD};font-weight:700'>[분류: {cat}]</div>"
                 f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>{it['body']}</div>")
         components.html(prev, height=400, scrolling=True)
+
+    # ── 레퍼런스로 저장 (RAG: 이후 같은 분류 생성 시 AI가 형식·깊이 참고) ──
+    _rc = qna_reference_count(cat)
+    _rb1, _rb2 = st.columns([1.25, 3.75], vertical_alignment="center")
+    if _rb1.button("⭐ 레퍼런스로 저장", key=f"qna_ref_save_{sidx}",
+                   help="이 원고를 우수 예시로 저장하면, 이후 같은 분류 원고를 생성할 때 AI가 이 형식·깊이·구성을 참고합니다."):
+        if qna_save_reference(st.session_state.get("auth_user", "admin"), cat, it):
+            st.success("레퍼런스로 저장했습니다. 다음 생성부터 이 형식·깊이를 참고합니다.")
+            st.rerun()
+        else:
+            st.error("레퍼런스 저장 실패(BQ 오류).")
+    _rb2.caption(f"현재 '{cat}' 레퍼런스 {_rc}개 — 생성 시 최신 1개를 형식 예시로 참고합니다.")
 
     # ── 일괄 업로드 ──
     st.divider()
