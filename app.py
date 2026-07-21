@@ -4060,6 +4060,25 @@ def _qna_forbid(prof):
         return ("'처벌·형량'은 실제 형사 요소(가해행위 등)가 있을 때만 다루고, 그 밖에는 조치·처분·구제·절차 중심으로 쓴다. ")
     return ""
 
+
+# 뻔한 질문 템플릿·카테고리 부적합을 코드로 걸러낸다(프롬프트만으로는 하이쿠가 종종 무시함).
+_QNA_Q_TAIL = re.compile(r"이?란\?\s*$")                          # '○○란?'·'○○이란?' 정의형 꼬리
+_QNA_CRIME_WORDS = re.compile(r"처벌|형량|구속|기소|전과|벌금|징역|실형|양형|집행유예|형사처벌")
+
+
+def _qna_bad_question(title, prof):
+    """재생성해야 할 나쁜 질문이면 True.
+    ① '처벌과 대응은?'·'○○란?' 같은 상투 템플릿(강동현 지적) ② 처벌-금지(비형사) 분야에 형사 개념."""
+    s = str(title)
+    q = s.split("|")[-1].strip()          # '키워드 변호사 | 질문?' 에서 질문부만
+    if ("처벌과 대응" in q) or ("처벌 및 대응" in q) or ("처벌및대응" in q):
+        return True
+    if _QNA_Q_TAIL.search(q):
+        return True
+    if prof.get("punish") == "no" and _QNA_CRIME_WORDS.search(s):
+        return True
+    return False
+
 # QnA 탭 접근 허용 아이디(관리자 admin 외 추가). 회사계정 등.
 #   여기 상수에 추가하거나, Streamlit Secrets [qna_access] users = ["아이디", ...] 로도 지정 가능.
 QNA_USERS = {"lawkbsw"}
@@ -4565,31 +4584,56 @@ def _qna_client():
 
 
 def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
-    """공백 키워드 → 다양한 말투의 Q n개(중복 제외). 리스트 반환.
+    """공백 키워드 → 다양한 말투의 Q n개. 뻔한 템플릿('처벌과 대응은?'·'○○란?')과
+    비형사 분야의 형사 개념을 코드로 걸러내고, 모자라면 재생성해 채운다(하이쿠가 지시를 자주 무시함).
     client 지정 시 그 클라이언트 사용(병렬 호출용, 스레드 안전)."""
     if not HAS_ANTHROPIC:
         return ["(AI 비활성화)"]
     cli = client or _qna_client()
     prof = _qna_profile(cat)
+    if prof.get("punish") == "no":
+        forbid_tail = ("특히 금지: '처벌과 대응은?' 및 '처벌·형량·구속·기소·전과·벌금·징역' 등 형사 개념"
+                       "(이 분야는 형사 사건이 아니다), 그리고 '○○란?'·'○○이란?' 같은 정의·상투 템플릿. ")
+    else:
+        forbid_tail = "특히 금지: '○○의 처벌과 대응은?', '○○란?' 같은 뻔한 정의·상투 템플릿. "
     sysp = (f"너는 법무법인 KB 홈페이지 '{cat}' 게시판의 QnA 질문을 만드는 카피라이터다. "
             f"독자는 {prof['reader']}다. 이 분야에서 실제로 검색·문의하는 자연스러운 말투로, "
             f"서로 다른 유형({prof['qtypes']})을 섞어 질문을 만든다. "
             + _qna_forbid(prof) +
-            "질문은 '○○의 처벌과 대응은?', '○○란?' 같은 뻔한 템플릿을 쓰지 말고, "
-            "조건·상황이 담긴 구체적 자연어 질문으로 만든다. "
+            "질문은 금액·기간·관계·행위 같은 구체 정황이 담긴 자연어여야 한다. " + forbid_tail +
             "각 질문은 반드시 '키워드 변호사 | 질문?' 형식 한 줄이고, 실제 사건 상황이 드러나야 한다. "
-            "아래 [이미 있는 제목]과 겹치지 않게 하라. JSON 배열(문자열 10개)만 출력하라.")
-    usr = (f"키워드: {keyword} (분류: {cat})\n"
-           f"[이미 있는 제목 일부]\n" + "\n".join(existing_titles[:60]))
-    try:
-        # 질문(제목) 생성은 단순 작업 → 저렴한 Haiku (법률 정확도 필요한 '답변'만 Sonnet)
-        m = cli.messages.create(model=MODEL_INSIGHT, max_tokens=700,
-              system=sysp, messages=[{"role": "user", "content": usr}])
-        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
-        arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
-        return [str(x) for x in arr][:n]
-    except Exception as e:
-        return [f"(생성 오류: {e})"]
+            "JSON 배열(문자열)만 출력하라.")
+
+    def _call(need, avoid):
+        avoid_list = list(existing_titles[:40]) + list(avoid)
+        usr = (f"키워드: {keyword} (분류: {cat})\n"
+               f"질문 {need}개를 JSON 배열로 새로 만들어라. 아래 제목들과 겹치지 마라.\n"
+               f"[이미 있는/이미 뽑은 제목]\n" + "\n".join(avoid_list[:80]))
+        try:
+            # 질문(제목) 생성은 단순 작업 → 저렴한 Haiku (법률 정확도 필요한 '답변'만 Sonnet)
+            m = cli.messages.create(model=MODEL_INSIGHT, max_tokens=700,
+                  system=sysp, messages=[{"role": "user", "content": usr}])
+            txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+            arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
+            return [str(x) for x in arr]
+        except Exception:
+            return []
+
+    good, seen = [], set()
+    for _round in range(3):               # 나쁜 템플릿을 걸러 모자란 만큼 최대 3라운드 재생성
+        need = n - len(good)
+        if need <= 0:
+            break
+        for t in _call(need + 2, good):   # 버퍼 +2(걸러질 것 대비)
+            if _qna_bad_question(t, prof):
+                continue
+            k = t.strip()
+            if not k or k in seen:
+                continue
+            seen.add(k); good.append(t)
+            if len(good) >= n:
+                break
+    return good[:n] if good else ["(생성 오류: 조건에 맞는 질문 생성 실패 — 다시 시도하세요)"]
 
 
 def _qna_answer_prompt(title, keyword, cat, verified=None):
@@ -4922,11 +4966,16 @@ def qna_load_latest(cat):
 
 
 def _qna_reset_item_flags():
-    """직전 배치의 승인·게시완료 플래그(인덱스 기반) 초기화.
-    새 배치를 생성/추천/복원할 때 호출해 '인덱스 충돌로 새 원고가 게시됨으로 잠기는' 문제 방지."""
-    for k in [k for k in list(st.session_state.keys())
-              if k.startswith("qna_posted_") or k.startswith("qna_confirm_")]:
-        st.session_state.pop(k, None)
+    """직전 배치의 인덱스 기반 세션 상태를 싹 비운다(승인·게시완료 플래그 + 편집칸 값 + 상세 선택).
+    새 배치를 생성/추천/복원할 때 호출.
+    ⚠️ 이걸 안 하면 인덱스가 겹치는 위젯(제목·문단·법조문 편집칸 `qna_e_*`, 상세선택 `qna_detail_sel`)에
+    '이전 배치에서 고친 값'이 남아 새로 불러온 원고에 옛 내용이 섞인다 — Streamlit은 key가 이미 있으면
+    value= 인자를 무시하고 저장된 값을 쓰기 때문이다. 게다가 그 값이 새 item에 되쓰기돼(it['title']=...)
+    불러온 원고가 조용히 오염된다."""
+    _PREFIX = ("qna_posted_", "qna_confirm_", "qna_e_", "qna_prev_", "qna_rsch_")
+    for k in list(st.session_state.keys()):
+        if k.startswith(_PREFIX) or k == "qna_detail_sel":
+            st.session_state.pop(k, None)
 
 
 def _qna_append_post(wid, g, region=""):
