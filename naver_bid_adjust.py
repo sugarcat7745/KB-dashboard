@@ -170,17 +170,26 @@ def main():
         return
 
     print("\n[적용]")
-    okr = okp = 0
+    okr = okp = 0; csv = []
     for cname, gname, k, eff, nb, rate in plan_reduce:
         ok, e = set_bid(k, nb)
         okr += 1 if ok else 0
         print(f"  {'✅' if ok else '❌'} {gname} > {k.get('keyword')} {eff:,}→{nb:,}" + ("" if ok else f"  {e}"))
+        csv.append("|".join(str(x) for x in [cname, gname, k.get("keyword"),
+                   "입찰감액", eff, nb, f"-{int(rate*100)}%", "적용" if ok else "실패"]))
     for cname, gname, k in plan_pause:
         ok, e = pause_kw(k)
         okp += 1 if ok else 0
         print(f"  {'✅' if ok else '❌'} 일시정지 {gname} > {k.get('keyword')}" + ("" if ok else f"  {e}"))
+        csv.append("|".join(str(x) for x in [cname, gname, k.get("keyword"),
+                   "일시정지", "", "", "", "적용" if ok else "실패"]))
     print(f"\n완료. 감액 {okr}/{len(plan_reduce)} · 일시정지 {okp}/{len(plan_pause)}. "
           f"되돌리기: 위 '현재입찰'로 복구 / 일시정지는 다시 ON.")
+    print("\n===CSV_START===")
+    print("캠페인|그룹|키워드|조치|현재입찰|새입찰|감액률|상태")
+    for row in csv:
+        print(row)
+    print("===CSV_END===")
 
 
 if __name__ == "__main__":
