@@ -4590,20 +4590,74 @@ def _qna_lawlinks_html(cat, laws):
             + "".join(lis) + '<p>&nbsp;</p><br />')
 
 
-def qna_detail_html(keyword, sections, faq=None, table=None, cat=None, laws=None):
-    """상세 답변 필드(wr_content) 본문 — 소제목+문단(+표+FAQ+관련법령 링크). 정상글 포맷 유지.
+# '첫째/둘째/①/1.' 처럼 순서형으로 시작하는 문단 → 진짜 <ol> 리스트로(생성형 AI가 절차를 구조로 추출).
+_QNA_ORD = re.compile(r"^\s*(첫째|둘째|셋째|넷째|다섯째|여섯째|일곱째|여덟째|아홉째|열째|"
+                      r"[①②③④⑤⑥⑦⑧⑨⑩]|\d+\s*[.)])[\s,.:·-]*")
+
+
+def _qna_as_ordered(paras):
+    """문단들이 순서형 목록이면 접두(첫째 등)를 떼고 항목 리스트 반환, 아니면 None."""
+    ps = [str(p).strip() for p in paras if str(p).strip()]
+    if len(ps) < 2:
+        return None
+    hits = sum(1 for p in ps if _QNA_ORD.match(p))
+    if hits < max(2, (len(ps) + 1) // 2):          # 과반이 순서형일 때만 리스트로
+        return None
+    return [_QNA_ORD.sub("", p).strip() for p in ps]
+
+
+def _qna_related_html(cat, cur_title, cur_core, corpus, n=3):
+    """같은 분류의 관련 QnA로 내부 링크(주제 권위·크롤 깊이·체류↑). 키워드 겹침 상위 n개.
+    corpus 없거나 관련 글 없으면 빈 문자열."""
+    try:
+        if corpus is None or getattr(corpus, "empty", True):
+            return ""
+        sub = corpus[corpus["cat"].astype(str) == str(cat)].copy()
+        sub = sub[sub["title"].astype(str).str.strip() != str(cur_title).strip()]
+        if sub.empty:
+            return ""
+        cur = re.sub(r"\s+", "", f"{cur_core}{cur_title}")
+        toks_cur = set(re.findall(r"[가-힣]{2,}", cur))
+
+        def _score(r):
+            hay = f"{r.get('base_kw','')}{r.get('title','')}"
+            return sum(len(tk) for tk in set(re.findall(r"[가-힣]{2,}", hay)) if tk in cur or tk in toks_cur)
+        sub["_s"] = sub.apply(_score, axis=1)
+        sub = sub.sort_values("_s", ascending=False).head(n)
+        rows = [r for _, r in sub.iterrows() if str(r.get("title", "")).strip()]
+        if not rows:
+            return ""
+        S = "font-size: 18px;"
+        lis = "".join(
+            f'<li><span style="{S}"><a href="{QNA_BASE}/bbs/board.php?bo_table=QnA&amp;wr_id={r["wr_id"]}">'
+            f'{str(r["title"]).replace("&", "&amp;").replace("<", "&lt;")}</a></span></li>' for r in rows)
+        return (f'<h2><span style="{S}">관련 질문</span></h2><br /><p>&nbsp;</p><br />'
+                f'<ul>{lis}</ul><br /><p>&nbsp;</p><br />')
+    except Exception:
+        return ""
+
+
+def qna_detail_html(keyword, sections, faq=None, table=None, cat=None, laws=None, related_html=""):
+    """상세 답변 필드(wr_content) 본문 — 소제목+문단(+표+FAQ+관련법령+관련질문). 정상글 포맷 유지.
     개행문자를 넣지 않는다: 게시판이 자동 줄바꿈(nl2br)을 적용해도 <br> 이중이 안 되도록.
-    cat/laws를 주면 맨 끝에 검증 조문 law.go.kr 링크 블록을 붙인다(출처 인용=GEO 신호)."""
+    순서형 문단은 <ol>로, cat/laws는 law.go.kr 출처 링크로, related_html은 내부링크로 붙인다(GEO)."""
+    S = "font-size: 18px;"
     out = [_qna_table_html(keyword, table)]        # 표는 본문 맨 앞(한눈에 보기)
     for sub, paras in sections:
         clean = _qna_clean_sub(keyword, sub)
-        out.append(f'<h2><span style="font-size: 18px;">{keyword} | {clean}</span></h2><br />')
+        out.append(f'<h2><span style="{S}">{keyword} | {clean}</span></h2><br />')
         out.append('<p>&nbsp;</p><br />')
-        for p in paras:
-            out.append(f'<p><span style="font-size: 18px;">{p}</span></p><br />')
-            out.append('<p>&nbsp;</p><br />')
-    out.append(_qna_faq_html(faq))                 # FAQ는 본문 맨 끝
-    out.append(_qna_lawlinks_html(cat, laws))      # 관련 법령(출처) 링크는 그 아래
+        ol = _qna_as_ordered(paras)                # '첫째/둘째…'면 진짜 순서 목록으로
+        if ol:
+            lis = "".join(f'<li><span style="{S}">{x}</span></li>' for x in ol)
+            out.append(f'<ol>{lis}</ol><br /><p>&nbsp;</p><br />')
+        else:
+            for p in paras:
+                out.append(f'<p><span style="{S}">{p}</span></p><br />')
+                out.append('<p>&nbsp;</p><br />')
+    out.append(_qna_faq_html(faq))                 # FAQ
+    out.append(_qna_lawlinks_html(cat, laws))      # 관련 법령(출처) 링크
+    out.append(related_html or "")                 # 관련 질문(내부 링크)
     return "".join(out)
 
 
@@ -5447,8 +5501,9 @@ def render_qna():
         def _up_one(g):
             """원고 1개 업로드 + 사후처리(qna_posts 반영·변경로그). 성공 시 wr_id."""
             _secs = [(s["sub"], s["paras"]) for s in g["ans"].get("sections", [])]
+            _related = _qna_related_html(g.get("cat"), g.get("title", ""), g.get("core", ""), corpus)
             _detail = qna_detail_html(g["core"], _secs, g["ans"].get("faq"), g["ans"].get("table"),
-                                      g.get("cat"), g["ans"].get("laws"))
+                                      g.get("cat"), g["ans"].get("laws"), _related)
             _summary = qna_summary_html(g["ans"].get("intro3", []))
             _wid = qna_upload(g["title"], g["cat"], _detail, _summary,
                               [g["core"], g["cat"], f"{g['cat']} 변호사"])
