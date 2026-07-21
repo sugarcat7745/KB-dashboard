@@ -4642,11 +4642,13 @@ def _qna_related_html(cat, cur_title, cur_core, corpus, n=3):
         if not rows:
             return ""
         S = "font-size: 18px;"
+        # '관련 법령(출처)'와 동일하게 <p>· 링크 형식 — <ul>은 스킨이 들여쓰기를 넣어 어색해 보임.
         lis = "".join(
-            f'<li><span style="{S}"><a href="{QNA_BASE}/bbs/board.php?bo_table=QnA&amp;wr_id={r["wr_id"]}">'
-            f'{str(r["title"]).replace("&", "&amp;").replace("<", "&lt;")}</a></span></li>' for r in rows)
+            f'<p><span style="{S}">· '
+            f'<a href="{QNA_BASE}/bbs/board.php?bo_table=QnA&amp;wr_id={r["wr_id"]}">'
+            f'{str(r["title"]).replace("&", "&amp;").replace("<", "&lt;")}</a></span></p><br />' for r in rows)
         return (f'<h2><span style="{S}">관련 질문</span></h2><br /><p>&nbsp;</p><br />'
-                f'<ul>{lis}</ul><br /><p>&nbsp;</p><br />')
+                + lis + '<p>&nbsp;</p><br />')
     except Exception:
         return ""
 
