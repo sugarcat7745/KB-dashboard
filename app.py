@@ -5289,6 +5289,37 @@ def render_qna():
                             key=f"qna_e_laws_{sidx}", height=110)
     laws = [x.strip() for x in laws_txt.splitlines() if x.strip()]
 
+    # ── 표(한눈에 보기) 편집 — 상세 화면에 안 보이던 표를 직접 보고 고친다(게시글 본문 맨 위에 들어감) ──
+    tbl = ans.get("table") if isinstance(ans.get("table"), dict) else {}
+    t_headers = [str(h).strip() for h in (tbl.get("headers") or []) if str(h).strip()]
+    if t_headers:
+        seen_h, cols = {}, []                       # 중복 헤더는 편집 그리드가 거부 → 표시용만 유니크화
+        for h in t_headers:
+            seen_h[h] = seen_h.get(h, 0) + 1
+            cols.append(h if seen_h[h] == 1 else f"{h} ({seen_h[h]})")
+        t_rows = [(list(map(str, r)) + [""] * len(cols))[:len(cols)]
+                  for r in (tbl.get("rows") or []) if isinstance(r, (list, tuple))]
+        st.markdown(f"**📊 표 · {tbl.get('title') or '한눈에 보기'}** — "
+                    "셀을 직접 고치거나 행을 추가/삭제할 수 있습니다(게시글 맨 위에 표시)")
+        tdf = st.data_editor(pd.DataFrame(t_rows, columns=cols), key=f"qna_e_tbl_{sidx}",
+                             num_rows="dynamic", use_container_width=True, hide_index=True).fillna("")
+        ans["table"] = {"title": tbl.get("title", ""), "headers": t_headers,
+                        "rows": [[str(c) for c in row] for row in tdf.values.tolist()
+                                 if any(str(c).strip() for c in row)]}
+    else:
+        st.caption("📊 이 원고에는 표가 없습니다.")
+
+    # ── FAQ(자주 묻는 질문) 편집 — 역시 상세 화면에 노출(게시글 본문 맨 끝에 들어감) ──
+    faq_list = ans.get("faq") if isinstance(ans.get("faq"), list) else []
+    if faq_list:
+        st.markdown("**❓ FAQ(자주 묻는 질문)** — Q/A를 직접 고치거나 행을 추가/삭제할 수 있습니다(게시글 맨 끝에 표시)")
+        fdf = pd.DataFrame([{"질문(Q)": str(f.get("q", "")), "답변(A)": str(f.get("a", ""))}
+                            for f in faq_list])
+        fedf = st.data_editor(fdf, key=f"qna_e_faq_{sidx}", num_rows="dynamic",
+                              use_container_width=True, hide_index=True).fillna("")
+        ans["faq"] = [{"q": str(r["질문(Q)"]).strip(), "a": str(r["답변(A)"]).strip()}
+                      for _, r in fedf.iterrows() if str(r["질문(Q)"]).strip()]
+
     # 편집 결과를 세션 아이템에 반영 → 완성본·업로드·목록배지에 즉시 사용
     it["title"] = title
     it["ans"]["intro3"] = intro3
