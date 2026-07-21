@@ -5440,24 +5440,11 @@ def render_qna():
                 if st.session_state.get(f"qna_confirm_{i}") and not st.session_state.get(f"qna_posted_{i}")]
     if not cid:
         st.info("업로드하려면 Streamlit Secrets에 [qna_board] id/pw 를 추가하세요.")
-    # 지역판 자동 동반 업로드 — 승인 글마다 지역 각색본 1개를 검수 없이 함께 게시(23개 도시 순환)
-    region_on = st.checkbox(
-        "🏙️ 승인 글마다 지역판 1개도 자동 생성·업로드 (하이쿠 각색 · 검수 없이 바로 게시)",
-        value=True, key="qna_region_auto",
-        help="기본글을 올릴 때 같은 내용을 지역 맥락으로 살짝 각색한 글을 도시별로 하나씩 자동 게시합니다. "
-             "본문·법조문은 그대로 재사용하고 도입부만 지역용으로 바뀝니다.")
-    up_label = (f"✅ 승인한 {len(approved)}개 + 지역판 {len(approved)}개 일괄 업로드"
-                if region_on else f"✅ 승인한 {len(approved)}개 일괄 업로드")
-    if st.button(up_label, key="qna_batch_up",
+    # 지역은 이제 키워드 추천 단계에서 '지역+일반' 반반으로 자연 분산 → 업로드 시 지역 자동복제는 하지 않는다.
+    if st.button(f"✅ 승인한 {len(approved)}개 일괄 업로드", key="qna_batch_up",
                  disabled=not (approved and cid), type="primary"):
-        try:
-            _rcli = _qna_client()
-        except Exception:
-            _rcli = None
-        import random
-        rstart = random.randint(0, len(QNA_REGIONS) - 1)   # 배치마다 다른 도시부터 순환
 
-        def _up_one(g, region=""):
+        def _up_one(g):
             """원고 1개 업로드 + 사후처리(qna_posts 반영·변경로그). 성공 시 wr_id."""
             _secs = [(s["sub"], s["paras"]) for s in g["ans"].get("sections", [])]
             _detail = qna_detail_html(g["core"], _secs, g["ans"].get("faq"), g["ans"].get("table"),
@@ -5465,17 +5452,16 @@ def render_qna():
             _summary = qna_summary_html(g["ans"].get("intro3", []))
             _wid = qna_upload(g["title"], g["cat"], _detail, _summary,
                               [g["core"], g["cat"], f"{g['cat']} 변호사"])
-            _qna_append_post(_wid, g, region)
+            _qna_append_post(_wid, g)
             try:
-                _tag = f"지역={region} · " if region else ""
                 log_change(st.session_state.get("auth_user", "admin"), "QnA",
-                           f"QnA 게시: {g['title']}", f"{_tag}wr_id={_wid} 분류={g['cat']}",
-                           "지역 자동 생성" if region else "실수요 기반 원고")
+                           f"QnA 게시: {g['title']}", f"wr_id={_wid} 분류={g['cat']}",
+                           "실수요 기반 원고")
             except Exception:
                 pass
             return _wid
 
-        prog = st.progress(0.0); done = 0; rdone = 0; rfail = 0
+        prog = st.progress(0.0); done = 0
         for n, i in enumerate(approved):
             g = items[i]
             try:
@@ -5483,23 +5469,11 @@ def render_qna():
                 st.session_state[f"qna_posted_{i}"] = wid; done += 1
                 if g.get("_did"):   # 저장분을 게시완료 표시 → 다시 불러와도 중복 업로드 방지
                     qna_mark_posted(g["_did"], wid)
-                # ── 지역판 1개 자동 동반 업로드(검수 없이) ──
-                if region_on:
-                    region = QNA_REGIONS[(rstart + n) % len(QNA_REGIONS)]
-                    try:
-                        twin = qna_localize_region(g, region, client=_rcli)
-                        _up_one(twin, region=region); rdone += 1
-                    except Exception as re_:
-                        rfail += 1
-                        st.warning(f"[{region} {g['core']}] 지역판 업로드 실패: {re_}")
             except Exception as e:
                 st.error(f"[{g['title']}] 업로드 실패: {e}")
             prog.progress((n + 1) / len(approved))
-        msg = f"기본 {done}/{len(approved)}개 업로드 완료"
-        if region_on:
-            msg += f" · 지역판 {rdone}개 게시" + (f"(실패 {rfail})" if rfail else "")
-        st.success(msg)
-        if done or rdone:
+        st.success(f"{done}/{len(approved)}개 업로드 완료")
+        if done:
             try:
                 qna_corpus.clear()   # 게시글 수(분류 버튼)·중복대조 즉시 갱신
             except Exception:
