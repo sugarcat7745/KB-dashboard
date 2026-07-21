@@ -4507,10 +4507,34 @@ def _qna_faq_html(faq):
     return "".join(out)
 
 
-def qna_detail_html(keyword, sections, faq=None):
-    """상세 답변 필드(wr_content) 본문 — 골격 없이 소제목+문단(+FAQ)만(정상글 포맷).
+def _qna_table_html(keyword, table):
+    """핵심 기준·비교 표 HTML — 게시판 에디터가 지워도 안전하게 인라인 스타일만 사용.
+    headers/rows가 비면 아무것도 렌더하지 않음(선택). 표는 GEO·가독성 신호."""
+    if not isinstance(table, dict):
+        return ""
+    headers = [str(h).strip() for h in (table.get("headers") or []) if str(h).strip()]
+    rows = [r for r in (table.get("rows") or []) if isinstance(r, (list, tuple)) and any(str(c).strip() for c in r)]
+    if not headers or not rows:
+        return ""
+    title = str(table.get("title") or "").strip() or "한눈에 보기"
+    th = "".join(f'<th style="border:1px solid #ccc;padding:8px 10px;background:#f4f4f4;'
+                 f'font-size:16px;text-align:left;">{h}</th>' for h in headers)
+    trs = ""
+    for r in rows:
+        cells = [str(c).strip() for c in r]
+        cells = (cells + [""] * len(headers))[:len(headers)]        # 열 수 맞춤
+        trs += "<tr>" + "".join(f'<td style="border:1px solid #ccc;padding:8px 10px;'
+                                f'font-size:16px;">{c}</td>' for c in cells) + "</tr>"
+    return (f'<h2><span style="font-size: 18px;">{keyword} | {title}</span></h2><br />'
+            f'<table style="border-collapse:collapse;width:100%;margin:4px 0;">'
+            f'<thead><tr>{th}</tr></thead><tbody>{trs}</tbody></table>'
+            '<br /><p>&nbsp;</p><br />')
+
+
+def qna_detail_html(keyword, sections, faq=None, table=None):
+    """상세 답변 필드(wr_content) 본문 — 소제목+문단(+표+FAQ). 정상글 포맷 유지.
     개행문자를 넣지 않는다: 게시판이 자동 줄바꿈(nl2br)을 적용해도 <br> 이중이 안 되도록."""
-    out = []
+    out = [_qna_table_html(keyword, table)]        # 표는 본문 맨 앞(한눈에 보기)
     for sub, paras in sections:
         clean = _qna_clean_sub(keyword, sub)
         out.append(f'<h2><span style="font-size: 18px;">{keyword} | {clean}</span></h2><br />')
@@ -4522,7 +4546,7 @@ def qna_detail_html(keyword, sections, faq=None):
     return "".join(out)
 
 
-def qna_build_html(keyword, intro3, sections, faq=None):
+def qna_build_html(keyword, intro3, sections, faq=None, table=None):
     """대시보드 미리보기용 — 게시판 스킨과 동일하게 핵심요약/상세 골격을 붙여 보여준다.
     (실제 업로드는 qna_summary_html/qna_detail_html을 각 필드로 따로 전송)"""
     summary = qna_summary_html(intro3)
@@ -4530,7 +4554,7 @@ def qna_build_html(keyword, intro3, sections, faq=None):
         f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>핵심 요약 답변</h2></div>',
         f'<div class="v_box column" data-aos="fade-up"><p>{summary}</p></div>',
         f'<div class="qa_title"><img src="{QNA_ICON}"/><h2>상세 답변</h2></div>',
-        f'<div class="v_box column" data-aos="fade-up">{qna_detail_html(keyword, sections, faq)}</div>',
+        f'<div class="v_box column" data-aos="fade-up">{qna_detail_html(keyword, sections, faq, table)}</div>',
     ])
 
 
@@ -4589,6 +4613,7 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
             '{"sub":"변호사 선임이 필요한 이유","paras":["...","..."]},'
             '{"sub":"법무법인 KB의 강점","paras":["...","..."]}],'
             '"faq":[{"q":"실제 검색형 질문","a":"2~4문장 직답"}],'
+            '"table":{"title":"표 제목(예: 처벌 기준·요건 비교)","headers":["열1","열2"],"rows":[["a","b"]]},'
             '"laws":["인용한 법조문(정확한 법명·조문번호만. 부가 설명·★표시 금지)"]}\n'
             "핵심 사항에는 반드시 관련 법조문을 인용하라. **법조문은 아래 [검증된 법조문] 목록 안에서만 골라 인용하고, "
             "목록에 없는 조문은 쓰지 마라.** 목록으로 충분히 답할 수 있으면 목록 밖 조문은 절대 쓰지 마라. "
@@ -4606,6 +4631,10 @@ def _qna_answer_prompt(title, keyword, cat, verified=None):
             "③ 근거 있게: 단정하지 말고 '~할 수 있습니다'로 쓰되, 왜 그런지 이유·맥락을 함께 밝혀라. "
             "④ '변호사 선임이 필요한 이유'·'법무법인 KB의 강점' 섹션은 각 2~3문장으로 짧게(홍보보다 실제 답에 밀도를 싣는다). "
             "[FAQ] faq에는 이 주제로 사람들이 실제 검색·문의하는 질문 3~5개와 각 2~4문장 직답을 넣어라(본문과 겹치지 않는 구체 질문). "
+            "[수치] 이해에 도움되는 구체 기준·기간·비율·비용 수치를 본문에 담아라(법률 글은 구체 수치가 특히 중요). "
+            "단, 검증 안 된 형량·금액 숫자는 지어내지 말 것(위 수치 정확성 규칙 준수). "
+            "[표] 표로 정리하면 이해가 쉬운 기준·요건·비교(처벌 기준, 요건 대조, '혼자 대응 vs 변호사 선임' 등)가 있으면 "
+            "table에 넣어라(headers 2~4열, rows 5행 이내). 마땅찮으면 headers·rows를 빈 배열로 둬라. "
             "[표현 제약] '최고·유일·1위·No.1·승소 보장·무료' 같은 단정·보장·염가 표현은 쓰지 마라(과장은 신뢰를 떨어뜨린다). "
             "다만 위 [검증된 법조문] 제약은 그대로 지키고, 해당 사안과 무관한 조문을 억지로 늘리지 마라."
             + QNA_GEO_RULES)
@@ -4672,7 +4701,8 @@ def qna_make_one(keyword, cat, existing, client=None):
         if not ans:
             return None
         body = qna_build_html(core, ans.get("intro3", []),
-                              [(s["sub"], s["paras"]) for s in ans.get("sections", [])], ans.get("faq"))
+                              [(s["sub"], s["paras"]) for s in ans.get("sections", [])],
+                              ans.get("faq"), ans.get("table"))
         return {"kw": keyword, "cat": cat, "core": core, "title": title, "ans": ans, "body": body}
     except Exception:
         return None
@@ -4700,7 +4730,8 @@ def qna_localize_region(item, region, client=None):
         return {"kw": rkw, "cat": cat, "core": rkw, "title": rtitle, "ans": new_ans,
                 "region": region,
                 "body": qna_build_html(rkw, new_ans.get("intro3", []),
-                                       [(s["sub"], s["paras"]) for s in secs], new_ans.get("faq"))}
+                                       [(s["sub"], s["paras"]) for s in secs], new_ans.get("faq"),
+                                       new_ans.get("table"))}
 
     try:
         deep = json.loads(json.dumps(ans, ensure_ascii=False))   # 원본 보존용 깊은 복사
@@ -4956,6 +4987,18 @@ def _qna_show_one(col, label, cat, ans, accent, err=""):
             for p in sec.get("paras", []):
                 st.markdown(f"<div style='font-size:12.5px;color:{MUTED};margin-bottom:4px;line-height:1.55'>{p}</div>",
                             unsafe_allow_html=True)
+        tbl = ans.get("table") or {}
+        _th = [str(h).strip() for h in (tbl.get("headers") or []) if str(h).strip()]
+        _rw = [r for r in (tbl.get("rows") or []) if isinstance(r, (list, tuple)) and any(str(c).strip() for c in r)]
+        if _th and _rw:
+            head = "".join(f"<th style='border:1px solid {LINE};padding:3px 6px;background:#F6F8FA'>{h}</th>" for h in _th)
+            bod = ""
+            for r in _rw:
+                cs = [str(c).strip() for c in r]; cs = (cs + [""] * len(_th))[:len(_th)]
+                bod += "<tr>" + "".join(f"<td style='border:1px solid {LINE};padding:3px 6px'>{c}</td>" for c in cs) + "</tr>"
+            st.markdown(f"<div style='font-weight:700;margin-top:8px'>📊 {tbl.get('title') or '표'}</div>"
+                        f"<table style='border-collapse:collapse;font-size:12px;margin-top:3px'><tr>{head}</tr>{bod}</table>",
+                        unsafe_allow_html=True)
         faq = ans.get("faq", [])
         if faq:
             st.markdown("<div style='font-weight:700;margin-top:8px'>자주 묻는 질문</div>", unsafe_allow_html=True)
@@ -5202,7 +5245,8 @@ def render_qna():
     it["ans"]["intro3"] = intro3
     it["ans"]["sections"] = sections
     it["ans"]["laws"] = laws
-    it["body"] = qna_build_html(core, intro3, [(s["sub"], s["paras"]) for s in sections], it["ans"].get("faq"))
+    it["body"] = qna_build_html(core, intro3, [(s["sub"], s["paras"]) for s in sections],
+                                it["ans"].get("faq"), it["ans"].get("table"))
 
     # 법조문 검증 표시 (미검증=빨강, 검증됨=회색+공식링크)
     need, okl = _split_laws(it)
@@ -5289,7 +5333,7 @@ def render_qna():
         def _up_one(g, region=""):
             """원고 1개 업로드 + 사후처리(qna_posts 반영·변경로그). 성공 시 wr_id."""
             _secs = [(s["sub"], s["paras"]) for s in g["ans"].get("sections", [])]
-            _detail = qna_detail_html(g["core"], _secs, g["ans"].get("faq"))
+            _detail = qna_detail_html(g["core"], _secs, g["ans"].get("faq"), g["ans"].get("table"))
             _summary = qna_summary_html(g["ans"].get("intro3", []))
             _wid = qna_upload(g["title"], g["cat"], _detail, _summary,
                               [g["core"], g["cat"], f"{g['cat']} 변호사"])
