@@ -5508,31 +5508,83 @@ def _qna_auto_tab(corpus):
                      column_config={"보기": st.column_config.LinkColumn("보기", display_text="열기")})
 
 
+_QNA_BADTITLE = re.compile(r"처벌과\s*대응|이?란\?\s*$")
+
+
+def _qna_list_flags(df):
+    """게시글에 중복·이상 신호 태그를 붙인 df 반환. dup_n(같은 분야·키워드 개수), issue(문자열)."""
+    df = df.copy()
+    df["wr_num"] = pd.to_numeric(df["wr_id"], errors="coerce")
+    dk = df["cat"].astype(str) + "|" + df["base_kw"].astype(str).str.replace(r"\s+", "", regex=True)
+    df["dup_n"] = dk.map(dk.value_counts())
+    tnorm = df["title"].astype(str).str.replace(r"\s+", "", regex=True)
+    tdup = tnorm.map(tnorm.value_counts()) > 1
+
+    def _issue(r, i):
+        f = []
+        if (r["dup_n"] or 0) > 1 or tdup.iloc[i]:
+            f.append("🔁중복")
+        try:
+            if 0 < int(r.get("body_len", 0)) < 700:
+                f.append("⚠️짧음")
+        except Exception:
+            pass
+        try:
+            if int(r.get("has5", 1)) == 0:
+                f.append("⚠️섹션부족")
+        except Exception:
+            pass
+        if _QNA_BADTITLE.search(str(r["title"])):
+            f.append("⚠️템플릿")
+        if "|" not in str(r["title"]):
+            f.append("⚠️형식")
+        return " ".join(f)
+    df["issue"] = [_issue(r, i) for i, (_, r) in enumerate(df.iterrows())]
+    return df
+
+
 def _qna_list_tab(corpus):
-    """게시글 목록 탭 — 홈페이지 QnA 글 목록 보기 + (확인 후) 삭제."""
+    """게시글 목록 탭 — 목록 + 중복/이상 감지 + 정렬 + (확인 후) 삭제."""
     st.markdown('<div class="big-section">게시글 목록</div>', unsafe_allow_html=True)
-    st.caption("홈페이지 QnA 게시판의 글 목록입니다. 삭제는 되돌릴 수 없으니 ‘삭제확인’을 체크한 뒤 진행하세요.")
+    st.caption("홈페이지 QnA 글 목록. 🔁중복·⚠️이상 글을 찾아 정렬·삭제하기 좋게 표시합니다. "
+               "삭제는 되돌릴 수 없으니 ‘삭제확인’ 체크 후 진행하세요.")
     if corpus is None or corpus.empty:
         st.info("게시글이 없습니다.")
         return
     cid, _ = _qna_creds()
     if not cid:
         st.info("⚠️ 삭제하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
-    fcat = st.selectbox("분야 필터", ["전체"] + list(QNA_CATS), key="qna_list_cat")
-    df = corpus if fcat == "전체" else corpus[corpus["cat"].astype(str) == fcat]
-    try:
-        df = df.sort_values("wr_id", key=lambda s: pd.to_numeric(s, errors="coerce"), ascending=False)
-    except Exception:
-        pass
+    df = _qna_list_flags(corpus)
+    n_bad = int((df["issue"] != "").sum())
+    o1, o2, o3 = st.columns([1.4, 1.4, 1.2])
+    fcat = o1.selectbox("분야", ["전체"] + list(QNA_CATS), key="qna_list_cat")
+    sort = o2.selectbox("정렬", ["최신순", "오래된순", "분야별", "본문 짧은순(이상 찾기)", "중복 많은순"],
+                        key="qna_list_sort")
+    only_bad = o3.checkbox(f"⚠️ 이상·중복만 ({n_bad})", key="qna_list_bad")
+    view = df if fcat == "전체" else df[df["cat"].astype(str) == fcat]
+    if only_bad:
+        view = view[view["issue"] != ""]
+    if sort == "최신순":
+        view = view.sort_values("wr_num", ascending=False)
+    elif sort == "오래된순":
+        view = view.sort_values("wr_num", ascending=True)
+    elif sort == "분야별":
+        view = view.sort_values(["cat", "wr_num"], ascending=[True, False])
+    elif sort == "본문 짧은순(이상 찾기)":
+        view = view.sort_values("body_len", ascending=True, na_position="first")
+    else:
+        view = view.sort_values(["dup_n", "cat", "base_kw"], ascending=[False, True, True])
     deleted = st.session_state.setdefault("qna_deleted", set())
-    df = df[~df["wr_id"].astype(str).isin(deleted)]
-    st.caption(f"{len(df)}건 (최신순, 최대 200건 표시)")
-    for _, r in df.head(200).iterrows():
-        wid, title, cat = str(r["wr_id"]), str(r["title"]), str(r["cat"])
+    view = view[~view["wr_id"].astype(str).isin(deleted)]
+    st.caption(f"{len(view)}건 (최대 200건 표시)")
+    for _, r in view.head(200).iterrows():
+        wid, title, cat, issue = str(r["wr_id"]), str(r["title"]), str(r["cat"]), str(r["issue"])
         c0, c1, c2 = st.columns([0.66, 0.14, 0.20], vertical_alignment="center")
+        badge = f" <span style='color:#E5484D;font-size:12px'>{issue}</span>" if issue else ""
         c0.markdown(f"<span style='font-size:13px'>[{cat}] "
                     f"<a href='{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wid}' "
-                    f"style='color:{GOLD}' target='_blank'>{title[:64]}</a></span>", unsafe_allow_html=True)
+                    f"style='color:{GOLD}' target='_blank'>{title[:60]}</a>{badge}</span>",
+                    unsafe_allow_html=True)
         conf = c1.checkbox("삭제확인", key=f"del_ok_{wid}", label_visibility="collapsed")
         if c2.button("🗑️ 삭제", key=f"del_{wid}", disabled=not (cid and conf)):
             with st.spinner("삭제 중…"):
