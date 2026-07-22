@@ -9,7 +9,7 @@
 
 한도: 제목 15 · 설명 45 · 추가제목 15 · 홍보문구 14.
 '지금 켜져 있는 것만' 대상 — userLock=true(꺼짐) 캠페인·그룹은 건너뛴다.
-멱등: 소재는 같은 제목이 있으면 스킵. 확장은 이미 목표 문구와 동일하면 교체 안 함.
+멱등: 소재는 같은 제목+설명이 있으면 스킵. 확장은 이미 목표 문구와 동일하면 교체 안 함.
 
 기존 naver_*.py 규약: 인증값은 GitHub Secrets, HMAC 서명, 429 재시도,
 APPLY=1일 때만 실제 적용(기본 드라이런). 드라이런은 만들/지울 내용만 출력.
@@ -186,15 +186,17 @@ def main():
             if not ads:
                 print(f"  [스킵] {cname} > {gname} — 복제할 기존 소재 없음"); continue
             template = ads[0]
-            existing_heads = {str((a.get("ad") or {}).get("headline", "")) for a in ads}
+            # 중복 판정은 제목+설명을 묶어서(제목만 같고 설명이 다르면 새 소재로 추가)
+            existing_pairs = {(str((a.get("ad") or {}).get("headline", "")),
+                               str((a.get("ad") or {}).get("description", ""))) for a in ads}
 
             new_ads = [("A", p["제목A"], p["설명A"])]
             if ADD_B:
                 new_ads.append(("B", p["제목B"], p["설명B"]))
             for tag, hl, ds in new_ads:
-                if hl in existing_heads:
+                if (hl, ds) in existing_pairs:
                     skip += 1
-                    print(f"  [멱등스킵] {cname} > {gname} · 소재{tag} 이미 있음")
+                    print(f"  [멱등스킵] {cname} > {gname} · 소재{tag} 이미 있음(제목+설명 동일)")
                     continue
                 if not APPLY:
                     made_ad += 1
