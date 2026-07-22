@@ -4714,7 +4714,10 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
             f"독자는 {prof['reader']}다. 이 분야에서 실제로 검색·문의하는 자연스러운 말투로, "
             f"서로 다른 유형({prof['qtypes']})을 섞어 질문을 만든다. "
             + _qna_forbid(prof) +
-            "질문은 금액·기간·관계·행위 같은 구체 정황이 담긴 자연어여야 한다. " + forbid_tail + QNA_FIDELITY +
+            "질문은 금액·기간·관계·행위 같은 구체 정황이 담긴 자연어여야 한다. "
+            "넓은 법률 상식보다 '특정 상황의 문제를 해결하는' 실무형 질문을 우선하라(생성형 AI가 인용하기 좋다). "
+            "예: '~할 때 반드시 확인해야 할 N가지', '~하기 전에 넣어야 할 항목', '~가 무효가 되는 경우', "
+            "'~일 때 민사·형사 쟁점 비교'처럼 좁고 구체적인 문제해결형. " + forbid_tail + QNA_FIDELITY +
             "\n각 질문은 반드시 '키워드 변호사 | 질문?' 형식 한 줄이고, 실제 사건 상황이 드러나야 한다. "
             "JSON 배열(문자열)만 출력하라.")
 
@@ -5451,7 +5454,9 @@ def _qna_auto_tab(corpus):
     if not cid:
         st.info("⚠️ 게시하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
     pend = qna_auto_pending()
-    if pend is None or pend.empty:
+    if pend is None:
+        st.error("대기열 조회에 실패했습니다(BigQuery 오류). 잠시 후 새로고침하세요.")
+    elif pend.empty:
         st.success("검수 대기 중인 자동 생성 원고가 없습니다.")
     else:
         st.markdown(f"**검수 대기 {len(pend)}건**")
@@ -5463,11 +5468,19 @@ def _qna_auto_tab(corpus):
                 continue
             ans = item.get("ans", {}) or {}
             core = item.get("core", "")
+            q_only = title.split("|", 1)[-1].strip() if "|" in title else title
             laws = ans.get("laws", [])
             vr = qna_laws_for(cat)
             need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
             badge = f"🔴미검증 {len(need)}" if need else "✓조문검증"
-            with st.expander(f"[{cat}] {title}  ·  {badge}  ·  {r['날짜']}"):
+            with st.expander(f"[{cat}] 🔑 {core}  →  {q_only[:44]}  ·  {badge}  ·  {r['날짜']}"):
+                # 키워드 ↔ 제목 연관성을 맨 위에 크게(뒤집힘·불일치 즉시 확인)
+                st.markdown(
+                    f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;padding:8px 12px;margin-bottom:6px'>"
+                    f"<span style='color:{MUTED};font-size:12px'>키워드</span> "
+                    f"<b style='color:{GOLD}'>{core}</b>　→　"
+                    f"<span style='color:{MUTED};font-size:12px'>제목(Q)</span> <b>{title}</b></div>",
+                    unsafe_allow_html=True)
                 if need:
                     st.warning("미검증 조문: " + ", ".join(need) + " — 게시 전 확인 권장")
                 secs = [(s["sub"], s["paras"]) for s in ans.get("sections", [])]

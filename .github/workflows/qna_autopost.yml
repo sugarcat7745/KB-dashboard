@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       n:
-        description: "하루 생성 개수(분야 순환)"
+        description: "하루 생성 개수(형사2·성범죄2·나머지1 계획 기준 15)"
         required: false
-        default: "4"
+        default: "15"
       dry_run:
         description: "게시 안 하고 검수 대기열에만? (true/false)"
         required: false
@@ -37,7 +37,7 @@ jobs:
           GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
           QNA_ID: ${{ secrets.QNA_ID }}
           QNA_PW: ${{ secrets.QNA_PW }}
-          # schedule로 자동 실행될 땐 inputs가 비므로 기본값 사용(N=4, DRYRUN=1)
-          AUTOPOST_N: ${{ github.event.inputs.n || '4' }}
+          # schedule로 자동 실행될 땐 inputs가 비므로 기본값 사용(N=15, DRYRUN=1)
+          AUTOPOST_N: ${{ github.event.inputs.n || '15' }}
           AUTOPOST_DRYRUN: ${{ (github.event.inputs.dry_run == 'false') && '0' || '1' }}
         run: python qna_autopost.py

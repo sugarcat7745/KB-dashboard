@@ -253,7 +253,10 @@ def _gen_question(cli, keyword, cat, existing):
           else "특히 금지: '○○의 처벌과 대응은?', '○○란?' 같은 뻔한 정의·상투 템플릿. ")
     sysp = (f"너는 법무법인 KB '{cat}' QnA 질문 카피라이터다. 독자는 {prof['reader']}다. "
             f"실제 검색·문의하는 자연스러운 말투, 유형({prof['qtypes']}) 섞기. " + _forbid(prof) +
-            "질문은 금액·기간·관계·행위 같은 구체 정황이 담긴 자연어. " + ft + QNA_FIDELITY +
+            "질문은 금액·기간·관계·행위 같은 구체 정황이 담긴 자연어. "
+            "넓은 법률 상식보다 '특정 상황의 문제를 해결하는' 실무형을 우선하라(생성형 AI가 인용하기 좋다). "
+            "예: '~할 때 반드시 확인할 N가지', '~하기 전에 넣어야 할 항목', '~가 무효가 되는 경우', "
+            "'~일 때 민사·형사 쟁점 비교'처럼 좁고 구체적인 문제해결형. " + ft + QNA_FIDELITY +
             "\n'키워드 변호사 | 질문?' 형식 한 줄. JSON 배열(문자열)만.")
     for _ in range(3):
         try:
@@ -475,10 +478,16 @@ def _existing_titles(bq):
         return []
 
 
+# 하루 발행 계획: 형사 2 · 성범죄 2 · 나머지 각 1 = 15 (매일 전 분야 커버, 수요 높은 둘만 2배)
+DAILY_PLAN = ["형사", "형사", "성범죄", "성범죄"] + \
+             [c for c in AUTOPOST_ORDER if c not in ("형사", "성범죄")]
+
+
 def _todays_categories(n):
-    idx = datetime.date.today().toordinal()
-    start = (idx * n) % len(AUTOPOST_ORDER)
-    return [AUTOPOST_ORDER[(start + i) % len(AUTOPOST_ORDER)] for i in range(n)]
+    # n이 계획 크기(15) 이상이면 계획대로, 작으면(수동 테스트) 계획 앞에서 n개.
+    if n >= len(DAILY_PLAN):
+        return (DAILY_PLAN * (n // len(DAILY_PLAN) + 1))[:n]
+    return DAILY_PLAN[:n]
 
 
 def main():
