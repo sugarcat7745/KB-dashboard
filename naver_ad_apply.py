@@ -120,8 +120,10 @@ def _delete(uri, params=None):
 
 
 def _ext_text(e):
+    """확장소재의 실제 노출 문구. DESCRIPTION(홍보문구)은 heading=카테고리(이벤트 등)이고
+    description이 자유문구이므로 description을 우선한다."""
     ax = e.get("adExtension") or {}
-    return ax.get("headline") or ax.get("heading") or ax.get("description") or ""
+    return ax.get("headline") or ax.get("description") or ax.get("heading") or ""
 
 
 def _on(o):
@@ -144,14 +146,28 @@ def make_ad_body(template, gid, headline, desc):
 
 
 def make_ext_body(template, gid, text):
-    """기존 확장소재를 복제하고 문구만 새 값으로(타입별 텍스트 필드 자동 감지)."""
+    """기존 확장소재를 복제하고 문구만 새 값으로.
+    - HEADLINE(추가제목): headline = text
+    - DESCRIPTION(홍보문구): description = text (heading=카테고리 enum은 그대로 유지!)"""
     body = _strip(template, EXT_DROP)
     body["ownerId"] = gid
     ax = dict(body.get("adExtension") or {})
-    for key in ("headline", "heading", "description"):
-        if key in ax:
-            ax[key] = text
+    if body.get("type") == "DESCRIPTION":
+        ax["description"] = text            # 자유문구만 교체, heading(이벤트 등)은 유지
+    else:
+        ax["headline"] = text
     body["adExtension"] = ax
+    return body
+
+
+def build_desc_body(gid, text, chan_pc, chan_mo, heading="이벤트"):
+    """기존 DESCRIPTION 템플릿이 없을 때 홍보문구를 새로 구성(카테고리+자유문구)."""
+    body = {"type": "DESCRIPTION", "ownerId": gid,
+            "adExtension": {"heading": heading, "description": text}}
+    if chan_pc:
+        body["pcChannelId"] = chan_pc
+    if chan_mo:
+        body["mobileChannelId"] = chan_mo
     return body
 
 
@@ -250,14 +266,19 @@ def main():
                 else:
                     head_tpl = heads[0] if heads else None
                     desc_tpl = descs[0] if descs else None
-                    if not head_tpl or not desc_tpl:
-                        print(f"  [확장스킵] {cname} > {gname} — 복제할 기존 확장 없음(추가제목 {len(heads)}/홍보문구 {len(descs)})")
+                    # 홍보문구 카테고리(heading)와 채널은 기존 값 유지(없으면 추가제목 채널 재사용)
+                    ref = desc_tpl or head_tpl
+                    chan_pc = ref.get("pcChannelId") if ref else None
+                    chan_mo = ref.get("mobileChannelId") if ref else None
+                    keep_heading = ((desc_tpl or {}).get("adExtension") or {}).get("heading", "이벤트")
+                    if not head_tpl:
+                        print(f"  [확장스킵] {cname} > {gname} — 복제할 기존 추가제목 없음")
                     elif not APPLY:
                         for e in heads + descs:
                             print(f"  [삭제예정] {cname} > {gname} · {e.get('type')}: 「{_ext_text(e)}」")
                         for t2 in want_head:
                             made_ext += 1; print(f"  [확장예정] {cname} > {gname} · 추가제목: 「{t2}」")
-                        made_ext += 1; print(f"  [확장예정] {cname} > {gname} · 홍보문구: 「{want_desc[0]}」")
+                        made_ext += 1; print(f"  [확장예정] {cname} > {gname} · 홍보문구: [{keep_heading}] 「{want_desc[0]}」")
                     else:
                         # 1) 기존 삭제
                         for e in heads + descs:
@@ -268,7 +289,7 @@ def main():
                                 log.append("|".join([cname, gname, f"{e.get('type')}삭제", _ext_text(e), "", "삭제"]))
                             else:
                                 fail += 1; print(f"  ❌ {cname} > {gname} · 확장삭제 실패 {er}")
-                        # 2) 새로 생성
+                        # 2) 추가제목 생성(기존 복제 후 문구 교체)
                         for t2 in want_head:
                             body = make_ext_body(head_tpl, gid, t2)
                             ok, e2 = _post("/ncc/ad-extensions", body); time.sleep(0.25)
@@ -278,10 +299,14 @@ def main():
                             else:
                                 fail += 1; print(f"  ❌ {cname} > {gname} · 추가제목 실패 {e2}")
                                 log.append("|".join([cname, gname, "추가제목", t2, "", f"실패:{e2}"]))
-                        body = make_ext_body(desc_tpl, gid, want_desc[0])
+                        # 3) 홍보문구 생성(카테고리 유지 + 자유문구만 교체. 템플릿 없으면 새로 구성)
+                        if desc_tpl:
+                            body = make_ext_body(desc_tpl, gid, want_desc[0])
+                        else:
+                            body = build_desc_body(gid, want_desc[0], chan_pc, chan_mo, keep_heading)
                         ok, e2 = _post("/ncc/ad-extensions", body); time.sleep(0.25)
                         if ok:
-                            made_ext += 1; print(f"  ✅ {cname} > {gname} · 홍보문구 「{want_desc[0]}」")
+                            made_ext += 1; print(f"  ✅ {cname} > {gname} · 홍보문구 [{keep_heading}] 「{want_desc[0]}」")
                             log.append("|".join([cname, gname, "홍보문구", want_desc[0], "", "생성"]))
                         else:
                             fail += 1; print(f"  ❌ {cname} > {gname} · 홍보문구 실패 {e2}")
