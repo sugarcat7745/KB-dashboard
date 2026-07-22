@@ -1,0 +1,28 @@
+name: naver-spend-today
+
+# 네이버 캠페인 오늘/어제 소진 · 일예산 진단(읽기 전용). 예산 변경 없음.
+on:
+  workflow_dispatch:
+    inputs:
+      only_on:
+        description: "켜진 것만? (yes 권장)"
+        required: false
+        default: "yes"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 소진 진단
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          ONLY_ON: ${{ inputs.only_on == 'no' && '0' || '1' }}
+        run: python naver_spend_today.py
