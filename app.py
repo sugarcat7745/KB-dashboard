@@ -5347,13 +5347,17 @@ def qna_publish_summary():
 
 @st.cache_data(ttl=300)
 def qna_publish_daily(days=14):
-    """최근 N일 일별 생성·게시 개수(KST). 실패 시 None."""
+    """최근 N일 일별 생성·게시 개수(KST). 실패 시 None.
+    ⚠️ BigQuery는 한글 별칭(백틱 없이)을 거부 → SQL은 영문 별칭, 파이썬에서 한글로 rename."""
     try:
-        return bq(f"""SELECT CAST(DATE(ts,'Asia/Seoul') AS STRING) 날짜,
-                 COUNTIF(payload!='') 생성, COUNTIF(posted!='') 게시
+        df = bq(f"""SELECT CAST(DATE(ts,'Asia/Seoul') AS STRING) dt,
+                 COUNTIF(payload!='') gen_n, COUNTIF(posted!='') post_n
               FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft`
               WHERE DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL {int(days)-1} DAY)
-              GROUP BY 날짜 ORDER BY 날짜""")
+              GROUP BY dt ORDER BY dt""")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"dt": "날짜", "gen_n": "생성", "post_n": "게시"})
+        return df
     except Exception:
         return None
 
@@ -5362,12 +5366,15 @@ def qna_auto_pending():
     """자동 생성됐지만 아직 게시/스킵 안 된 원고(검수 대기열). user='auto', posted 마커 없는 것.
     캐시 안 함(승인·삭제가 즉시 반영되게)."""
     try:
-        return bq_fresh(f"""SELECT d.id, d.cat, d.title, d.payload, CAST(DATE(d.ts,'Asia/Seoul') AS STRING) 날짜
+        df = bq_fresh(f"""SELECT d.id, d.cat, d.title, d.payload, CAST(DATE(d.ts,'Asia/Seoul') AS STRING) dt
               FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` d
               WHERE d.user='auto' AND d.payload!=''
                 AND NOT EXISTS (SELECT 1 FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` p
                                 WHERE p.posted!='' AND p.id=d.id)
-              ORDER BY d.ts DESC LIMIT 100""")
+              ORDER BY d.ts DESC LIMIT 100""")   # ⚠️ 한글 별칭은 BigQuery가 거부 → 영문 dt 사용
+        if df is not None and not df.empty:
+            df = df.rename(columns={"dt": "날짜"})
+        return df
     except Exception:
         return None
 
@@ -5409,10 +5416,13 @@ def qna_delete_post(wr_id):
 def qna_recent_posts(n=40):
     """최근 게시 이력(게시완료 마커 → 원본 draft에서 분류·제목 join). 실패 시 None."""
     try:
-        return bq(f"""SELECT CAST(DATE(p.ts,'Asia/Seoul') AS STRING) 날짜, d.cat 분류, d.title 제목, p.posted wr_id
+        df = bq(f"""SELECT CAST(DATE(p.ts,'Asia/Seoul') AS STRING) dt, d.cat cat_k, d.title title_k, p.posted wr_id
               FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` p
               JOIN `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` d ON p.id=d.id AND d.payload!=''
-              WHERE p.posted!='' ORDER BY p.ts DESC LIMIT {int(n)}""")
+              WHERE p.posted!='' ORDER BY p.ts DESC LIMIT {int(n)}""")   # 한글 별칭 금지 → 영문 후 rename
+        if df is not None and not df.empty:
+            df = df.rename(columns={"dt": "날짜", "cat_k": "분류", "title_k": "제목"})
+        return df
     except Exception:
         return None
 
