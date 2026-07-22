@@ -5428,26 +5428,46 @@ def qna_recent_posts(n=40):
 
 
 def _qna_stats_tab(corpus, cc):
-    """통계·성과 탭 — 생성/게시 추이 + 분야별 글수 + GA4 유입."""
+    """통계·성과 탭 — 생성/게시 추이 + 분야별 글수 + GA4 유입. (대시보드 공통 디자인 컴포넌트)"""
     st.markdown('<div class="big-section">생성·게시 추이 (KST)</div>', unsafe_allow_html=True)
     s = qna_publish_summary()
     if not s:
         st.info("아직 통계 데이터가 없습니다. 원고를 생성·게시하면 여기에 집계됩니다.")
     else:
-        r1 = st.columns(4)
-        r1[0].metric("오늘 생성", int(s["gen_d"])); r1[1].metric("이번주 생성", int(s["gen_w"]))
-        r1[2].metric("이번달 생성", int(s["gen_m"])); r1[3].metric("누적 생성", int(s["gen_t"]))
-        r2 = st.columns(4)
-        r2[0].metric("오늘 게시", int(s["post_d"])); r2[1].metric("이번주 게시", int(s["post_w"]))
-        r2[2].metric("이번달 게시", int(s["post_m"])); r2[3].metric("누적 게시", int(s["post_t"]))
+        # 4개 카드(오늘/이번주/이번달/누적) — 각 카드에 생성 값 + 게시 부가설명
+        cols = st.columns(4)
+        cards = [("fa-calendar-day", "오늘", "gen_d", "post_d"),
+                 ("fa-calendar-week", "이번주", "gen_w", "post_w"),
+                 ("fa-calendar", "이번달", "gen_m", "post_m"),
+                 ("fa-layer-group", "누적", "gen_t", "post_t")]
+        for col, (ic, lab, gk, pk) in zip(cols, cards):
+            kpi(col, ic, f"{lab} 생성", f"{int(s[gk])}", "건",
+                desc=f"게시 {int(s[pk])}건")
         dd = qna_publish_daily()
         if dd is not None and not dd.empty:
-            st.caption("최근 14일 일별")
-            st.bar_chart(dd.set_index("날짜")[["생성", "게시"]])
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 최근 14일 일별 생성·게시</div>', unsafe_allow_html=True)
+            ff = go.Figure()
+            ff.add_bar(x=dd["날짜"], y=dd["생성"], name="생성", marker_color=GOLD,
+                       text=dd["생성"], textposition="outside", textfont=dict(size=11))
+            ff.add_bar(x=dd["날짜"], y=dd["게시"], name="게시", marker_color=GOOD,
+                       text=dd["게시"], textposition="outside", textfont=dict(size=11))
+            ff.update_layout(barmode="group", bargap=0.28, bargroupgap=0.12,
+                             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            ff.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
+            st.plotly_chart(fig_theme(ff, 260), use_container_width=True, config={"displayModeBar": False})
     st.divider()
     st.markdown('<div class="big-section">분야별 게시글 수 (현재 게시판)</div>', unsafe_allow_html=True)
     if cc is not None and len(cc):
-        st.bar_chart(pd.DataFrame({"글 수": cc.values}, index=cc.index))
+        mx = float(cc.max() or 1)
+        rows = ""
+        for i, (name, val) in enumerate(cc.items(), 1):
+            v = int(val); pct = v / mx * 100
+            rows += (f'<div class="rank-row">'
+                     f'<span class="rank-badge">{i}</span>'
+                     f'<div class="rank-main"><div class="rank-label">{name}</div>'
+                     f'<div class="rank-track"><span style="width:{pct:.0f}%;"></span></div></div>'
+                     f'<div><div class="rank-val">{v}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">건</small></div></div></div>')
+        st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
     else:
         st.caption("게시판 코퍼스가 없습니다.")
     st.divider()
@@ -5542,15 +5562,20 @@ def _qna_auto_tab(corpus):
             st.success(f"{done}건 게시 완료" + (f" · 실패 {fail}" if fail else ""))
             st.rerun()
     st.divider()
-    st.markdown("**최근 게시 이력**")
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-clock-rotate-left"></i> 최근 게시 이력</div>', unsafe_allow_html=True)
     rp = qna_recent_posts()
     if rp is None or rp.empty:
         st.caption("아직 게시 이력이 없습니다.")
     else:
-        rp = rp.copy()
-        rp["보기"] = rp["wr_id"].apply(lambda w: f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={w}")
-        st.dataframe(rp[["날짜", "분류", "제목", "보기"]], use_container_width=True, hide_index=True,
-                     column_config={"보기": st.column_config.LinkColumn("보기", display_text="열기")})
+        rows = ""
+        for _, r in rp.iterrows():
+            url = f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={r['wr_id']}"
+            rows += (f'<div class="rank-row">'
+                     f'<span class="rank-badge" style="background:{SURF2};color:{MUTED};font-size:11px;min-width:52px;">{r["날짜"]}</span>'
+                     f'<div class="rank-main"><div class="rank-label" style="color:{GOLD};font-size:12px;font-weight:700;">[{r["분류"]}]</div>'
+                     f'<div style="font-size:13px;color:{TXT};margin-top:2px;">{r["제목"]}</div></div>'
+                     f'<div><a href="{url}" target="_blank" style="font-size:12px;color:{GOLD_D};font-weight:600;text-decoration:none;">열기 →</a></div></div>')
+        st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
 
 
 _QNA_BADTITLE = re.compile(r"처벌과\s*대응|이?란\?\s*$")
