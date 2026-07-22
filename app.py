@@ -5456,10 +5456,8 @@ def _qna_stats_tab(corpus, cc):
 
 
 def _qna_auto_tab(corpus):
-    """자동 게시 탭 — 매일 자동 생성된 원고의 '검수 대기열'(담당자 승인 시 게시) + 최근 게시 이력."""
+    """자동 게시 탭 — 검수 대기열(항목 체크 후 하단에서 선택 일괄 게시) + 최근 게시 이력."""
     st.markdown('<div class="big-section">자동 생성 · 검수 대기열</div>', unsafe_allow_html=True)
-    st.caption("매일 오전 10시 자동 생성된 원고입니다. 담당자가 내용을 확인하고 ‘승인·게시’를 눌러야 "
-               "홈페이지에 올라갑니다(대표님 지시로 한 달간 전건 검수). 부적합하면 ‘삭제’로 대기열에서 뺍니다.")
     cid, _ = _qna_creds()
     if not cid:
         st.info("⚠️ 게시하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
@@ -5469,8 +5467,21 @@ def _qna_auto_tab(corpus):
     elif pend.empty:
         st.success("검수 대기 중인 자동 생성 원고가 없습니다.")
     else:
-        st.markdown(f"**검수 대기 {len(pend)}건**")
-        for _, r in pend.iterrows():
+        rows = list(pend.iterrows())
+        dids = [str(r["id"]) for _, r in rows]
+        for d in dids:                       # 기본 전체 체크
+            st.session_state.setdefault(f"autochk_{d}", True)
+        h1, h2, h3 = st.columns([1, 1, 5], gap="small", vertical_alignment="center")
+        if h1.button("전체 선택", key="auto_all"):
+            for d in dids:
+                st.session_state[f"autochk_{d}"] = True
+            st.rerun()
+        if h2.button("전체 해제", key="auto_none"):
+            for d in dids:
+                st.session_state[f"autochk_{d}"] = False
+            st.rerun()
+        h3.markdown(f"**검수 대기 {len(rows)}건** · 체크한 것만 게시됩니다")
+        for _, r in rows:
             did, cat, title = str(r["id"]), str(r["cat"]), str(r["title"])
             try:
                 item = json.loads(r["payload"])
@@ -5479,53 +5490,58 @@ def _qna_auto_tab(corpus):
             ans = item.get("ans", {}) or {}
             core = item.get("core", "")
             q_only = title.split("|", 1)[-1].strip() if "|" in title else title
-            laws = ans.get("laws", [])
-            vr = qna_laws_for(cat)
-            need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
-            badge = f"🔴미검증 {len(need)}" if need else "✓조문검증"
-            with st.expander(f"[{cat}] 🔑 {core}  →  {q_only[:44]}  ·  {badge}  ·  {r['날짜']}"):
-                # 키워드 ↔ 제목 연관성을 맨 위에 크게(뒤집힘·불일치 즉시 확인)
-                st.markdown(
-                    f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;padding:8px 12px;margin-bottom:6px'>"
-                    f"<span style='color:{MUTED};font-size:12px'>키워드</span> "
-                    f"<b style='color:{GOLD}'>{core}</b>　→　"
-                    f"<span style='color:{MUTED};font-size:12px'>제목(Q)</span> <b>{title}</b></div>",
-                    unsafe_allow_html=True)
+            c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
+            c0.checkbox("선택", key=f"autochk_{did}", label_visibility="collapsed")
+            with c1.expander(f"[{cat}]  ·  🔑 {core}  ·  {q_only[:56]}"):
+                laws = ans.get("laws", [])
+                vr = qna_laws_for(cat)
+                need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
                 if need:
-                    st.warning("미검증 조문: " + ", ".join(need) + " — 게시 전 확인 권장")
+                    st.warning("🔴 미검증 조문: " + ", ".join(need) + " — 확인 권장")
                 secs = [(s["sub"], s["paras"]) for s in ans.get("sections", [])]
-                related = _qna_related_html(cat, title, core, corpus)
                 body = qna_build_html(core, ans.get("intro3", []), secs,
                                       ans.get("faq"), ans.get("table"), cat, laws)
                 components.html(f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
                                 f"padding:14px;max-height:420px;overflow:auto'>"
-                                f"<div style='color:{GOLD};font-weight:700'>[{cat}]</div>"
+                                f"<div style='color:{GOLD};font-weight:700'>[{cat}] 🔑 {core}</div>"
                                 f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>"
                                 f"{body}</div>", height=440, scrolling=True)
-                a1, a2, _a3 = st.columns([1.1, 1.1, 3])
-                if a1.button("✅ 승인·게시", key=f"auto_up_{did}", type="primary", disabled=not cid):
-                    try:
-                        detail = qna_detail_html(core, secs, ans.get("faq"), ans.get("table"), cat, laws, related)
-                        summary = qna_summary_html(ans.get("intro3", []))
-                        wid = qna_upload(title, cat, detail, summary, [core, cat, f"{cat} 변호사"])
-                        qna_mark_posted(did, wid)
-                        _qna_append_post(wid, item)
-                        try:
-                            log_change(st.session_state.get("auth_user", "admin"), "QnA",
-                                       f"자동생성 승인 게시: {title}", f"wr_id={wid} 분류={cat}", "자동 생성·담당자 승인")
-                        except Exception:
-                            pass
-                        try:
-                            qna_corpus.clear()
-                        except Exception:
-                            pass
-                        st.success(f"게시 완료 (wr_id={wid})")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"게시 실패: {e}")
-                if a2.button("🗑️ 삭제(게시 안 함)", key=f"auto_skip_{did}"):
+                if st.button("🗑️ 이 원고 삭제(대기열에서 제거)", key=f"auto_skip_{did}"):
                     qna_skip_draft(did)
                     st.rerun()
+        # ── 하단: 선택한 것만 일괄 게시 ──
+        st.divider()
+        sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"autochk_{str(r['id'])}")]
+        if st.button(f"✅ 선택 게시글 업로드 ({len(sel)}건)", key="auto_bulk_up",
+                     type="primary", disabled=not (cid and sel)):
+            prog = st.progress(0.0); done = 0; fail = 0
+            for n, (did, r) in enumerate(sel):
+                try:
+                    item = json.loads(r["payload"]); ans = item.get("ans", {}) or {}
+                    core = item.get("core", ""); title = str(r["title"]); cat = str(r["cat"])
+                    secs = [(s["sub"], s["paras"]) for s in ans.get("sections", [])]
+                    related = _qna_related_html(cat, title, core, corpus)
+                    detail = qna_detail_html(core, secs, ans.get("faq"), ans.get("table"),
+                                             cat, ans.get("laws"), related)
+                    summary = qna_summary_html(ans.get("intro3", []))
+                    wid = qna_upload(title, cat, detail, summary, [core, cat, f"{cat} 변호사"])
+                    qna_mark_posted(did, wid); _qna_append_post(wid, item)
+                    try:
+                        log_change(st.session_state.get("auth_user", "admin"), "QnA",
+                                   f"자동생성 게시: {title}", f"wr_id={wid} 분류={cat}", "자동 생성·담당자 선택 게시")
+                    except Exception:
+                        pass
+                    done += 1
+                except Exception as e:
+                    fail += 1
+                    st.error(f"[{str(r['title'])[:28]}] 게시 실패: {e}")
+                prog.progress((n + 1) / len(sel))
+            try:
+                qna_corpus.clear()
+            except Exception:
+                pass
+            st.success(f"{done}건 게시 완료" + (f" · 실패 {fail}" if fail else ""))
+            st.rerun()
     st.divider()
     st.markdown("**최근 게시 이력**")
     rp = qna_recent_posts()
