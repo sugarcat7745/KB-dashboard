@@ -63,22 +63,29 @@ def main():
 
     by_hour = {h: 0 for h in range(24)}
     diag_done = False
-    for i in range(0, len(ids), 100):
-        batch = ids[i:i + 100]
-        params = {"ids": ",".join(batch), "fields": json.dumps(["salesAmt"]),
-                  "timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()}),
-                  "breakdown": "hh24"}
-        d = _get("/stats", params); time.sleep(0.3)
-        rows = (d.get("data") if isinstance(d, dict) else d) or []
-        if not diag_done and rows:
-            print(f"  [진단] 첫 행 예시: {json.dumps(rows[0], ensure_ascii=False)}\n"); diag_done = True
-        for r in (rows if isinstance(rows, list) else []):
-            h = r.get("hh24", r.get("hour"))
-            try:
-                h = int(h)
-            except Exception:
-                continue
-            by_hour[h] = by_hour.get(h, 0) + int(r.get("salesAmt", 0) or 0)
+    # 네이버 실시간 통계는 '다일 + 시간분해' 조합을 막음 → 하루씩 나눠 조회해 합산
+    d0 = since
+    while d0 <= until:
+        if WEEKDAY and d0.weekday() >= 5:
+            d0 += timedelta(days=1); continue
+        ds = d0.isoformat()
+        for i in range(0, len(ids), 100):
+            batch = ids[i:i + 100]
+            params = {"ids": ",".join(batch), "fields": json.dumps(["salesAmt"]),
+                      "timeRange": json.dumps({"since": ds, "until": ds}),
+                      "breakdown": "hh24"}
+            d = _get("/stats", params); time.sleep(0.25)
+            rows = (d.get("data") if isinstance(d, dict) else d) or []
+            if not diag_done and rows:
+                print(f"  [진단] 첫 행 예시: {json.dumps(rows[0], ensure_ascii=False)}\n"); diag_done = True
+            for r in (rows if isinstance(rows, list) else []):
+                h = r.get("hh24", r.get("hour"))
+                try:
+                    h = int(h)
+                except Exception:
+                    continue
+                by_hour[h] = by_hour.get(h, 0) + int(r.get("salesAmt", 0) or 0)
+        d0 += timedelta(days=1)
 
     total = sum(by_hour.values())
     print("시간 | 그 시간 평균소진 | 누적 평균소진(그 시간까지)")
