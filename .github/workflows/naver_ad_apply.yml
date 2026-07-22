@@ -31,6 +31,10 @@ on:
         description: "확장소재 원본 JSON만 출력(읽기전용 진단)? (yes/no)"
         required: false
         default: "no"
+      verify:
+        description: "적용 결과 전수 검증(읽기전용)? (yes/no)"
+        required: false
+        default: "no"
 
 jobs:
   run:
@@ -53,4 +57,5 @@ jobs:
           ADD_EXT:   ${{ inputs.add_ext == 'no' && '0' || '1' }}
           ONLY_ON:   ${{ inputs.only_on == 'no' && '0' || '1' }}
           DUMP:      ${{ inputs.dump == 'yes' && '1' || '0' }}
+          VERIFY:    ${{ inputs.verify == 'yes' && '1' || '0' }}
         run: python naver_ad_apply.py

@@ -29,6 +29,7 @@ ADD_B = os.environ.get("ADD_B", "1") == "1"
 ADD_EXT = os.environ.get("ADD_EXT", "0") == "1"
 ONLY_CAMP = os.environ.get("ONLY_CAMP", "").strip()   # 이 문자열 든 캠페인만(테스트용)
 DUMP = os.environ.get("DUMP", "0") == "1"             # 1이면 확장소재 원본 JSON만 출력(읽기전용)
+VERIFY = os.environ.get("VERIFY", "0") == "1"         # 1이면 적용 결과 전수 검증(읽기전용)
 
 # ── 개선안(주제별 문구) ─────────────────────────────────────
 PROP = {
@@ -204,6 +205,47 @@ def main():
                         print(f"  [{e.get('inspectStatus')}] {e.get('type')}: 「{_ext_text(e)}」")
                 return
         print("DUMP: 대상 없음"); return
+
+    if VERIFY:
+        # 읽기전용 전수 검증: 적용된(켜진) XX 그룹마다 기대 문구가 있는지 + 검수상태 + 잔존 100% 여부
+        print("===VERIFY_CSV_START===")
+        print("캠페인|그룹|소재A|소재B|추가제목|홍보문구|소재검수|확장검수|잔존100%|판정")
+        for c in sorted(camps, key=lambda x: str(x.get("name", ""))):
+            cname = str(c.get("name", "")).strip()
+            topic = CAMP2TOPIC.get(cname)
+            if not topic or (ONLY_ON and not _on(c)):
+                continue
+            p = PROP[topic]
+            groups = _get("/ncc/adgroups", {"nccCampaignId": c.get("nccCampaignId")}) or []; time.sleep(0.1)
+            for g in (groups if isinstance(groups, list) else []):
+                if ONLY_ON and not _on(g):
+                    continue
+                gid = g.get("nccAdgroupId"); gname = g.get("name")
+                ads = _get("/ncc/ads", {"nccAdgroupId": gid}) or []; time.sleep(0.08)
+                pairs, ad_stat = {}, {}
+                for a in ads:
+                    ad = a.get("ad") or {}
+                    key = (str(ad.get("headline", "")), str(ad.get("description", "")))
+                    pairs[key] = a.get("inspectStatus")
+                hasA = (p["제목A"], p["설명A"]) in pairs
+                hasB = (p["제목B"], p["설명B"]) in pairs
+                s_stat = "/".join(sorted({str(pairs.get((p["제목A"], p["설명A"]))),
+                                          str(pairs.get((p["제목B"], p["설명B"]))) } - {"None"})) or "-"
+                exts = _get("/ncc/ad-extensions", {"ownerId": gid}) or []; time.sleep(0.08)
+                heads = [e for e in exts if e.get("type") == "HEADLINE"]
+                descs = [e for e in exts if e.get("type") == "DESCRIPTION"]
+                head_txt = {_ext_text(e) for e in heads}
+                desc_txt = {_ext_text(e) for e in descs}
+                head_ok = {p["추가제목1"], p["추가제목2"]} <= head_txt
+                desc_ok = p["홍보문구"] in desc_txt
+                e_stat = "/".join(sorted({str(e.get("inspectStatus")) for e in heads + descs})) or "-"
+                left100 = "Y" if any("100%" in t for t in head_txt) else ""
+                verdict = "OK" if (hasA and hasB and head_ok and desc_ok and not left100) else "확인필요"
+                print("|".join([cname, gname, "O" if hasA else "X", "O" if hasB else "X",
+                                "O" if head_ok else "X", "O" if desc_ok else "X",
+                                s_stat, e_stat, left100, verdict]))
+        print("===VERIFY_CSV_END===")
+        return
 
     made_ad = made_ext = del_ext = skip = fail = 0
     log = []
