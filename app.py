@@ -5528,10 +5528,18 @@ def _qna_auto_tab(corpus):
                 if st.button("🗑️ 이 원고 삭제(대기열에서 제거)", key=f"auto_skip_{did}"):
                     qna_skip_draft(did)
                     st.rerun()
-        # ── 하단: 선택한 것만 일괄 게시 ──
+        # ── 하단: 선택한 것만 일괄 게시 / 건너뛰기(게시 안 하고 대기열에서 제거) ──
         st.divider()
         sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"autochk_{str(r['id'])}")]
-        if st.button(f"✅ 선택 게시글 업로드 ({len(sel)}건)", key="auto_bulk_up",
+        bcol1, bcol2 = st.columns([1, 1], gap="small")
+        if bcol2.button(f"⏭️ 선택 건너뛰기 ({len(sel)}건)", key="auto_bulk_skip",
+                        disabled=not sel,
+                        help="체크한 원고를 게시하지 않고 검수 대기열에서 제거합니다(홈페이지엔 안 올라감)."):
+            for did, _ in sel:
+                qna_skip_draft(did)
+            st.success(f"{len(sel)}건 건너뜀(대기열에서 제거)")
+            st.rerun()
+        if bcol1.button(f"✅ 선택 게시글 업로드 ({len(sel)}건)", key="auto_bulk_up",
                      type="primary", disabled=not (cid and sel)):
             prog = st.progress(0.0); done = 0; fail = 0
             for n, (did, r) in enumerate(sel):
@@ -5571,7 +5579,8 @@ def _qna_auto_tab(corpus):
         for _, r in rp.iterrows():
             url = f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={r['wr_id']}"
             rows += (f'<div class="rank-row">'
-                     f'<span class="rank-badge" style="background:{SURF2};color:{MUTED};font-size:11px;min-width:52px;">{r["날짜"]}</span>'
+                     f'<span style="flex:0 0 auto;background:{SURF2};color:{MUTED};font-size:11px;font-weight:600;'
+                     f'white-space:nowrap;padding:4px 9px;border-radius:7px;">{r["날짜"]}</span>'
                      f'<div class="rank-main"><div class="rank-label" style="color:{GOLD};font-size:12px;font-weight:700;">[{r["분류"]}]</div>'
                      f'<div style="font-size:13px;color:{TXT};margin-top:2px;">{r["제목"]}</div></div>'
                      f'<div><a href="{url}" target="_blank" style="font-size:12px;color:{GOLD_D};font-weight:600;text-decoration:none;">열기 →</a></div></div>')
