@@ -191,10 +191,17 @@ def main():
             groups = _get("/ncc/adgroups", {"nccCampaignId": c.get("nccCampaignId")}); time.sleep(0.1)
             for g in (groups if isinstance(groups, list) else [])[:1]:
                 gid = g.get("nccAdgroupId")
+                ads = _get("/ncc/ads", {"nccAdgroupId": gid}) or []
+                print(f"### {cname} > {g.get('name')} 소재 {len(ads)}개 (검수상태)")
+                for a in ads:
+                    ad = a.get("ad") or {}
+                    print(f"  [{a.get('inspectStatus')}] {'ON' if _on(a) else 'OFF'} "
+                          f"「{ad.get('headline','')}」 / 「{ad.get('description','')}」")
                 exts = _get("/ncc/ad-extensions", {"ownerId": gid}) or []
-                print(f"### {cname} > {g.get('name')} 확장 {len(exts)}개")
+                print(f"### 확장 {len(exts)}개 (검수상태)")
                 for e in exts:
-                    print(json.dumps(e, ensure_ascii=False))
+                    if e.get("type") in ("HEADLINE", "DESCRIPTION"):
+                        print(f"  [{e.get('inspectStatus')}] {e.get('type')}: 「{_ext_text(e)}」")
                 return
         print("DUMP: 대상 없음"); return
 
