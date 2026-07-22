@@ -1,0 +1,35 @@
+name: success-autopost
+
+# 성공사례 자동 '생성만'. 대시보드 '성공사례 > 검수 대기열'에 쌓는다.
+# 담당자가 대시보드에서 승인·게시(이미지 첨부 포함)해야 홈페이지에 올라간다(전건 검수).
+# 게시는 대시보드가 담당하므로 이 워크플로엔 게시판 계정이 필요 없다.
+on:
+  workflow_dispatch:
+    inputs:
+      n:
+        description: "생성 개수(형사2·성범죄2·나머지1 계획 기준, 기본 5)"
+        required: false
+        default: "5"
+  schedule:
+    - cron: "30 1 * * *"   # 매일 01:30 UTC = KST 오전 10:30 · 생성만(검수 대기열)
+
+concurrency:
+  group: success-autopost
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install anthropic google-cloud-bigquery
+      - name: 성공사례 생성(검수 대기열)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
+          SUCCESS_N: ${{ github.event.inputs.n || '5' }}
+        run: python success_autopost.py
