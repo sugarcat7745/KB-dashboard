@@ -5362,7 +5362,8 @@ def qna_auto_pending():
         return bq_fresh(f"""SELECT d.id, d.cat, d.title, d.payload, CAST(DATE(d.ts,'Asia/Seoul') AS STRING) 날짜
               FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` d
               WHERE d.user='auto' AND d.payload!=''
-                AND d.id NOT IN (SELECT id FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` WHERE posted!='')
+                AND NOT EXISTS (SELECT 1 FROM `{BQ_PROJECT}.{BQ_DATASET}.qna_draft` p
+                                WHERE p.posted!='' AND p.id=d.id)
               ORDER BY d.ts DESC LIMIT 100""")
     except Exception:
         return None

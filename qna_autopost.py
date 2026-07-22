@@ -215,19 +215,25 @@ def _law_url(law, article):
 
 
 # ── 생성 ────────────────────────────────────────────────────────────
-def _reco_keyword(cli, cat, existing):
+# 지역은 수도권(서울 자치구 + 인천 + 경기 시)으로 한정
+SUDOGWON = ["강남", "서초", "송파", "종로", "영등포", "마포", "강서", "노원", "관악", "성북",
+            "동작", "광진", "은평", "인천", "부평", "수원", "성남", "용인", "부천", "안산",
+            "안양", "화성", "평택", "의정부", "고양", "남양주", "시흥", "파주", "김포", "광명",
+            "군포", "하남", "오산", "이천", "구리"]
+
+
+def _reco_keyword(cli, cat, existing, with_region):
+    """with_region=True면 지역형(수도권 지역명 접두) 키워드, False면 지역 없는 일반 키워드."""
     prof = _profile(cat)
-    # 지역은 수도권(서울 자치구 + 인천 + 경기 시)으로 한정
-    region_pool = ", ".join(random.sample(
-        ["강남", "서초", "송파", "종로", "영등포", "마포", "강서", "노원", "관악", "성북",
-         "동작", "광진", "은평", "인천", "부평", "수원", "성남", "용인", "부천", "안산",
-         "안양", "화성", "평택", "의정부", "고양", "남양주", "시흥", "파주", "김포", "광명",
-         "군포", "하남", "오산", "이천", "구리"], 6))
+    if with_region:
+        region = random.choice(SUDOGWON)
+        reg_rule = f"키워드 맨 앞에 '{region}'을 자연스럽게 붙인 지역형 키워드로 만들어라(예: '{region} ○○'). "
+    else:
+        reg_rule = "지역명(도시·구 이름)을 붙이지 말고 지역 없는 일반 키워드로만 만들어라. "
     seed = random.randint(1000, 9999)
     sysp = (f"너는 법무법인 KB QnA 게시판 '{cat}' 분야에 올릴 검색형 키워드를 뽑는다. 독자는 {prof['reader']}다. "
             f"규칙: 하나의 명확한 사건 주제만, 서로 다른 개념을 억지로 붙이지 말 것(예: '상간남'+'남편폭행' 금지). "
-            f"{prof['focus']} 중심. " + _forbid(prof) +
-            f"절반 정도는 지역을 자연스럽게 앞에 붙이고(후보: {region_pool}) 절반은 일반으로. "
+            f"{prof['focus']} 중심. " + _forbid(prof) + reg_rule +
             f"이미 있는 주제와 겹치지 말 것. 서로 다른 3개를 JSON 배열(문자열)로만 출력(seed={seed}).")
     usr = "이미 있는 제목 일부:\n" + "\n".join(existing[:40])
     try:
@@ -485,10 +491,11 @@ def main():
     sess = None if DRYRUN else _session()
     batch = uuid.uuid4().hex[:12]
     ok, skip = 0, 0
-    for cat in cats:
+    for idx, cat in enumerate(cats):
+        want_region = (idx % 2 == 0)   # 짝수=지역형, 홀수=일반 → N=4면 2:2 (지역 2건·일반 2건)
         prof = _profile(cat)
         verified = _laws_for(cat, bundle, rsch)
-        kws = _reco_keyword(cli, cat, existing)
+        kws = _reco_keyword(cli, cat, existing, want_region)
         made = False
         for kw in kws:
             core = re.sub(r"\s*변호사$", "", str(kw)).strip()
