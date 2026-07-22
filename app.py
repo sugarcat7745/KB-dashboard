@@ -5680,6 +5680,370 @@ def _qna_list_tab(corpus):
                 st.error("삭제 실패 — 게시판에서 직접 확인하세요.")
 
 
+# ════════════════════════════════════════════════════════════════════
+#  성공사례(업무사례) 자동 생성 — QnA 인프라 재활용. 완전생성 + 면책문구.
+#  게시판 bo_table=success. 5단 목차 고정 템플릿 + GEO(FAQ·표·법령출처).
+#  결과별 도장 이미지는 업체 제작 정적파일을 '결과명'으로 매칭해 파일첨부(업체 납품 후 자동 연결).
+# ════════════════════════════════════════════════════════════════════
+SUCCESS_BO = "success"
+
+# 면책문구(고정) — 완전생성 콘텐츠이므로 '특정 실제 사건'을 단정하지 않는 표현. 필요 시 이 상수만 수정.
+SUCCESS_DISCLAIMER = (
+    "본 사례는 법무법인 KB가 다루는 사건 유형을 바탕으로 이해를 돕기 위해 구성한 예시이며, "
+    "특정 실제 사건과 무관합니다. 사건의 결과는 개별 사실관계에 따라 달라질 수 있습니다.")
+
+# 결과 도장 문구 표준목록(분야별). 이미지 파일명 = '결과명.png'(업체 제작). 동의어는 ALIAS로 한 장에 통일.
+SUCCESS_RESULTS = {
+    "형사방어": ["불송치", "혐의없음", "기소유예", "무죄", "선고유예", "벌금형", "약식명령",
+              "집행유예", "법정구속 면함", "감형", "보석 석방", "구속영장 기각", "공소권없음", "각하"],
+    "형사피해": ["가해자 처벌", "실형 선고", "가해자 구속", "기소 송치"],
+    "민사소송": ["승소", "전부 승소", "일부 승소", "청구 기각", "전부 기각", "소 각하"],
+    "민사회수": ["전액 회수", "전액 인정", "가압류 인용", "가처분 인용", "건물인도 완료", "강제집행 완료"],
+    "민사합의": ["조정 성립", "화해 성립", "합의 완료", "소취하"],
+    "가사": ["이혼조정성립", "이혼 승소", "양육권 확보", "친권 확보", "재산분할 인정", "위자료 인정", "상속 승소"],
+    "행정": ["처분 취소", "집행정지 인용", "면허취소 구제", "영업정지 감경"],
+    "회생파산": ["회생 인가", "면책 결정", "파산 선고"],
+}
+SUCCESS_RESULT_ALL = [r for v in SUCCESS_RESULTS.values() for r in v]
+SUCCESS_RESULT_ALIAS = {"무혐의": "혐의없음", "불입건": "혐의없음", "약식 벌금형": "약식명령",
+                        "약식벌금형": "약식명령", "화해 성립": "조정 성립", "처벌완료": "가해자 처벌",
+                        "가해자 처벌완료": "가해자 처벌"}
+# 카테고리(QNA_CATS)별 어울리는 결과군 — 생성 시 결과 후보 제한(민사 사건에 '집행유예' 방지 등).
+SUCCESS_CAT_RESULTS = {
+    "형사": ["형사방어", "형사피해"], "성범죄": ["형사방어", "형사피해"],
+    "금융범죄": ["형사방어", "형사피해", "민사회수"], "소년범죄": ["형사방어"],
+    "음주운전·교통사고": ["형사방어", "행정"], "학교폭력": ["형사방어", "행정"],
+    "민사·행정": ["민사소송", "민사회수", "민사합의", "행정"],
+    "소액및손해배상": ["민사소송", "민사회수", "민사합의"],
+    "건설·부동산분쟁": ["민사소송", "민사회수", "민사합의"],
+    "이혼·가사": ["가사", "민사합의"], "행정소송": ["행정"],
+    "외국인·출입국": ["행정"], "회생·파산": ["회생파산"],
+}
+# 결과 도장 이미지 폴더(업체 납품 파일을 '결과명.png'로 넣으면 게시 시 자동 첨부).
+SUCCESS_IMG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "success_img")
+
+
+def success_norm_result(r):
+    """결과 문구 정규화(동의어 통일). 이미지 매칭·표기 일관용."""
+    r = re.sub(r"\s+", " ", str(r or "").strip())
+    return SUCCESS_RESULT_ALIAS.get(r, r)
+
+
+def _success_allowed_results(cat):
+    groups = SUCCESS_CAT_RESULTS.get(str(cat).strip())
+    if not groups:
+        return SUCCESS_RESULT_ALL
+    out = []
+    for g in groups:
+        out += SUCCESS_RESULTS.get(g, [])
+    return out
+
+
+def success_image_path(result):
+    """결과명에 맞는 도장 이미지 경로(있으면). 업체 파일 넣기 전엔 None → 본문만 게시."""
+    r = success_norm_result(result)
+    for ext in (".png", ".jpg", ".jpeg"):
+        p = os.path.join(SUCCESS_IMG_DIR, r + ext)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def success_gen_case(cat, existing_titles=None, client=None):
+    """카테고리(죄명 분야) → 완전생성 성공사례 1건(dict). 실패 시 None."""
+    cli = client or _qna_client()
+    prof = _qna_profile(cat)
+    allowed = _success_allowed_results(cat)
+    avoid = ""
+    if existing_titles:
+        recent = [str(t) for t in existing_titles if str(t).strip()][:40]
+        if recent:
+            avoid = "\n[중복 회피] 아래와 사건·상황이 겹치지 않는 새 사례로:\n" + "\n".join("· " + t for t in recent)
+    sysp = (
+        f"너는 법무법인 KB의 콘텐츠 작성자다. '{cat}' 분야의 **성공사례(업무사례)** 한 건을 만든다. "
+        "실제 특정 사건이 아니라, 이 분야에서 충분히 있을 법한 사건을 사실적으로 구성하라.\n"
+        f"[독자] {prof['reader']}\n"
+        "[제목 형식] `{죄명/사건} {결과} | {상황 요약}, {KB의 핵심 전략·성과}` — "
+        "예: '강제추행 기소유예 | 행사 뒤풀이 후 순간적 신체접촉, 피해회복 노력으로 선처'\n"
+        f"[결과] 반드시 다음 목록에서 사건에 맞는 것 하나를 골라라: {', '.join(allowed)}\n"
+        "[본문 5단 구조(고정)] 각 단락 = 소제목(sub) + 문단들(paras):\n"
+        " 1. 사건 요약 및 결과 — 상황 요약 + KB가 한 일 → 결과(2~3문단)\n"
+        " 2. (사건)으로 KB를 찾아온 의뢰인 — 배경·경위·의뢰 시점\n"
+        " 3. 대응에 나선 KB의 조력 — ①②③④ 로 시작하는 구체 전략 4가지\n"
+        " 4. 대응 결과, (결과) — 의견서/주장 제출 → 판단 근거(불릿형 문단들) → 결정\n"
+        " 5. 이 사건에서 (핵심)이 중요한 이유 — 일반 독자용 교훈\n"
+        "[GEO·정확성] 정확한 법령·조문명과 수치·절차를 근거로. 과장·홍보문구 금지"
+        "('최고·유일·1위·승소 보장·무료' 금지)." + QNA_GEO_RULES + QNA_FIDELITY +
+        "\n[출력] 아래 JSON만 출력(설명·코드블록 금지):\n"
+        '{"crime":"죄명/사건명","result":"결과(목록 중 하나)","situation":"상황 한 줄(카드 캡션용)",'
+        '"title":"제목(형식 준수)","summary_lines":["핵심요약 3줄","",""],'
+        '"sections":[{"sub":"사건 요약 및 결과","paras":["..."]}, ...(정확히 5개)],'
+        '"laws":["형법 제○조","..."],"faq":[{"q":"질문","a":"직답"},...(2~3)],'
+        '"table":{"title":"비교표 제목","headers":["열1","열2"],"rows":[["a","b"]]}}')
+    usr = f"분류: {cat}\n위 형식으로 성공사례 1건을 JSON으로 생성하라.{avoid}"
+    try:
+        m = cli.messages.create(model=MODEL_CHAT, max_tokens=4096, system=sysp,
+                                messages=[{"role": "user", "content": usr}])
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+    except Exception:
+        return None
+    d["result"] = success_norm_result(d.get("result"))
+    d["cat"] = cat
+    return d
+
+
+def success_detail_html(item, corpus=None):
+    """성공사례 상세 본문(wr_content) — 5단 목차 + GEO(표·FAQ·법령출처·관련글) + 면책문구."""
+    crime = item.get("crime") or item.get("title", "")
+    cat = item.get("cat")
+    sections = [(s.get("sub", ""), s.get("paras", []) or []) for s in item.get("sections", [])]
+    related = _qna_related_html(cat, item.get("title", ""), crime, corpus) if corpus is not None else ""
+    body = qna_detail_html(crime, sections, item.get("faq"), item.get("table"),
+                           cat, item.get("laws"), related)
+    disc = (f'<p>&nbsp;</p><br /><p><span style="font-size:14px;color:#888;">※ '
+            f'{SUCCESS_DISCLAIMER}</span></p>')
+    return body + disc
+
+
+def success_save_drafts(user, items):
+    """생성한 성공사례 묶음을 success_draft에 저장(검수 대기열로). 각 item에 _did 부여."""
+    try:
+        import uuid
+        from google.cloud import bigquery
+        client = get_bq()
+        tid = f"{BQ_PROJECT}.{BQ_DATASET}.success_draft"
+        batch = uuid.uuid4().hex[:12]
+        ts = datetime.now().isoformat(timespec="seconds")
+        rows = []
+        for it in items:
+            if not it.get("_did"):
+                it["_did"] = uuid.uuid4().hex[:12]
+            rows.append({
+                "id": it["_did"], "batch": batch, "ts": ts,
+                "user": str(user)[:50], "cat": str(it.get("cat") or "")[:40],
+                "title": (it.get("title") or "")[:300],
+                "payload": json.dumps(it, ensure_ascii=False)[:900000], "posted": ""})
+        client.load_table_from_json(rows, tid, job_config=bigquery.LoadJobConfig(
+            schema=_qna_draft_schema(), write_disposition="WRITE_APPEND",
+            create_disposition="CREATE_IF_NEEDED")).result()
+        return batch
+    except Exception:
+        return None
+
+
+def success_pending():
+    """게시/스킵 안 된 성공사례 검수 대기열. 캐시 안 함(승인·삭제 즉시 반영)."""
+    try:
+        df = bq_fresh(f"""SELECT d.id, d.cat, d.title, d.payload, CAST(DATE(d.ts,'Asia/Seoul') AS STRING) dt
+              FROM `{BQ_PROJECT}.{BQ_DATASET}.success_draft` d
+              WHERE d.payload!=''
+                AND NOT EXISTS (SELECT 1 FROM `{BQ_PROJECT}.{BQ_DATASET}.success_draft` p
+                                WHERE p.posted!='' AND p.id=d.id)
+              ORDER BY d.ts DESC LIMIT 100""")   # 한글 별칭 금지 → dt 후 rename
+        if df is not None and not df.empty:
+            df = df.rename(columns={"dt": "날짜"})
+        return df
+    except Exception:
+        return None
+
+
+def success_skip(did):
+    """검수에서 '건너뛰기' → posted='SKIP' 마커(멱등 append)."""
+    try:
+        from google.cloud import bigquery
+        get_bq().load_table_from_json([{
+            "id": str(did), "batch": "", "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": "", "cat": "", "title": "", "payload": "", "posted": "SKIP"}],
+            f"{BQ_PROJECT}.{BQ_DATASET}.success_draft", job_config=bigquery.LoadJobConfig(
+                schema=_qna_draft_schema(), write_disposition="WRITE_APPEND")).result()
+        return True
+    except Exception:
+        return False
+
+
+def success_mark_posted(did, wr_id):
+    """게시 완료 마커(append-only)."""
+    try:
+        from google.cloud import bigquery
+        get_bq().load_table_from_json([{
+            "id": str(did), "batch": "", "ts": datetime.now().isoformat(timespec="seconds"),
+            "user": "", "cat": "", "title": "", "payload": "", "posted": str(wr_id)}],
+            f"{BQ_PROJECT}.{BQ_DATASET}.success_draft", job_config=bigquery.LoadJobConfig(
+                schema=_qna_draft_schema(), write_disposition="WRITE_APPEND")).result()
+    except Exception:
+        pass
+
+
+def success_upload(title, cat, detail_html, summary_html, result, image_path=None):
+    """성공사례 게시판(success)에 등록. summary는 요약 필드, detail은 본문(wr_content).
+    image_path가 있으면 결과 도장 이미지를 파일첨부 → 목록 카드 썸네일. 성공 시 wr_id 반환."""
+    from bs4 import BeautifulSoup
+    s = _qna_session()
+    r = s.get(f"{QNA_BASE}/bbs/write.php?bo_table={SUCCESS_BO}", timeout=30)
+    soup = BeautifulSoup(r.text, "html.parser")
+    form = soup.find("form", {"name": "fwrite"}) or soup.find("form")
+    data = {}
+    for el in form.find_all(["input", "textarea", "select"]):
+        nm = el.get("name")
+        if not nm or el.get("type") in ("submit", "button", "image", "checkbox", "file"):
+            continue
+        data[nm] = el.get("value", "") if el.name != "textarea" else (el.text or "")
+    data.update({"bo_table": SUCCESS_BO, "w": "", "wr_id": "0",
+                 "wr_subject": title, "wr_content": detail_html, "html": "html2"})
+    sf = _qna_summary_field(form, soup)
+    if sf and summary_html:
+        data[sf] = summary_html
+    files = None
+    fh = None
+    if image_path and os.path.exists(image_path):
+        fh = open(image_path, "rb")
+        files = {"bf_file[]": (os.path.basename(image_path), fh, "image/png")}
+    try:
+        rr = s.post(f"{QNA_BASE}/bbs/write_update.php", data=data, files=files, timeout=60,
+                    headers={"Referer": f"{QNA_BASE}/bbs/write.php?bo_table={SUCCESS_BO}"})
+    finally:
+        if fh:
+            fh.close()
+    m = re.search(r"wr_id=(\d+)", rr.url) or re.search(r"wr_id=(\d+)", rr.text)
+    if rr.status_code not in (200, 302) or not m:
+        raise RuntimeError(f"등록 실패 {rr.status_code}: {rr.text[:200]}")
+    return m.group(1)
+
+
+def render_success():
+    tab_header("fa-award", "성공사례 자동 생성", "GEO 최적화 · 5단 목차 · 결과 도장 · 검수 후 게시",
+               color="#B8925A", rgb="184,146,90")
+    try:
+        corpus = qna_corpus()      # 관련글 내부링크용(선택). 없으면 그냥 링크만 생략.
+    except Exception:
+        corpus = None
+    _s1, _s2 = st.tabs(["✍️ 원고 생성", "🤖 검수 대기열"])
+    with _s1:
+        _success_gen_tab(corpus)
+    with _s2:
+        _success_review_tab(corpus)
+
+
+def _success_gen_tab(corpus):
+    """카테고리별 성공사례 생성 → 검수 대기열 적재."""
+    st.markdown('<div class="big-section">1) 분야 선택</div>', unsafe_allow_html=True)
+    cat = st.selectbox("분야(죄명 계열)", QNA_CATS, key="succ_cat")
+    n = st.slider("생성 개수", 1, 5, 2, key="succ_n")
+    allowed = _success_allowed_results(cat)
+    st.caption(f"이 분야 결과 후보: {', '.join(allowed[:10])}{' …' if len(allowed) > 10 else ''}")
+    if st.button(f"🪄 {cat} 성공사례 {n}건 생성", type="primary", key="succ_gen"):
+        existing = corpus["title"].astype(str).tolist() if (corpus is not None and not corpus.empty) else []
+        made = []
+        prog = st.progress(0.0)
+        for i in range(n):
+            it = success_gen_case(cat, existing_titles=existing + [m.get("title", "") for m in made])
+            if it:
+                made.append(it)
+            prog.progress((i + 1) / n)
+        if not made:
+            st.error("생성 실패. 잠시 후 다시 시도하세요.")
+        else:
+            success_save_drafts(st.session_state.get("auth_user", "admin"), made)
+            st.success(f"{len(made)}건 생성 → '검수 대기열' 탭에서 확인·게시하세요.")
+            for it in made:
+                st.markdown(f"- **[{it.get('result','?')}]** {it.get('title','')}")
+
+
+def _success_review_tab(corpus):
+    """성공사례 검수 대기열 — 체크 후 하단 일괄 게시/건너뛰기."""
+    st.markdown('<div class="big-section">검수 대기열 (승인 후 게시)</div>', unsafe_allow_html=True)
+    cid, _ = _qna_creds()
+    if not cid:
+        st.info("⚠️ 게시하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
+    if not os.path.isdir(SUCCESS_IMG_DIR):
+        st.caption("🖼️ 결과 도장 이미지는 아직 없음 → 지금은 **본문만** 게시됩니다. "
+                   "업체 이미지가 `success_img/결과명.png`로 들어오면 자동으로 첨부됩니다.")
+    pend = success_pending()
+    if pend is None:
+        st.error("대기열 조회에 실패했습니다(BigQuery 오류). 잠시 후 새로고침하세요.")
+        return
+    if pend.empty:
+        st.success("검수 대기 중인 성공사례가 없습니다. '원고 생성'에서 만들어 주세요.")
+        return
+    rows = list(pend.iterrows())
+    dids = [str(r["id"]) for _, r in rows]
+    for d in dids:
+        st.session_state.setdefault(f"succhk_{d}", True)
+    h1, h2, h3 = st.columns([1, 1, 5], gap="small", vertical_alignment="center")
+    if h1.button("전체 선택", key="succ_all"):
+        for d in dids:
+            st.session_state[f"succhk_{d}"] = True
+        st.rerun()
+    if h2.button("전체 해제", key="succ_none"):
+        for d in dids:
+            st.session_state[f"succhk_{d}"] = False
+        st.rerun()
+    h3.markdown(f"**검수 대기 {len(rows)}건** · 체크한 것만 게시/건너뛰기 됩니다")
+    for _, r in rows:
+        did, cat, title = str(r["id"]), str(r["cat"]), str(r["title"])
+        try:
+            item = json.loads(r["payload"])
+        except Exception:
+            continue
+        result = item.get("result", "")
+        has_img = "🖼️첨부" if success_image_path(result) else "🖼️없음(본문만)"
+        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
+        c0.checkbox("선택", key=f"succhk_{did}", label_visibility="collapsed")
+        with c1.expander(f"[{cat}·{result}]  {title}"):
+            st.caption(f"결과 도장: {result} · {has_img}")
+            laws = item.get("laws", [])
+            vr = qna_laws_for(cat)
+            need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
+            if need:
+                st.warning("🔴 미검증 조문: " + ", ".join(map(str, need)) + " — 확인 권장")
+            body = success_detail_html(item, corpus)
+            components.html(
+                f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
+                f"padding:14px;max-height:460px;overflow:auto'>"
+                f"<div style='color:{GOLD};font-weight:700'>[{cat}] · 결과: {result}</div>"
+                f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>"
+                f"{body}</div>", height=480, scrolling=True)
+            if st.button("🗑️ 이 원고 삭제(대기열에서 제거)", key=f"succ_skip_{did}"):
+                success_skip(did)
+                st.rerun()
+    st.divider()
+    sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"succhk_{str(r['id'])}")]
+    b1, b2 = st.columns([1, 1], gap="small")
+    if b2.button(f"⏭️ 선택 건너뛰기 ({len(sel)}건)", key="succ_bulk_skip", disabled=not sel):
+        for did, _ in sel:
+            success_skip(did)
+        st.success(f"{len(sel)}건 건너뜀")
+        st.rerun()
+    if b1.button(f"✅ 선택 게시글 업로드 ({len(sel)}건)", key="succ_bulk_up",
+                 type="primary", disabled=not (cid and sel)):
+        prog = st.progress(0.0)
+        done = fail = 0
+        for k, (did, r) in enumerate(sel):
+            try:
+                item = json.loads(r["payload"])
+                title = str(r["title"])
+                cat = str(r["cat"])
+                result = item.get("result", "")
+                detail = success_detail_html(item, corpus)
+                summary = qna_summary_html(item.get("summary_lines", []))
+                wid = success_upload(title, cat, detail, summary, result,
+                                     image_path=success_image_path(result))
+                success_mark_posted(did, wid)
+                try:
+                    log_change(st.session_state.get("auth_user", "admin"), "성공사례",
+                               f"게시: {title}", f"wr_id={wid} 분류={cat} 결과={result}", "생성·검수 후 게시")
+                except Exception:
+                    pass
+                done += 1
+            except Exception as e:
+                fail += 1
+                st.error(f"[{str(r['title'])[:26]}] 게시 실패: {e}")
+            prog.progress((k + 1) / len(sel))
+        st.success(f"{done}건 게시 완료" + (f" · 실패 {fail}" if fail else ""))
+        st.rerun()
+
+
 def render_qna():
     tab_header("fa-feather-pointed", "QnA 관리", "원고 생성 · 자동 게시 · 통계 · 목록",
                color="#CA8A04", rgb="202,138,4")
@@ -6526,7 +6890,7 @@ def main():
     can_qna = qna_can_see(user)
     top_labels = ["요약", "광고", "실적", "유입", "변경", "AI"]
     if can_qna:
-        top_labels = top_labels + ["QnA"]
+        top_labels = top_labels + ["QnA", "성공사례"]
     render_landing_status()   # 모든 탭 위 항상 표시되는 광고 랜딩 실시간 상태 바
     top = st.tabs(top_labels)
 
@@ -6588,6 +6952,9 @@ def main():
     if can_qna and len(top) > 6:
         with top[6]:
             _safe(render_qna, "QnA 관리")
+        if len(top) > 7:
+            with top[7]:
+                _safe(render_success, "성공사례")
 
 
 try:
