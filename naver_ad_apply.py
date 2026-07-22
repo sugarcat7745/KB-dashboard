@@ -28,6 +28,7 @@ ONLY_ON = os.environ.get("ONLY_ON", "1") == "1"
 ADD_B = os.environ.get("ADD_B", "1") == "1"
 ADD_EXT = os.environ.get("ADD_EXT", "0") == "1"
 ONLY_CAMP = os.environ.get("ONLY_CAMP", "").strip()   # 이 문자열 든 캠페인만(테스트용)
+DUMP = os.environ.get("DUMP", "0") == "1"             # 1이면 확장소재 원본 JSON만 출력(읽기전용)
 
 # ── 개선안(주제별 문구) ─────────────────────────────────────
 PROP = {
@@ -162,6 +163,24 @@ def main():
     camps = _get("/ncc/campaigns")
     if not isinstance(camps, list):
         print("캠페인 조회 실패:", camps); return
+
+    if DUMP:
+        # 읽기전용: 확장소재 원본 JSON 구조 확인용(자유문구 필드명 파악)
+        for c in camps:
+            cname = str(c.get("name", "")).strip()
+            if cname not in CAMP2TOPIC:
+                continue
+            if ONLY_CAMP and ONLY_CAMP not in cname:
+                continue
+            groups = _get("/ncc/adgroups", {"nccCampaignId": c.get("nccCampaignId")}); time.sleep(0.1)
+            for g in (groups if isinstance(groups, list) else [])[:1]:
+                gid = g.get("nccAdgroupId")
+                exts = _get("/ncc/ad-extensions", {"ownerId": gid}) or []
+                print(f"### {cname} > {g.get('name')} 확장 {len(exts)}개")
+                for e in exts:
+                    print(json.dumps(e, ensure_ascii=False))
+                return
+        print("DUMP: 대상 없음"); return
 
     made_ad = made_ext = del_ext = skip = fail = 0
     log = []

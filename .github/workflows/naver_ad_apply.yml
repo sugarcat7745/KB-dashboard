@@ -27,6 +27,10 @@ on:
         description: "켜진 것만 대상? (yes 권장)"
         required: false
         default: "yes"
+      dump:
+        description: "확장소재 원본 JSON만 출력(읽기전용 진단)? (yes/no)"
+        required: false
+        default: "no"
 
 jobs:
   run:
@@ -48,4 +52,5 @@ jobs:
           ADD_B:     ${{ inputs.add_b == 'no' && '0' || '1' }}
           ADD_EXT:   ${{ inputs.add_ext == 'no' && '0' || '1' }}
           ONLY_ON:   ${{ inputs.only_on == 'no' && '0' || '1' }}
+          DUMP:      ${{ inputs.dump == 'yes' && '1' || '0' }}
         run: python naver_ad_apply.py
