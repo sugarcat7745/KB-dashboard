@@ -1,0 +1,38 @@
+name: naver-ad-audit
+
+# 네이버 소재·확장소재 전량 조사(카피 개선용, 읽기 전용).
+on:
+  workflow_dispatch:
+    inputs:
+      only_on:
+        description: "켜진 것만? (no=전체 / yes=켜진 것만)"
+        required: false
+        default: "no"
+      stat_days:
+        description: "성과 조회 일수"
+        required: false
+        default: "90"
+      exclude_name:
+        description: "이름에 이 문자열 든 캠페인 제외(예: 신채널)"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 소재 조사
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          ONLY_ON: ${{ inputs.only_on == 'yes' && '1' || '0' }}
+          STAT_DAYS: ${{ inputs.stat_days }}
+          EXCLUDE_NAME: ${{ inputs.exclude_name }}
+        run: python naver_ad_audit.py
