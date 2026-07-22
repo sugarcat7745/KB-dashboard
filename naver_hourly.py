@@ -63,12 +63,13 @@ def main():
 
     by_hour = {h: 0 for h in range(24)}
     diag_done = False
-    # 네이버 실시간 통계는 '다일 + 시간분해' 조합을 막음 → 하루씩 나눠 조회해 합산
+    got_days = set()   # 실제 데이터가 온 날(실시간 통계는 최근 며칠만 됨)
+    # 네이버 실시간 통계는 '다일 + 시간분해'를 막음 → 하루씩 나눠 조회해 합산
     d0 = since
     while d0 <= until:
         if WEEKDAY and d0.weekday() >= 5:
             d0 += timedelta(days=1); continue
-        ds = d0.isoformat()
+        ds = d0.isoformat(); day_had = False
         for i in range(0, len(ids), 100):
             batch = ids[i:i + 100]
             params = {"ids": ",".join(batch), "fields": json.dumps(["salesAmt"]),
@@ -79,13 +80,25 @@ def main():
             if not diag_done and rows:
                 print(f"  [진단] 첫 행 예시: {json.dumps(rows[0], ensure_ascii=False)}\n"); diag_done = True
             for r in (rows if isinstance(rows, list) else []):
-                h = r.get("hh24", r.get("hour"))
-                try:
-                    h = int(h)
-                except Exception:
-                    continue
-                by_hour[h] = by_hour.get(h, 0) + int(r.get("salesAmt", 0) or 0)
+                day_had = True
+                for b in (r.get("breakdowns") or []):
+                    nm = str(b.get("name", ""))
+                    digs = ""
+                    for ch in nm:
+                        if ch.isdigit():
+                            digs += ch
+                        else:
+                            break
+                    if digs == "":
+                        continue
+                    h = int(digs)
+                    if 0 <= h <= 23:
+                        by_hour[h] += int(b.get("salesAmt", 0) or 0)
+        if day_had:
+            got_days.add(ds)
         d0 += timedelta(days=1)
+    ndays = max(1, len(got_days))
+    print(f"실제 데이터 있는 날: {ndays}일 ({', '.join(sorted(got_days))})\n")
 
     total = sum(by_hour.values())
     print("시간 | 그 시간 평균소진 | 누적 평균소진(그 시간까지)")
