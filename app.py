@@ -5489,10 +5489,9 @@ def _qna_auto_tab(corpus):
                 continue
             ans = item.get("ans", {}) or {}
             core = item.get("core", "")
-            q_only = title.split("|", 1)[-1].strip() if "|" in title else title
             c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
             c0.checkbox("선택", key=f"autochk_{did}", label_visibility="collapsed")
-            with c1.expander(f"[{cat}]  ·  🔑 {core}  ·  {q_only[:56]}"):
+            with c1.expander(f"[{cat}]  {title}"):
                 laws = ans.get("laws", [])
                 vr = qna_laws_for(cat)
                 need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
@@ -5503,7 +5502,7 @@ def _qna_auto_tab(corpus):
                                       ans.get("faq"), ans.get("table"), cat, laws)
                 components.html(f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
                                 f"padding:14px;max-height:420px;overflow:auto'>"
-                                f"<div style='color:{GOLD};font-weight:700'>[{cat}] 🔑 {core}</div>"
+                                f"<div style='color:{GOLD};font-weight:700'>[{cat}]</div>"
                                 f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>"
                                 f"{body}</div>", height=440, scrolling=True)
                 if st.button("🗑️ 이 원고 삭제(대기열에서 제거)", key=f"auto_skip_{did}"):
