@@ -1,0 +1,37 @@
+name: collect-corpus
+
+# 홈페이지 공개 아카이브(사건사례·법률지식인) → BigQuery 학습용 코퍼스 적재.
+# 스케줄 없음(수동 실행 전용). 아카이브가 크게 늘 때만 가끔 다시 누르면 됨(전량 재적재·멱등).
+on:
+  workflow_dispatch:
+    inputs:
+      max_pages_success:
+        description: "사건사례 페이지 상한(테스트용, 비우면 전체 ~921p)"
+        required: false
+        default: ""
+      max_pages_qna:
+        description: "법률지식인 페이지 상한(테스트용, 비우면 전체 ~20p)"
+        required: false
+        default: ""
+
+concurrency:
+  group: bq-corpus-write
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests beautifulsoup4 google-cloud-bigquery google-auth pandas pyarrow db-dtypes
+      - name: 코퍼스 수집·적재
+        env:
+          GCP_SA_JSON:                ${{ secrets.GCP_SA_JSON }}
+          CORPUS_MAX_PAGES_SUCCESS:   ${{ inputs.max_pages_success }}
+          CORPUS_MAX_PAGES_QNA:       ${{ inputs.max_pages_qna }}
+        run: python collect_corpus.py
