@@ -139,9 +139,12 @@ def _gen_case(cli, cat, existing_titles):
         '"table":{"title":"비교표 제목","headers":["열1","열2"],"rows":[["a","b"]]}}')
     usr = f"분류: {cat}\n위 형식으로 성공사례 1건을 JSON으로 생성하라.{avoid}"
     try:
-        m = cli.messages.create(model=MODEL, max_tokens=4096, system=sysp,
+        # 성공사례는 5단 서술+FAQ+표라 길다 → max_tokens 넉넉히(4096이면 잘려 JSON 깨짐).
+        m = cli.messages.create(model=MODEL, max_tokens=8000, system=sysp,
                                 messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        if getattr(m, "stop_reason", "") == "max_tokens":
+            raise RuntimeError("응답이 max_tokens에서 잘림")
         d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
     except Exception as e:
         _log("  [생성 실패]", e)

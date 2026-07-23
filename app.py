@@ -5770,6 +5770,9 @@ def success_image_path(result):
     return None
 
 
+_SUCCESS_LAST_ERR = ""   # 마지막 생성 실패 사유(관리자 진단용)
+
+
 def success_gen_case(cat, existing_titles=None, client=None):
     """카테고리(죄명 분야) → 완전생성 성공사례 1건(dict). 실패 시 None."""
     cli = client or _qna_client()
@@ -5806,13 +5809,19 @@ def success_gen_case(cat, existing_titles=None, client=None):
         '"laws":["형법 제○조","..."],"faq":[{"q":"질문","a":"직답"},...(2~3)],'
         '"table":{"title":"비교표 제목","headers":["열1","열2"],"rows":[["a","b"]]}}')
     usr = f"분류: {cat}\n위 형식으로 성공사례 1건을 JSON으로 생성하라.{avoid}"
+    global _SUCCESS_LAST_ERR
     try:
-        m = cli.messages.create(model=MODEL_CHAT, max_tokens=4096, system=sysp,
+        # 성공사례는 5단 서술+FAQ+표라 길다 → max_tokens 넉넉히(4096이면 잘려 JSON 깨짐).
+        m = cli.messages.create(model=MODEL_CHAT, max_tokens=8000, system=sysp,
                                 messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        if getattr(m, "stop_reason", "") == "max_tokens":
+            raise RuntimeError("응답이 max_tokens에서 잘림 — 개수를 줄이거나 재시도")
         d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
-    except Exception:
+    except Exception as e:
+        _SUCCESS_LAST_ERR = f"{type(e).__name__}: {str(e)[:200]}"
         return None
+    _SUCCESS_LAST_ERR = ""
     d["result"] = success_norm_result(d.get("result"))
     d["cat"] = cat
     return d
@@ -5959,20 +5968,43 @@ def _success_gen_tab(corpus):
     st.caption(f"이 분야 결과 후보: {', '.join(allowed[:10])}{' …' if len(allowed) > 10 else ''}")
     if st.button(f"🪄 {cat} 성공사례 {n}건 생성", type="primary", key="succ_gen"):
         existing = corpus["title"].astype(str).tolist() if (corpus is not None and not corpus.empty) else []
-        made = []
+        made, fail = [], 0
         prog = st.progress(0.0)
-        for i in range(n):
-            it = success_gen_case(cat, existing_titles=existing + [m.get("title", "") for m in made])
-            if it:
-                made.append(it)
-            prog.progress((i + 1) / n)
-        if not made:
-            st.error("생성 실패. 잠시 후 다시 시도하세요.")
-        else:
+        with st.spinner(f"{cat} 성공사례 생성 중… (건당 15~30초)"):
+            for i in range(n):
+                it = success_gen_case(cat, existing_titles=existing + [m.get("title", "") for m in made])
+                if it:
+                    made.append(it)
+                else:
+                    fail += 1
+                prog.progress((i + 1) / n)
+        prog.empty()
+        if made:
             success_save_drafts(st.session_state.get("auth_user", "admin"), made)
-            st.success(f"{len(made)}건 생성 → '검수 대기열' 탭에서 확인·게시하세요.")
-            for it in made:
-                st.markdown(f"- **[{it.get('result','?')}]** {it.get('title','')}")
+            st.session_state["succ_made"] = made      # 미리보기 유지(재실행에도)
+            st.success(f"{len(made)}건 생성 완료 — 아래에서 글을 확인하세요. ('검수 대기열' 탭에도 저장됨)"
+                       + (f"  · 실패 {fail}건" if fail else ""))
+        else:
+            st.error("생성에 실패했습니다. 다시 시도해 주세요.")
+            if st.session_state.get("auth_user") == "admin" and _SUCCESS_LAST_ERR:
+                st.caption(f"(관리자 참고) {_SUCCESS_LAST_ERR}")
+
+    # ── 생성된 원고 미리보기(글 먼저 확인) — 세션 유지 ──
+    made = st.session_state.get("succ_made") or []
+    if made:
+        st.divider()
+        st.markdown('<div class="big-section">생성된 원고 미리보기</div>', unsafe_allow_html=True)
+        for it in made:
+            cat_i, res_i, title_i = it.get("cat", ""), it.get("result", ""), it.get("title", "")
+            with st.expander(f"[{cat_i}·{res_i}]  {title_i}", expanded=(len(made) == 1)):
+                body = success_detail_html(it, corpus)
+                components.html(
+                    f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
+                    f"padding:14px;max-height:460px;overflow:auto'>"
+                    f"<div style='color:{GOLD};font-weight:700'>[{cat_i}] · 결과: {res_i}</div>"
+                    f"<h3 style='margin:.3rem 0'>{title_i}</h3><hr style='border-color:{LINE}'>"
+                    f"{body}</div>", height=480, scrolling=True)
+        st.caption("👉 게시는 '🤖 검수 대기열' 탭에서 승인하세요.")
 
 
 def _success_review_tab(corpus):
