@@ -96,12 +96,21 @@ def main():
             ads_on = [a for a in ads if _on(a)]
             ads_on_ok = [a for a in ads_on if str(a.get("inspectStatus", "")).upper() in OK_INSPECT]
             kw_on = [k for k in kws if _on(k)]
+            # 검수 거부(REJECTED) 소재 — 오늘 대량 교체분 점검
+            rej_ads = [a for a in ads if str(a.get("inspectStatus", "")).upper() == "REJECTED"]
+            # 확장(추가제목/홍보문구) 검수 거부
+            exts = _get("/ncc/ad-extensions", {"ownerId": gid}) or []; time.sleep(0.05)
+            rej_ext = [e for e in (exts if isinstance(exts, list) else [])
+                       if str(e.get("inspectStatus", "")).upper() == "REJECTED"
+                       and e.get("type") in ("HEADLINE", "DESCRIPTION")]
             groups_info.append({
                 "camp": cname, "group": g.get("name"), "gid": gid,
                 "ads": len(ads), "ads_on": len(ads_on), "ads_ok": len(ads_on_ok),
                 "kw": len(kws), "kw_on": len(kw_on),
                 "gbid": int(g.get("bidAmt", 0) or 0),
                 "ins": sorted({str(a.get("inspectStatus", "")) for a in ads_on}),
+                "rej_ad": len(rej_ads), "rej_ext": len(rej_ext),
+                "rej_ad_txt": [str((a.get("ad") or {}).get("headline", "")) for a in rej_ads[:3]],
             })
             gids.append(gid)
 
@@ -122,6 +131,10 @@ def main():
             reasons.append(f"검수통과소재0({'/'.join(gi['ins']) or '?'})")
         if gi["kw_on"] == 0:
             reasons.append("켜진키워드0")
+        if gi.get("rej_ad"):
+            reasons.append(f"검수거부소재{gi['rej_ad']}")
+        if gi.get("rej_ext"):
+            reasons.append(f"검수거부확장{gi['rej_ext']}")
         if gi["imp"] == 0:
             reasons.append(f"{DAYS}일노출0")
         if reasons:
@@ -130,7 +143,7 @@ def main():
 
     # 심각도: 구조적(소재/키워드 문제) 먼저, 그다음 노출0만.
     def sev(gi):
-        struct = any(r.startswith(("소재0", "켜진소재0", "검수통과소재0", "켜진키워드0")) for r in gi["reasons"])
+        struct = any(r.startswith(("소재0", "켜진소재0", "검수통과소재0", "켜진키워드0", "검수거부")) for r in gi["reasons"])
         return (0 if struct else 1, gi["camp"], gi["group"])
     problems.sort(key=sev)
 
@@ -144,8 +157,12 @@ def main():
 
     n_struct = sum(1 for gi in problems
                    if any(r.startswith(("소재0", "켜진소재0", "검수통과소재0", "켜진키워드0")) for r in gi["reasons"]))
+    n_rej = sum(1 for gi in problems if gi.get("rej_ad") or gi.get("rej_ext"))
+    tot_rej_ad = sum(gi.get("rej_ad", 0) for gi in groups_info)
+    tot_rej_ext = sum(gi.get("rej_ext", 0) for gi in groups_info)
     print(f"\n요약 — 점검 그룹 {len(groups_info)} · 문제 그룹 {len(problems)}"
-          f" (구조적 노출불가 {n_struct} · 노출0만 {len(problems) - n_struct})")
+          f" (구조적 노출불가 {n_struct} · 검수거부 그룹 {n_rej} · 그외 노출0)")
+    print(f"검수거부 총계 — 소재 {tot_rej_ad}개 · 확장 {tot_rej_ext}개")
 
 
 if __name__ == "__main__":
