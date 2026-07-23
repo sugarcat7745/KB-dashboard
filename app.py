@@ -5852,6 +5852,78 @@ def success_gen_case(cat, existing_titles=None, client=None):
     return d
 
 
+# ── 홈페이지 공개 아카이브 코퍼스(BQ) — 생성기가 '사무소가 실제로 쓴 글'을 참고 ──
+#   collect_corpus.py가 success.html/intellectual.html을 긁어 적재한 corpus_success/corpus_qna를 읽어,
+#   같은 분야 실제 사례의 형식·전개·법령인용 톤을 few-shot으로 주입(복사 아님) + 제목 중복대조.
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def corpus_cases():
+    """사건사례 아카이브(corpus_success). 테이블 없거나 오류면 빈 DF(생성기는 그대로 동작)."""
+    try:
+        return bq("SELECT idx, category, result, title, laws, body, body_len, n_sections "
+                  "FROM `kb-dashboard-499704.kb_ads.corpus_success`")
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def corpus_qna_arch():
+    """법률지식인(QnA) 아카이브(corpus_qna). 없으면 빈 DF."""
+    try:
+        return bq("SELECT idx, category, question, answer, answer_len "
+                  "FROM `kb-dashboard-499704.kb_ads.corpus_qna`")
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def corpus_case_titles():
+    """아카이브 사건사례 제목의 (공백 무시) 정규화 집합 — 생성 시 기존 게시분과 중복 회피용."""
+    df = corpus_cases()
+    if df.empty or "title" not in df:
+        return set()
+    return {re.sub(r"\s+", "", str(t)) for t in df["title"].tolist()}
+
+
+def corpus_case_ref(cat, max_chars=1500):
+    """같은 분야 실제 사례 1건의 골격(제목·결과·소제목+첫문장·인용법령) + 분야 빈출 법령.
+    생성기에 '이 형식·전개·법령인용 톤으로 쓰라'는 참고로 주입. 없으면 ''."""
+    df = corpus_cases()
+    if df.empty or "category" not in df:
+        return ""
+    sub = df[df["category"].astype(str) == str(cat)]
+    if sub.empty:
+        sub = df
+    # 본문이 가장 충실한(긴) 사례를 대표 예시로
+    try:
+        ex = sub.sort_values("body_len", ascending=False).iloc[0]
+    except Exception:
+        ex = sub.iloc[0]
+    lines = [f"· 실제 제목: {str(ex.get('title',''))}",
+             f"· 결과 표기: {str(ex.get('result',''))}"]
+    body = str(ex.get("body", "") or "")
+    # 번호 소제목(예 '03 사건 개요 ...')을 잘라 소제목+첫문장만
+    for seg in body.split("\n\n"):
+        seg = seg.strip()
+        if not seg:
+            continue
+        head = seg[:150]
+        lines.append("· " + head + ("…" if len(seg) > 150 else ""))
+        if len(lines) >= 9:
+            break
+    # 분야 빈출 법령 top (제목·본문 인용 톤 참고)
+    laws = []
+    for s in sub["laws"].astype(str).tolist():
+        for l in s.split(","):
+            l = l.strip()
+            if l:
+                laws.append(l)
+    if laws:
+        from collections import Counter
+        top = [l for l, _ in Counter(laws).most_common(8)]
+        lines.append("· 이 분야 빈출 법령(참고): " + ", ".join(top))
+    return "\n".join(lines)[:max_chars]
+
+
 def success_gen_titles(cat, n=5, existing_titles=None, client=None):
     """(1단계) 분야 → 케이스 제목 후보 N개. [{crime,result,situation,title}] 반환. 실패 시 []."""
     cli = client or _qna_client()
@@ -5889,8 +5961,9 @@ def success_gen_titles(cat, n=5, existing_titles=None, client=None):
     return out
 
 
-def success_gen_body(cat, title_obj, corpus=None, client=None):
-    """(2단계) 확정된 제목 → 5단 본문 완성(dict). 실패 시 None."""
+def success_gen_body(cat, title_obj, corpus=None, client=None, ref=None):
+    """(2단계) 확정된 제목 → 5단 본문 완성(dict). 실패 시 None.
+    ref: 같은 분야 실제 아카이브 사례의 골격(corpus_case_ref) — 있으면 형식·전개·법령인용 톤 참고로 주입."""
     cli = client or _qna_client()
     crime = title_obj.get("crime", "")
     result = title_obj.get("result", "")
@@ -5918,6 +5991,9 @@ def success_gen_body(cat, title_obj, corpus=None, client=None):
         '"laws":["형법 제○조"],"faq":[{"q":"","a":""},...(2~3)],'
         '"table":{"title":"","headers":["열1","열2"],"rows":[["a","b"]]}}')
     usr = f"위 제목의 본문을 JSON으로 완성하라. 결과 후보 참고: {', '.join(allowed[:12])}"
+    if ref:
+        usr += ("\n\n[참고 예시 — 아래는 같은 분야에서 사무소가 실제로 게시한 사례의 골격이다. "
+                "형식·전개 순서·법령 인용 톤을 참고하되, 내용은 위 제목에 맞게 완전히 새로 써라(복사·재사용 금지)]\n" + ref)
     try:
         m = cli.messages.create(model=MODEL_CHAT, max_tokens=8000, system=sysp,
                                 messages=[{"role": "user", "content": usr}])
@@ -6321,6 +6397,10 @@ def _success_write_tab(corpus):
     if rc2.button("제목 후보 생성 / 새로고침", key="succ_tbtn"):
         with st.spinner("제목 후보 생성 중…"):
             existing = [p["title"] for p in (success_board_posts() or [])]
+            # 홈페이지 아카이브(18k) 같은 분야 제목도 중복 회피 목록에 반영
+            arch = corpus_cases()
+            if not arch.empty and "category" in arch:
+                existing += arch[arch["category"].astype(str) == str(sel)]["title"].astype(str).tolist()
             st.session_state["succ_titles"] = success_gen_titles(sel, int(n_t), existing)
         for k in [k for k in list(st.session_state.keys()) if k.startswith("succ_t_")]:
             st.session_state.pop(k, None)
@@ -6331,12 +6411,12 @@ def _success_write_tab(corpus):
         for i in range(len(titles)):
             st.session_state.setdefault(f"succ_t_{i}", True)   # 기본 전체 체크
         st.markdown(f'<div class="sec-title">제목 후보 {len(titles)}개 — 만들 것만 체크</div>', unsafe_allow_html=True)
-        b1, b2, _b3 = st.columns([1, 1, 5], gap="small")
-        if b1.button("전체 선택", key="succ_t_all"):
+        b1, b2, _b3 = st.columns([1.15, 1.15, 5.7], gap="small")
+        if b1.button("전체 선택", key="succ_t_all", use_container_width=True):
             for i in range(len(titles)):
                 st.session_state[f"succ_t_{i}"] = True
             st.rerun()
-        if b2.button("전체 해제", key="succ_t_none"):
+        if b2.button("전체 해제", key="succ_t_none", use_container_width=True):
             for i in range(len(titles)):
                 st.session_state[f"succ_t_{i}"] = False
             st.rerun()
@@ -6349,10 +6429,11 @@ def _success_write_tab(corpus):
         st.markdown('<div class="big-section">3) 본문 생성</div>', unsafe_allow_html=True)
         if st.button(f"선택 {len(picked)}개 본문 생성", key="succ_makebody", type="primary"):
             made, fail = [], 0
+            cref = corpus_case_ref(sel)   # 같은 분야 실제 아카이브 사례 골격(형식·법령 톤 참고)
             prog = st.progress(0.0)
             with st.spinner("본문 생성 중… (건당 15~30초)"):
                 for i, t in enumerate(picked):
-                    it = success_gen_body(sel, t, corpus)
+                    it = success_gen_body(sel, t, corpus, ref=cref)
                     if it:
                         made.append(it)
                     else:
@@ -6606,12 +6687,12 @@ def _qna_write_tab(corpus, cc, existing):
         for i in range(len(reco)):
             st.session_state.setdefault(f"qna_kw_{i}", False)   # 처음엔 모두 해제
         st.markdown(f'<div class="sec-title">추천 키워드 {len(reco)}개 — 쓸 것만 체크</div>', unsafe_allow_html=True)
-        b1, b2, _b3 = st.columns([1, 1, 5], gap="small")
-        if b1.button("전체 선택", key="qna_kw_all"):
+        b1, b2, _b3 = st.columns([1.15, 1.15, 5.7], gap="small")
+        if b1.button("전체 선택", key="qna_kw_all", use_container_width=True):
             for i in range(len(reco)):
                 st.session_state[f"qna_kw_{i}"] = True
             st.rerun()
-        if b2.button("전체 해제", key="qna_kw_none"):
+        if b2.button("전체 해제", key="qna_kw_none", use_container_width=True):
             for i in range(len(reco)):
                 st.session_state[f"qna_kw_{i}"] = False
             st.rerun()
@@ -6689,12 +6770,12 @@ def _qna_write_tab(corpus, cc, existing):
     st.caption(f"생성 완료 {len(items)}개 · 게시됨 {done_n}개 — 상세에서 검수·수정 후 ‘승인’ 체크, 맨 아래에서 한 번에 업로드."
                + ("" if cid else "  · 업로드는 Secrets [qna_board] id/pw 설정 후 활성화."))
     unposted = [i for i in range(len(items)) if not st.session_state.get(f"qna_posted_{i}")]
-    ac1, ac2, _ac3 = st.columns([1, 1, 5], gap="small")
-    if ac1.button("전체 승인", key="qna_approve_all", disabled=not (cid and unposted)):
+    ac1, ac2, _ac3 = st.columns([1.15, 1.15, 5.7], gap="small")
+    if ac1.button("전체 승인", key="qna_approve_all", disabled=not (cid and unposted), use_container_width=True):
         for i in unposted:
             st.session_state[f"qna_confirm_{i}"] = True
         st.rerun()
-    if ac2.button("전체 해제", key="qna_unapprove_all", disabled=not unposted):
+    if ac2.button("전체 해제", key="qna_unapprove_all", disabled=not unposted, use_container_width=True):
         for i in unposted:
             st.session_state[f"qna_confirm_{i}"] = False
         st.rerun()
