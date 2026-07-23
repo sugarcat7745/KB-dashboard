@@ -735,13 +735,16 @@ def ai_banner(summary, tab, period, focus=""):
 
 @st.cache_data
 def get_logo():
-    """검정 로고(법무법인 KB 공식 로고 검정버전) — 로컬 파일 base64 임베드. 밝은 배경용."""
-    try:
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "검정.png")
-        with open(p, "rb") as f:
-            return base64.b64encode(f.read()).decode()
-    except Exception:
-        return None
+    """법무법인 KB 로고(마크 금색 + 텍스트 검정) — 로컬 파일 base64 임베드. 밝은 배경용.
+    '로고.png'(금색) 우선, 없으면 '검정.png'로 폴백."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("로고.png", "검정.png"):
+        try:
+            with open(os.path.join(here, name), "rb") as f:
+                return base64.b64encode(f.read()).decode()
+        except Exception:
+            continue
+    return None
 
 def brand_html(size="md"):
     """공식 로고(검정버전) 이미지. 파일 없으면 KB 배지로 폴백."""
