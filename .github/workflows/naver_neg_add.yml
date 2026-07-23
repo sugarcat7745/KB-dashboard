@@ -1,0 +1,43 @@
+name: naver-neg-add
+
+# 네이버 제외키워드(확장검색 제외, KEYWORD_PLUS_RESTRICT) 일괄 추가.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "실제 적용? (no=드라이런 / yes=적용)"
+        required: true
+        default: "no"
+      neg_kw:
+        description: "제외키워드(콤마로 여러개)"
+        required: false
+        default: "공증"
+      only_camp:
+        description: "특정 캠페인만 (비우면 전체)"
+        required: false
+        default: ""
+      only_on:
+        description: "켜진 것만? (yes 권장)"
+        required: false
+        default: "yes"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 제외키워드 추가
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          APPLY:     ${{ inputs.apply == 'yes' && '1' || '0' }}
+          NEG_KW:    ${{ inputs.neg_kw }}
+          ONLY_CAMP: ${{ inputs.only_camp }}
+          ONLY_ON:   ${{ inputs.only_on == 'no' && '0' || '1' }}
+        run: python naver_neg_add.py
