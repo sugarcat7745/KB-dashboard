@@ -10,8 +10,7 @@ on:
         description: "생성 개수(형사2·성범죄2·나머지1 계획 기준, 기본 5)"
         required: false
         default: "5"
-  schedule:
-    - cron: "30 1 * * *"   # 매일 01:30 UTC = KST 오전 10:30 · 생성만(검수 대기열)
+  # ⚠️ GitHub schedule은 무료플랜 지연 심해 사용 안 함. 실행은 Claude Routine이 workflow_dispatch로 처리.
 
 concurrency:
   group: success-autopost

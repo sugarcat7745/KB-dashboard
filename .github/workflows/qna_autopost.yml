@@ -14,8 +14,8 @@ on:
         description: "게시 안 하고 검수 대기열에만? (true/false)"
         required: false
         default: "true"
-  schedule:
-    - cron: "0 1 * * *"   # 매일 01:00 UTC = KST 오전 10시 · 생성만(검수 대기열)
+  # ⚠️ GitHub schedule은 무료플랜에서 정각(:00) 수 시간 지연 → 사용 안 함.
+  # 매일 정시 실행은 Claude Routine이 이 워크플로를 workflow_dispatch로 눌러서 처리한다.
 
 concurrency:
   group: qna-autopost
