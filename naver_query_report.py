@@ -67,6 +67,28 @@ def make_report(tp, stat_dt):
     return resp.get("reportJobId")
 
 
+def probe():
+    """리포트 타입 × 날짜 포맷 조합 탐색 — 통하는 조합 찾기."""
+    y = date.today() - timedelta(days=1)
+    fmts = {
+        "date": y.isoformat(),
+        "iso_z": y.isoformat() + "T00:00:00Z",
+        "iso_ms_z": y.isoformat() + "T00:00:00.000Z",
+        "slash": y.strftime("%Y/%m/%d"),
+    }
+    tps = ["AD", "EXP_KEYWORD", "AD_DETAIL", "KEYWORD", "EXPKEYWORD", "AD_EXP_KEYWORD"]
+    print("=== PROBE: reportTp × statDt 포맷 ===")
+    for tp in tps:
+        for fname, fval in fmts.items():
+            resp, err = _post("/stat-reports", {"reportTp": tp, "statDt": fval}); time.sleep(0.4)
+            if resp is not None:
+                print(f"  ✅ {tp} + {fname}({fval}) → jobId {resp.get('reportJobId')} status {resp.get('status')}")
+            else:
+                short = err[:90]
+                print(f"  ❌ {tp} + {fname}: {short}")
+    print("=== PROBE 끝 ===")
+
+
 def poll_report(job_id):
     for _ in range(80):
         d = _get(f"/stat-reports/{job_id}")
@@ -126,6 +148,8 @@ def build_group_map():
 
 
 def main():
+    if os.environ.get("PROBE", "0") == "1":
+        probe(); return
     until = date.today() - timedelta(days=1)
     print(f"=== 검색어 보고서({REPORT_TP}) · 최근 {DAYS}일(~{until.isoformat()}) ===\n")
 
