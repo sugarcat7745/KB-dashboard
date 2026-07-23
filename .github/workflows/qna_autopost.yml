@@ -14,6 +14,10 @@ on:
         description: "게시 안 하고 검수 대기열에만? (true/false)"
         required: false
         default: "true"
+      cats:
+        description: "특정 카테고리만 생성(쉼표구분, 빠진 분야 보충용). 비우면 계획대로."
+        required: false
+        default: ""
   # ⚠️ GitHub schedule은 무료플랜에서 정각(:00) 수 시간 지연 → 사용 안 함.
   # 매일 정시 실행은 Claude Routine이 이 워크플로를 workflow_dispatch로 눌러서 처리한다.
 
@@ -40,4 +44,5 @@ jobs:
           # schedule로 자동 실행될 땐 inputs가 비므로 기본값 사용(N=15, DRYRUN=1)
           AUTOPOST_N: ${{ github.event.inputs.n || '15' }}
           AUTOPOST_DRYRUN: ${{ (github.event.inputs.dry_run == 'false') && '0' || '1' }}
+          AUTOPOST_CATS: ${{ github.event.inputs.cats || '' }}
         run: python qna_autopost.py

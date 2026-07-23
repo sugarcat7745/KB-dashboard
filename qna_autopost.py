@@ -502,7 +502,10 @@ def main():
     bq = _bq(); cli = _cli()
     bundle, rsch = _laws_bundle(), _laws_researched(bq)
     existing = _existing_titles(bq)
-    cats = _todays_categories(N_PER_DAY)
+    # AUTOPOST_CATS(쉼표구분)이 있으면 그 카테고리만 생성(오늘 빠진 분야 보충용). 없으면 계획대로.
+    cats_override = os.environ.get("AUTOPOST_CATS", "").strip()
+    cats = [c.strip() for c in cats_override.split(",") if c.strip()] if cats_override \
+        else _todays_categories(N_PER_DAY)
     _log("오늘 분야:", cats)
     sess = None if DRYRUN else _session()
     batch = uuid.uuid4().hex[:12]
