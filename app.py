@@ -5945,18 +5945,184 @@ def success_upload(title, cat, detail_html, summary_html, result, image_path=Non
     return m.group(1)
 
 
+def success_publish_summary():
+    """성공사례 생성·게시 오늘/주/월/누적(KST). SKIP 마커는 게시에서 제외. 실패 시 None."""
+    try:
+        d = bq(f"""SELECT
+            COUNTIF(payload!='' AND DATE(ts,'Asia/Seoul')=CURRENT_DATE('Asia/Seoul')) gen_d,
+            COUNTIF(payload!='' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 6 DAY)) gen_w,
+            COUNTIF(payload!='' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 29 DAY)) gen_m,
+            COUNTIF(payload!='') gen_t,
+            COUNTIF(posted!='' AND posted!='SKIP' AND DATE(ts,'Asia/Seoul')=CURRENT_DATE('Asia/Seoul')) post_d,
+            COUNTIF(posted!='' AND posted!='SKIP' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 6 DAY)) post_w,
+            COUNTIF(posted!='' AND posted!='SKIP' AND DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL 29 DAY)) post_m,
+            COUNTIF(posted!='' AND posted!='SKIP') post_t
+          FROM `{BQ_PROJECT}.{BQ_DATASET}.success_draft`""")
+        return d.iloc[0].to_dict() if d is not None and not d.empty else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300)
+def success_publish_daily(days=14):
+    """최근 N일 일별 생성·게시(KST). 실패 시 None. (영문 별칭 후 rename — BQ 한글별칭 거부)"""
+    try:
+        df = bq(f"""SELECT CAST(DATE(ts,'Asia/Seoul') AS STRING) dt,
+                 COUNTIF(payload!='') gen_n, COUNTIF(posted!='' AND posted!='SKIP') post_n
+              FROM `{BQ_PROJECT}.{BQ_DATASET}.success_draft`
+              WHERE DATE(ts,'Asia/Seoul')>=DATE_SUB(CURRENT_DATE('Asia/Seoul'),INTERVAL {int(days)-1} DAY)
+              GROUP BY dt ORDER BY dt""")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"dt": "날짜", "gen_n": "생성", "post_n": "게시"})
+        return df
+    except Exception:
+        return None
+
+
+def success_cat_counts():
+    """게시완료 성공사례 분야별 개수 Series. 실패/없음 시 빈 Series."""
+    try:
+        df = bq(f"""SELECT d.cat cat_k, COUNT(*) n
+              FROM `{BQ_PROJECT}.{BQ_DATASET}.success_draft` p
+              JOIN `{BQ_PROJECT}.{BQ_DATASET}.success_draft` d ON p.id=d.id AND d.payload!=''
+              WHERE p.posted!='' AND p.posted!='SKIP' GROUP BY cat_k ORDER BY n DESC""")
+        if df is not None and not df.empty:
+            return df.set_index("cat_k")["n"]
+    except Exception:
+        pass
+    return pd.Series(dtype=int)
+
+
+@st.cache_data(ttl=180)
+def success_recent_posts(n=60):
+    """게시완료 성공사례 목록(마커→원본 draft join). 실패 시 None."""
+    try:
+        df = bq(f"""SELECT CAST(DATE(p.ts,'Asia/Seoul') AS STRING) dt, d.cat cat_k, d.title title_k, p.posted wr_id
+              FROM `{BQ_PROJECT}.{BQ_DATASET}.success_draft` p
+              JOIN `{BQ_PROJECT}.{BQ_DATASET}.success_draft` d ON p.id=d.id AND d.payload!=''
+              WHERE p.posted!='' AND p.posted!='SKIP' ORDER BY p.ts DESC LIMIT {int(n)}""")
+        if df is not None and not df.empty:
+            df = df.rename(columns={"dt": "날짜", "cat_k": "분류", "title_k": "제목"})
+        return df
+    except Exception:
+        return None
+
+
+def success_delete_post(wr_id):
+    """성공사례 게시판(success)에서 글 삭제. 삭제 링크(토큰) 찾아 호출 후 재조회로 판정."""
+    try:
+        s = _qna_session()
+        vurl = f"{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={wr_id}"
+        view = s.get(vurl, timeout=30).text
+        m = re.search(r'(delete\.php\?[^"\'<> ]*\bwr_id=' + re.escape(str(wr_id)) + r'\b[^"\'<> ]*)', view)
+        url = (f"{QNA_BASE}/bbs/" + m.group(1).replace("&amp;", "&")) if m \
+            else f"{QNA_BASE}/bbs/delete.php?bo_table={SUCCESS_BO}&wr_id={wr_id}"
+        s.get(url, timeout=30, headers={"Referer": vurl})
+        chk = s.get(vurl, timeout=30)
+        return chk.status_code == 404 or any(
+            x in chk.text for x in ("존재하지 않", "삭제된", "없는 게시물", "이미 삭제"))
+    except Exception:
+        return False
+
+
+def _success_stats_tab():
+    """통계·성과 탭 — 생성/게시 추이 + 분야별 게시글 수. (QnA와 동일 디자인)"""
+    st.markdown('<div class="big-section">생성·게시 추이 (KST)</div>', unsafe_allow_html=True)
+    s = success_publish_summary()
+    if not s:
+        st.info("아직 통계 데이터가 없습니다. 원고를 생성·게시하면 여기에 집계됩니다.")
+    else:
+        cols = st.columns(4)
+        cards = [("fa-calendar-day", "오늘", "gen_d", "post_d"),
+                 ("fa-calendar-week", "이번주", "gen_w", "post_w"),
+                 ("fa-calendar", "이번달", "gen_m", "post_m"),
+                 ("fa-layer-group", "누적", "gen_t", "post_t")]
+        for col, (ic, lab, gk, pk) in zip(cols, cards):
+            kpi(col, ic, f"{lab} 생성", f"{int(s[gk])}", "건", desc=f"게시 {int(s[pk])}건")
+        dd = success_publish_daily()
+        if dd is not None and not dd.empty:
+            st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-column"></i> 최근 14일 일별 생성·게시</div>', unsafe_allow_html=True)
+            ff = go.Figure()
+            ff.add_bar(x=dd["날짜"], y=dd["생성"], name="생성", marker_color=GOLD,
+                       text=dd["생성"], textposition="outside", textfont=dict(size=11))
+            ff.add_bar(x=dd["날짜"], y=dd["게시"], name="게시", marker_color=GOOD,
+                       text=dd["게시"], textposition="outside", textfont=dict(size=11))
+            ff.update_layout(barmode="group", bargap=0.28, bargroupgap=0.12,
+                             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+            ff.update_yaxes(showticklabels=False, showgrid=False, zeroline=False)
+            st.plotly_chart(fig_theme(ff, 260), use_container_width=True, config={"displayModeBar": False})
+    st.divider()
+    st.markdown('<div class="big-section">분야별 게시글 수</div>', unsafe_allow_html=True)
+    cc = success_cat_counts()
+    if cc is not None and len(cc):
+        mx = float(cc.max() or 1)
+        rows = ""
+        for i, (name, val) in enumerate(cc.items(), 1):
+            v = int(val); pct = v / mx * 100
+            rows += (f'<div class="rank-row"><span class="rank-badge">{i}</span>'
+                     f'<div class="rank-main"><div class="rank-label">{name}</div>'
+                     f'<div class="rank-track"><span style="width:{pct:.0f}%;"></span></div></div>'
+                     f'<div><div class="rank-val">{v}<small style="font-size:11px;font-weight:600;color:{MUTED};margin-left:1px;">건</small></div></div></div>')
+        st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
+    else:
+        st.caption("아직 게시된 성공사례가 없습니다.")
+
+
+def _success_list_tab():
+    """게시글 목록 탭 — 게시완료 성공사례 목록 + (확인 후) 삭제."""
+    st.markdown('<div class="big-section">게시글 목록</div>', unsafe_allow_html=True)
+    st.caption("홈페이지 성공사례 게시글. 삭제는 되돌릴 수 없으니 ‘삭제확인’ 체크 후 진행하세요.")
+    cid, _ = _qna_creds()
+    if not cid:
+        st.info("⚠️ 삭제하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
+    rp = success_recent_posts()
+    if rp is None or rp.empty:
+        st.info("게시된 성공사례가 없습니다.")
+        return
+    fcat = st.selectbox("분야", ["전체"] + list(QNA_CATS), key="succ_list_cat")
+    view = rp if fcat == "전체" else rp[rp["분류"].astype(str) == fcat]
+    deleted = st.session_state.setdefault("succ_deleted", set())
+    view = view[~view["wr_id"].astype(str).isin(deleted)]
+    st.caption(f"{len(view)}건")
+    for _, r in view.iterrows():
+        wid, title, cat, dt = str(r["wr_id"]), str(r["제목"]), str(r["분류"]), str(r["날짜"])
+        c0, c1, c2 = st.columns([0.66, 0.14, 0.20], vertical_alignment="center")
+        c0.markdown(f"<span style='font-size:13px'>{dt} · [{cat}] "
+                    f"<a href='{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={wid}' "
+                    f"style='color:{GOLD}' target='_blank'>{title[:56]}</a></span>",
+                    unsafe_allow_html=True)
+        conf = c1.checkbox("삭제확인", key=f"succ_del_ok_{wid}", label_visibility="collapsed")
+        if c2.button("🗑️ 삭제", key=f"succ_del_{wid}", disabled=not (cid and conf)):
+            with st.spinner("삭제 중…"):
+                ok = success_delete_post(wid)
+            if ok:
+                deleted.add(wid)
+                try:
+                    success_recent_posts.clear()
+                except Exception:
+                    pass
+                st.success(f"삭제됨 (wr_id={wid})")
+                st.rerun()
+            else:
+                st.error("삭제 실패 — 게시판에서 직접 확인하세요.")
+
+
 def render_success():
-    tab_header("fa-award", "성공사례 자동 생성", "GEO 최적화 · 5단 목차 · 결과 도장 · 검수 후 게시",
+    tab_header("fa-award", "성공사례 관리", "자동 게시 · 원고 생성 · 통계 · 게시글",
                color="#B8925A", rgb="184,146,90")
     try:
         corpus = qna_corpus()      # 관련글 내부링크용(선택). 없으면 그냥 링크만 생략.
     except Exception:
         corpus = None
-    _s1, _s2 = st.tabs(["✍️ 원고 생성", "🤖 검수 대기열"])
+    _s1, _s2, _s3, _s4 = st.tabs(["🤖 자동 게시", "✍️ 원고 생성", "📊 통계·성과", "🗂️ 게시글 목록"])
     with _s1:
-        _success_gen_tab(corpus)
-    with _s2:
         _success_review_tab(corpus)
+    with _s2:
+        _success_gen_tab(corpus)
+    with _s3:
+        _success_stats_tab()
+    with _s4:
+        _success_list_tab()
 
 
 def _success_gen_tab(corpus):
@@ -6109,11 +6275,11 @@ def render_qna():
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
     cc = corpus["cat"].value_counts() if not corpus.empty else pd.Series(dtype=int)
     existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
-    _t1, _t2, _t3, _t4 = st.tabs(["✍️ 원고 생성", "🤖 자동 게시", "📊 통계·성과", "🗂️ 게시글 목록"])
+    _t1, _t2, _t3, _t4 = st.tabs(["🤖 자동 게시", "✍️ 원고 생성", "📊 통계·성과", "🗂️ 게시글 목록"])
     with _t1:
-        _qna_write_tab(corpus, cc, existing)
-    with _t2:
         _qna_auto_tab(corpus)
+    with _t2:
+        _qna_write_tab(corpus, cc, existing)
     with _t3:
         _qna_stats_tab(corpus, cc)
     with _t4:
