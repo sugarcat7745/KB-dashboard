@@ -266,9 +266,13 @@ def main():
                          "corpus_success", SCHEMA_SUCCESS,
                          ["idx", "category", "result", "title", "laws", "body", "body_len", "n_sections", "url"],
                          cap=cap_s)
-    print(f"완료: 사건사례 {ns}건 · QnA {nq}건 적재", flush=True)
+    print(f"완료: 이번 실행 신규 적재 — 사건사례 {ns}건 · QnA {nq}건", flush=True)
+    # 이어받기(resume)에선 신규 0건 = '더 채울 게 없음'(정상). 진짜 실패는 테이블이 통째로 빈 경우뿐.
     if ns == 0 and nq == 0:
-        print("[error] 수집 0건", flush=True); sys.exit(1)
+        have = len(existing_idxs("corpus_success")) + len(existing_idxs("corpus_qna"))
+        if have == 0:
+            print("[error] 수집 0건 · 테이블도 비어 있음", flush=True); sys.exit(1)
+        print(f"신규 없음 — 이미 적재된 {have}건으로 완료(이어받기: 더 받을 항목 없음).", flush=True)
 
 
 if __name__ == "__main__":
