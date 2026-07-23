@@ -1,0 +1,33 @@
+name: naver-camp-daily
+
+# 네이버 캠페인별 최근 N일 일별 소진 추세(읽기 전용).
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "최근 며칠?"
+        required: false
+        default: "7"
+      only_on:
+        description: "켜진 것만? (yes 권장)"
+        required: false
+        default: "yes"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 일별 소진 추세
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          DAYS: ${{ inputs.days }}
+          ONLY_ON: ${{ inputs.only_on == 'no' && '0' || '1' }}
+        run: python naver_camp_daily.py
