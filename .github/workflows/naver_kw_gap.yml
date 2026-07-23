@@ -1,0 +1,38 @@
+name: naver-kw-gap
+
+# 카테고리별 누락 키워드 갭 분석 — keywordstool 연관키워드 대조(읽기전용).
+on:
+  workflow_dispatch:
+    inputs:
+      only_cat:
+        description: "특정 카테고리만 (콤마, 비우면 전체). 예: 폭행,상해"
+        required: false
+        default: ""
+      min_vol:
+        description: "최소 월검색량 합계"
+        required: false
+        default: "10"
+      top:
+        description: "카테고리당 출력 상한"
+        required: false
+        default: "80"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 키워드 갭 분석
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          ONLY_CAT: ${{ inputs.only_cat }}
+          MIN_VOL:  ${{ inputs.min_vol }}
+          TOP:      ${{ inputs.top }}
+        run: python naver_kw_gap.py

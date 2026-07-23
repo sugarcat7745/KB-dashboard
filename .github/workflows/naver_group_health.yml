@@ -1,0 +1,38 @@
+name: naver-group-health
+
+# 켜져 있는데 실제로 노출 안 되는 그룹 점검(읽기전용).
+on:
+  workflow_dispatch:
+    inputs:
+      only_on:
+        description: "켜진 것만? (yes 권장)"
+        required: false
+        default: "yes"
+      days:
+        description: "노출 확인 기간(일)"
+        required: false
+        default: "7"
+      exclude_name:
+        description: "이 문자열 든 캠페인 제외 (예: 브검)"
+        required: false
+        default: ""
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 그룹 노출건전성 점검
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          ONLY_ON:      ${{ inputs.only_on == 'no' && '0' || '1' }}
+          DAYS:         ${{ inputs.days }}
+          EXCLUDE_NAME: ${{ inputs.exclude_name }}
+        run: python naver_group_health.py
