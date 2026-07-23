@@ -5585,10 +5585,10 @@ def _qna_auto_tab(corpus):
         rows = ""
         for _, r in rp.iterrows():
             url = f"{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={r['wr_id']}"
-            rows += (f'<div class="rank-row">'
-                     f'<span style="flex:0 0 auto;background:{SURF2};color:{MUTED};font-size:11px;font-weight:600;'
+            rows += (f'<div class="rank-row" style="grid-template-columns:auto minmax(0,1fr) auto;">'
+                     f'<span style="background:{SURF2};color:{MUTED};font-size:11px;font-weight:600;'
                      f'white-space:nowrap;padding:4px 9px;border-radius:7px;">{r["날짜"]}</span>'
-                     f'<div class="rank-main"><div class="rank-label" style="color:{GOLD};font-size:12px;font-weight:700;">[{r["분류"]}]</div>'
+                     f'<div class="rank-main" style="min-width:0;"><div style="color:{GOLD};font-size:12px;font-weight:700;">[{r["분류"]}]</div>'
                      f'<div style="font-size:13px;color:{TXT};margin-top:2px;">{r["제목"]}</div></div>'
                      f'<div><a href="{url}" target="_blank" style="font-size:12px;color:{GOLD_D};font-weight:600;text-decoration:none;">열기 →</a></div></div>')
         st.markdown(f'<div class="kb-card">{rows}</div>', unsafe_allow_html=True)
