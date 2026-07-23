@@ -179,7 +179,13 @@ def main():
         print(f"  {gname}: {len(kws)}개 · 예: {', '.join(kws[:5])}")
 
     if not APPLY:
-        print("\n드라이런 — apply=yes 로 실제 등록.")
+        print("\n===EXPAND_CSV_START===")
+        print("그룹|키워드")
+        for (gid, gname), kws in bygroup.items():
+            for k in kws:
+                print(f"{gname}|{k}")
+        print("===EXPAND_CSV_END===")
+        print("드라이런 — apply=yes 로 실제 등록.")
         return
 
     made = fail = 0
