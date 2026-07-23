@@ -1,0 +1,38 @@
+name: naver-add-gap-kw
+
+# 갭 분석 신규 키워드를 주제 맞는 그룹에 분배 등록.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "실제 등록? (no=드라이런 / yes=등록)"
+        required: true
+        default: "no"
+      bid:
+        description: "통일 입찰가(원)"
+        required: false
+        default: "23500"
+      only_on:
+        description: "켜진 것만? (yes 권장)"
+        required: false
+        default: "yes"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 신규 키워드 등록
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          APPLY:   ${{ inputs.apply == 'yes' && '1' || '0' }}
+          BID:     ${{ inputs.bid }}
+          ONLY_ON: ${{ inputs.only_on == 'no' && '0' || '1' }}
+        run: python naver_add_gap_kw.py
