@@ -14,7 +14,7 @@ try:
 except ImportError:
     HAS_ANTHROPIC = False
 
-st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="", layout="wide")
+st.set_page_config(page_title="법무법인 KB | 대시보드", page_icon="favicon.png", layout="wide")
 
 # ── 폰트·아이콘 로딩 (강건화) ─────────────────────────────────────────
 # @import를 <style>에 주입하면 Streamlit Cloud에서 자주 무시돼 시스템 폰트로 폴백된다
@@ -5529,12 +5529,12 @@ def _qna_auto_tab(corpus):
         dids = [str(r["id"]) for _, r in rows]
         for d in dids:                       # 기본 전체 체크
             st.session_state.setdefault(f"autochk_{d}", True)
-        h1, h2, h3 = st.columns([1, 1, 5], gap="small", vertical_alignment="center")
-        if h1.button("전체 선택", key="auto_all"):
+        h1, h2, h3 = st.columns([1.15, 1.15, 5.7], gap="small", vertical_alignment="center")
+        if h1.button("전체 선택", key="auto_all", use_container_width=True):
             for d in dids:
                 st.session_state[f"autochk_{d}"] = True
             st.rerun()
-        if h2.button("전체 해제", key="auto_none"):
+        if h2.button("전체 해제", key="auto_none", use_container_width=True):
             for d in dids:
                 st.session_state[f"autochk_{d}"] = False
             st.rerun()
@@ -5571,16 +5571,16 @@ def _qna_auto_tab(corpus):
         # ── 하단: 선택한 것만 일괄 게시 / 건너뛰기(게시 안 하고 대기열에서 제거) ──
         st.divider()
         sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"autochk_{str(r['id'])}")]
-        bcol1, bcol2, _bsp = st.columns([1.4, 1.4, 2], gap="small")
+        bcol1, bcol2, _bsp = st.columns([1.9, 1.9, 4.2], gap="small")
         if bcol2.button(f"선택 건너뛰기 ({len(sel)}건)", key="auto_bulk_skip",
-                        disabled=not sel,
+                        disabled=not sel, use_container_width=True,
                         help="체크한 원고를 게시하지 않고 검수 대기열에서 제거합니다(홈페이지엔 안 올라감)."):
             for did, _ in sel:
                 qna_skip_draft(did)
             st.success(f"{len(sel)}건 건너뜀(대기열에서 제거)")
             st.rerun()
         if bcol1.button(f"선택 게시글 업로드 ({len(sel)}건)", key="auto_bulk_up",
-                     type="primary", disabled=not (cid and sel)):
+                     type="primary", disabled=not (cid and sel), use_container_width=True):
             prog = st.progress(0.0); done = 0; fail = 0
             for n, (did, r) in enumerate(sel):
                 try:
@@ -6438,12 +6438,12 @@ def _success_review_tab(corpus):
         dids = [str(r["id"]) for _, r in rows]
         for d in dids:
             st.session_state.setdefault(f"succhk_{d}", True)
-        h1, h2, h3 = st.columns([1, 1, 5], gap="small", vertical_alignment="center")
-        if h1.button("전체 선택", key="succ_all"):
+        h1, h2, h3 = st.columns([1.15, 1.15, 5.7], gap="small", vertical_alignment="center")
+        if h1.button("전체 선택", key="succ_all", use_container_width=True):
             for d in dids:
                 st.session_state[f"succhk_{d}"] = True
             st.rerun()
-        if h2.button("전체 해제", key="succ_none"):
+        if h2.button("전체 해제", key="succ_none", use_container_width=True):
             for d in dids:
                 st.session_state[f"succhk_{d}"] = False
             st.rerun()
@@ -6479,14 +6479,15 @@ def _success_review_tab(corpus):
                     st.rerun()
         st.divider()
         sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"succhk_{str(r['id'])}")]
-        b1, b2, _bsp = st.columns([1.4, 1.4, 2], gap="small")
-        if b2.button(f"선택 건너뛰기 ({len(sel)}건)", key="succ_bulk_skip", disabled=not sel):
+        b1, b2, _bsp = st.columns([1.9, 1.9, 4.2], gap="small")
+        if b2.button(f"선택 건너뛰기 ({len(sel)}건)", key="succ_bulk_skip",
+                     disabled=not sel, use_container_width=True):
             for did, _ in sel:
                 success_skip(did)
             st.success(f"{len(sel)}건 건너뜀")
             st.rerun()
         if b1.button(f"선택 게시글 업로드 ({len(sel)}건)", key="succ_bulk_up",
-                     type="primary", disabled=not (cid and sel)):
+                     type="primary", disabled=not (cid and sel), use_container_width=True):
             prog = st.progress(0.0)
             done = fail = 0
             for k, (did, r) in enumerate(sel):
