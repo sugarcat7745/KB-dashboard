@@ -20,6 +20,8 @@ ONLY_ON = os.environ.get("ONLY_ON", "1") == "1"
 ADD_B = os.environ.get("ADD_B", "1") == "1"
 ADD_EXT = os.environ.get("ADD_EXT", "1") == "1"
 ONLY_CAMP = os.environ.get("ONLY_CAMP", "").strip()
+AD_CAP = int(os.environ.get("AD_CAP", "5"))          # 그룹당 소재 상한(네이버 파워링크 기본 5)
+FREE_ROOM = os.environ.get("FREE_ROOM", "1") == "1"  # 자리 부족 시 OFF 우선→CTR최하위 삭제로 확보
 
 DUMP = os.environ.get("DUMP","0")=="1"
 VERIFY = os.environ.get("VERIFY","0")=="1"
@@ -363,6 +365,49 @@ def _on(o): return not bool(o.get("userLock"))
 def _strip(o, drop): return {k:v for k,v in o.items() if k not in drop}
 
 
+def ad_ctrs(ids):
+    """소재 id별 클릭률(최근 90일). 자리 만들 때 CTR 최하위 판정용."""
+    out = {}
+    if not ids: return out
+    from datetime import date, timedelta
+    until = date.today() - timedelta(days=1); since = until - timedelta(days=89)
+    for i in range(0, len(ids), 100):
+        params = {"ids": ",".join(ids[i:i+100]), "fields": json.dumps(["ctr","clkCnt"]),
+                  "timeRange": json.dumps({"since": since.isoformat(), "until": until.isoformat()})}
+        d = _get("/stats", params); time.sleep(0.15)
+        rows = (d.get("data") if isinstance(d, dict) else d) or []
+        for r in (rows if isinstance(rows, list) else []):
+            out[str(r.get("id"))] = float(r.get("ctr", 0) or 0)
+    return out
+
+
+def free_room(ads, target_pairs, n_add, gname):
+    """A/B n_add개를 넣을 자리를 확보. OFF 소재 먼저 삭제, 부족하면 CTR 최하위 ON 삭제.
+    내가 넣을 문구(target_pairs)와 일치하는 소재는 건드리지 않음. (삭제 수, 로그) 반환."""
+    def pair(a):
+        ad = a.get("ad") or {}; return (str(ad.get("headline","")), str(ad.get("description","")))
+    old = [a for a in ads if pair(a) not in target_pairs]
+    need = len(ads) + n_add - AD_CAP
+    if need <= 0:
+        return 0, []
+    off = [a for a in old if not _on(a)]
+    on = [a for a in old if _on(a)]
+    ctrs = ad_ctrs([a.get("nccAdId") for a in on]) if len(off) < need else {}
+    on.sort(key=lambda a: ctrs.get(str(a.get("nccAdId")), 0.0))   # CTR 낮은 순
+    order = off + on                                              # OFF 먼저, 그다음 저CTR ON
+    victims = order[:need]
+    done = []
+    for a in victims:
+        aid = a.get("nccAdId")
+        ok, er = _delete(f"/ncc/ads/{aid}"); time.sleep(0.2)
+        st = "OFF" if not _on(a) else f"CTR{ctrs.get(str(aid),0):.2f}"
+        if ok:
+            done.append((pair(a)[0], st))
+        else:
+            print(f"  ❌ {gname} 소재삭제 실패 {er}")
+    return len(done), done
+
+
 def make_ad_body(tpl, gid, hl, ds):
     b = _strip(tpl, AD_DROP); b["nccAdgroupId"] = gid
     ad = dict(b.get("ad") or {}); ad["headline"] = hl; ad["description"] = ds; b["ad"] = ad
@@ -395,7 +440,7 @@ def main():
     if VERIFY:
         print("===VERIFY_CSV_START===")
         print("캠페인|그룹|세부주제매칭|소재A|소재B|추가제목|홍보문구|소재검수|확장검수")
-    made_ad = made_ext = del_ext = skip = fail = 0
+    made_ad = made_ext = del_ext = del_ad = skip = fail = 0
     log = []
     for c in camps:
         cname = str(c.get("name","")).strip()
@@ -428,6 +473,18 @@ def main():
             pairs = {(str((a.get('ad') or {}).get('headline','')), str((a.get('ad') or {}).get('description',''))) for a in ads}
             newads = [("A",p['제목A'],p['설명A'])]
             if ADD_B: newads.append(("B",p['제목B'],p['설명B']))
+            to_add = [(t,h,d) for t,h,d in newads if (h,d) not in pairs]
+            target_pairs = {(h,d) for _,h,d in newads}
+            # 자리 부족하면 확보(OFF 먼저 → CTR 최하위 ON)
+            if to_add and FREE_ROOM and (len(ads) + len(to_add) > AD_CAP):
+                if not APPLY:
+                    need = len(ads) + len(to_add) - AD_CAP
+                    print(f"  [자리확보예정] {cname}>{gname} 소재 {len(ads)}개 → {need}개 삭제(OFF우선/저CTR)")
+                else:
+                    ndel, victims = free_room(ads, target_pairs, len(to_add), gname)
+                    del_ad += ndel
+                    for hl0, st0 in victims:
+                        log.append("|".join([cname,gname,"소재삭제",hl0,st0,"삭제"]))
             for tag,hl,ds in newads:
                 if (hl,ds) in pairs: skip += 1; print(f"  [멱등] {gname} 소재{tag}"); continue
                 if not APPLY: made_ad += 1; print(f"  [소재{tag}] {cname}>{gname}: 「{hl}」/「{ds}」"); continue
@@ -466,8 +523,8 @@ def main():
                 else: fail += 1; print(f"  ❌ {gname} 홍보문구 {e2}")
     if VERIFY:
         print("===VERIFY_CSV_END==="); return
-    print(f"\n{'예정' if not APPLY else '완료'} — 소재 {made_ad}"
-          f"{f' · 확장교체 {made_ext}(삭제 {del_ext})' if ADD_EXT else ''} · 멱등 {skip} · 실패 {fail}")
+    print(f"\n{'예정' if not APPLY else '완료'} — 소재 추가 {made_ad}(자리확보 삭제 {del_ad})"
+          f"{f' · 확장교체 {made_ext}' if ADD_EXT else ''} · 멱등 {skip} · 실패 {fail}")
     if not APPLY:
         print("드라이런 완료 — apply=yes 로 적용."); return
     print("\n===CSV_START===\n캠페인|그룹|항목|제목/문구|설명|상태")
