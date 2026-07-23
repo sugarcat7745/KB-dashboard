@@ -1,0 +1,38 @@
+name: naver-diag
+
+# 특정 캠페인 급락 원인 진단(예산·일별·시간대·그룹상태) — 읽기전용.
+on:
+  workflow_dispatch:
+    inputs:
+      camp_filter:
+        description: "대상 캠페인(콤마)"
+        required: false
+        default: "보이스피싱_1117,외국인/출입국_1117,성범죄_신규"
+      d1:
+        description: "비교 이전일"
+        required: false
+        default: "2026-07-21"
+      d2:
+        description: "비교 대상일"
+        required: false
+        default: "2026-07-22"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 급락 원인 진단
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          CAMP_FILTER: ${{ inputs.camp_filter }}
+          D1:          ${{ inputs.d1 }}
+          D2:          ${{ inputs.d2 }}
+        run: python naver_diag.py
