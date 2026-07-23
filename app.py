@@ -82,7 +82,7 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 [data-testid="stHorizontalBlock"] {{ gap:12px !important; }}
 /* 헤더 */
 .kb-top {{ display:flex; justify-content:space-between; align-items:center;
-  padding:14px 2px 16px; border-bottom:1px solid {LINE}; margin-bottom:14px; }}
+  padding:8px 2px 4px; margin-bottom:0; }}
 .kb-date {{ text-align:right; }}
 .kb-date .d {{ font-size:15px; font-weight:700; color:{TXT}; }}
 .kb-date .w {{ font-size:12px; color:{FAINT}; margin-top:2px; font-weight:500; }}
@@ -7309,7 +7309,7 @@ def main():
     if st.session_state.pop("show_splash", False):
         render_welcome_splash(user)
         st.rerun()
-    logo_html = brand_html("md")
+    logo_html = brand_html("lg")   # 로고만(옆 부제 없이) · 크게(44px)
     today = datetime.now().strftime("%Y. %m. %d")
     # 수집 신선도 배지 (ad_budget 최신 수집시각) — '실시간'이 아니라 실제 경과시간을 정직하게 표기
     bdf = load_budget()
