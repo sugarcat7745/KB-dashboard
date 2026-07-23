@@ -156,18 +156,16 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .li-right {{ text-align:right; white-space:nowrap; flex:none; }}
 .li-val {{ font-size:14px; font-weight:700; color:{TXT}; font-variant-numeric:tabular-nums; }}
 .li-tag {{ display:inline-block; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:7px; }}
-/* 타이포 위계 — 대제목/소제목을 마커·크기·구분선으로 확실히 구분 */
-/* 대제목: 크고 굵게 + 아래 구분선(새 섹션 시작). 파란 점 없음 */
-.big-section {{ font-size:19px; font-weight:800; color:{TXT}; letter-spacing:-.01em;
-    margin:38px 0 16px; padding-bottom:11px; border-bottom:1.5px solid {LINE};
-    display:flex; align-items:center; gap:8px; }}
+/* 타이포 위계 — 대제목=깔끔한 굵은 글씨(마커·밑줄 없음, 바로 아래 내용이 떠 보이지 않게),
+   소제목=작고 왼쪽 파란 세로 막대. 크기·굵기·색으로 구분 */
+.big-section {{ font-size:18px; font-weight:800; color:{TXT}; letter-spacing:-.01em;
+    margin:34px 0 12px; display:flex; align-items:center; gap:8px; }}
 .big-section i {{ display:none; }}
 .big-section::before {{ display:none; }}
-/* 소제목: 작게 + 왼쪽 파란 세로 막대(대제목과 확실히 구분) */
 .sec-title {{ font-size:14px; font-weight:700; color:{MUTED}; margin:22px 0 10px;
     display:flex; align-items:center; gap:9px; }}
 .sec-title i {{ display:none; }}
-.sec-title::before {{ content:""; width:3px; height:15px; border-radius:2px; background:{GOLD}; flex:none; }}
+.sec-title::before {{ content:""; width:3px; height:14px; border-radius:2px; background:{GOLD}; flex:none; }}
 .placeholder i {{ font-size:40px; color:{GOLD}; margin-bottom:16px; }}
 /* 탭 — 밑줄 스타일(단촐) */
 .stTabs [data-baseweb="tab-list"] {{ gap:2px; border-bottom:1px solid {LINE}; flex-wrap:wrap; }}
@@ -5572,8 +5570,8 @@ def _qna_auto_tab(corpus):
         # ── 하단: 선택한 것만 일괄 게시 / 건너뛰기(게시 안 하고 대기열에서 제거) ──
         st.divider()
         sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"autochk_{str(r['id'])}")]
-        bcol1, bcol2 = st.columns([1, 1], gap="small")
-        if bcol2.button(f"⏭ 선택 건너뛰기 ({len(sel)}건)", key="auto_bulk_skip",
+        bcol1, bcol2, _bsp = st.columns([1.4, 1.4, 2], gap="small")
+        if bcol2.button(f"선택 건너뛰기 ({len(sel)}건)", key="auto_bulk_skip",
                         disabled=not sel,
                         help="체크한 원고를 게시하지 않고 검수 대기열에서 제거합니다(홈페이지엔 안 올라감)."):
             for did, _ in sel:
@@ -6019,19 +6017,36 @@ def success_cat_counts():
     return pd.Series(dtype=int)
 
 
-@st.cache_data(ttl=180)
-def success_recent_posts(n=60):
-    """게시완료 성공사례 목록(마커→원본 draft join). 실패 시 None."""
+@st.cache_data(ttl=300)
+def success_board_posts(pages=6):
+    """홈페이지 성공사례 게시판(bo_table=success) 실제 글을 스크랩 → [{wr_id,title}] 최신순.
+    (대시보드에서 게시한 것뿐 아니라 수기로 올린 글까지 전부 보이게)."""
+    import requests
+    from bs4 import BeautifulSoup
     try:
-        df = bq(f"""SELECT CAST(DATE(p.ts,'Asia/Seoul') AS STRING) dt, d.cat cat_k, d.title title_k, p.posted wr_id
-              FROM `{BQ_PROJECT}.{BQ_DATASET}.success_draft` p
-              JOIN `{BQ_PROJECT}.{BQ_DATASET}.success_draft` d ON p.id=d.id AND d.payload!=''
-              WHERE p.posted!='' AND p.posted!='SKIP' ORDER BY p.ts DESC LIMIT {int(n)}""")
-        if df is not None and not df.empty:
-            df = df.rename(columns={"dt": "날짜", "cat_k": "분류", "title_k": "제목"})
-        return df
+        s = requests.Session()
+        s.headers.update({"User-Agent": "Mozilla/5.0 Chrome/125"})
+        out, seen = [], set()
+        for p in range(1, int(pages) + 1):
+            r = s.get(f"{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&page={p}", timeout=20)
+            soup = BeautifulSoup(r.text, "html.parser")
+            for a in soup.select('a[href*="wr_id="]'):
+                m = re.search(r"wr_id=(\d+)", a.get("href", ""))
+                if not m:
+                    continue
+                wid = m.group(1)
+                title = a.get_text(" ", strip=True)
+                if not title or wid in seen or len(title) < 6:
+                    continue
+                if "|" not in title and "사례" not in title:   # 제목 형식(‘… | … 사례’)만
+                    continue
+                seen.add(wid)
+                out.append({"wr_id": wid, "title": title})
+        # wr_id 큰 순(최신)
+        out.sort(key=lambda x: int(x["wr_id"]), reverse=True)
+        return out
     except Exception:
-        return None
+        return []
 
 
 def success_delete_post(wr_id):
@@ -6095,24 +6110,21 @@ def _success_stats_tab():
 
 
 def _success_list_tab():
-    """게시글 목록 탭 — 게시완료 성공사례 목록 + (확인 후) 삭제."""
+    """게시글 목록 탭 — 홈페이지 성공사례 게시판 실제 글 목록 + (확인 후) 일괄 삭제."""
     st.markdown('<div class="big-section">게시글 목록</div>', unsafe_allow_html=True)
     cid, _ = _qna_creds()
     if not cid:
         st.info("삭제하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
-    rp = success_recent_posts()
-    if rp is None or rp.empty:
-        st.info("게시된 성공사례가 없습니다.")
-        return
-    fcat = st.selectbox("분야", ["전체"] + list(QNA_CATS), key="succ_list_cat")
-    view = rp if fcat == "전체" else rp[rp["분류"].astype(str) == fcat]
+    posts = success_board_posts()      # 홈페이지 성공사례 게시판 실제 글(수기 게시분 포함)
     deleted = st.session_state.setdefault("succ_deleted", set())
-    view = view[~view["wr_id"].astype(str).isin(deleted)]
-    rows = list(view.iterrows())
-    sel = [str(r["wr_id"]) for _, r in rows if st.session_state.get(f"slsel_{str(r['wr_id'])}")]
+    posts = [p for p in (posts or []) if p["wr_id"] not in deleted]
+    if not posts:
+        st.info("게시판에서 성공사례 글을 불러오지 못했습니다(글이 없거나 게시판 접근 오류).")
+        return
+    sel = [p["wr_id"] for p in posts if st.session_state.get(f"slsel_{p['wr_id']}")]
     # ── 선택 글 일괄 삭제(목록 위 — 길어도 스크롤 없이) ──
     dc1, dc2 = st.columns([3, 1.4], vertical_alignment="center")
-    dc1.caption(f"{len(view)}건 · 체크한 글만 삭제됩니다 (되돌릴 수 없음)")
+    dc1.caption(f"{len(posts)}건 · 체크한 글만 삭제됩니다 (되돌릴 수 없음)")
     if dc2.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="succ_bulk_del",
                   disabled=not (cid and sel), use_container_width=True):
         prog = st.progress(0.0)
@@ -6125,18 +6137,18 @@ def _success_list_tab():
                 fail += 1
             prog.progress((i + 1) / len(sel))
         try:
-            success_recent_posts.clear()
+            success_board_posts.clear()
         except Exception:
             pass
         st.success(f"{done}건 삭제 완료" + (f" · 실패 {fail}" if fail else ""))
         st.rerun()
-    for _, r in rows:
-        wid, title, cat, dt = str(r["wr_id"]), str(r["제목"]), str(r["분류"]), str(r["날짜"])
+    for p in posts:
+        wid, title = p["wr_id"], p["title"]
         c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
         c0.checkbox("선택", key=f"slsel_{wid}", label_visibility="collapsed")
-        c1.markdown(f"<span style='font-size:13px'>{dt} · [{cat}] "
+        c1.markdown(f"<span style='font-size:13px'>"
                     f"<a href='{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={wid}' "
-                    f"style='color:{GOLD}' target='_blank'>{title[:56]}</a></span>",
+                    f"style='color:{GOLD}' target='_blank'>{title[:70]}</a></span>",
                     unsafe_allow_html=True)
 
 
@@ -6208,7 +6220,7 @@ def _success_gen_tab(corpus):
 
 def _success_review_tab(corpus):
     """성공사례 검수 대기열 — 체크 후 하단 일괄 게시/건너뛰기."""
-    st.markdown('<div class="big-section">검수 대기열 (승인 후 게시)</div>', unsafe_allow_html=True)
+    st.markdown('<div class="big-section">자동 생성 · 검수 대기열</div>', unsafe_allow_html=True)
     cid, _ = _qna_creds()
     if not cid:
         st.info("게시하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
@@ -6265,8 +6277,8 @@ def _success_review_tab(corpus):
                 st.rerun()
     st.divider()
     sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"succhk_{str(r['id'])}")]
-    b1, b2 = st.columns([1, 1], gap="small")
-    if b2.button(f"⏭ 선택 건너뛰기 ({len(sel)}건)", key="succ_bulk_skip", disabled=not sel):
+    b1, b2, _bsp = st.columns([1.4, 1.4, 2], gap="small")
+    if b2.button(f"선택 건너뛰기 ({len(sel)}건)", key="succ_bulk_skip", disabled=not sel):
         for did, _ in sel:
             success_skip(did)
         st.success(f"{len(sel)}건 건너뜀")
