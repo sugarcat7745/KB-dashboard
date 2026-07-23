@@ -1,0 +1,33 @@
+name: naver-kw-coverage
+
+# 카테고리별 필수 키워드 커버리지(도메인 기준, 검색량 무관) — 읽기전용.
+on:
+  workflow_dispatch:
+    inputs:
+      only_cat:
+        description: "특정 카테고리만 (콤마, 비우면 전체). 예: 성범죄"
+        required: false
+        default: ""
+      only_on:
+        description: "켜진 것만? (no=등록 전체 권장)"
+        required: false
+        default: "no"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 필수키워드 커버리지
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          ONLY_CAT: ${{ inputs.only_cat }}
+          ONLY_ON:  ${{ inputs.only_on == 'yes' && '1' || '0' }}
+        run: python naver_kw_coverage.py
