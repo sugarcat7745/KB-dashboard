@@ -25,7 +25,8 @@ import pandas as pd
 PROJECT, DATASET = "kb-dashboard-499704", "kb_ads"
 BASE = "https://lawl-crime.co.kr/crime"
 UA = {"User-Agent": "Mozilla/5.0 (compatible; KB-corpus/1.0)"}
-DELAY = float(os.environ.get("CORPUS_DELAY", "0.12"))  # 요청 간 폴라이트 딜레이(초)
+DELAY = float(os.environ.get("CORPUS_DELAY", "0.12"))   # 목록 페이지 순회 간 폴라이트 딜레이(초)
+WORKERS = int(os.environ.get("CORPUS_WORKERS", "12"))   # 상세 병렬 수집 워커 수(폴라이트하게 제한)
 
 # ── 카테고리 추론(대시보드 QNA_CATS와 정렬). 형사 전문 사이트라 기본=형사 ──
 QNA_CATS = ["형사", "성범죄", "학교폭력", "음주운전·교통사고", "민사·행정", "이혼·가사",
@@ -75,7 +76,7 @@ def make_session():
     retry = Retry(total=4, backoff_factor=0.5,
                   status_forcelist=[429, 500, 502, 503, 504],
                   allowed_methods=["GET"])
-    ad = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    ad = HTTPAdapter(max_retries=retry, pool_connections=WORKERS + 4, pool_maxsize=WORKERS + 4)
     s.mount("https://", ad); s.mount("http://", ad)
     return s
 
@@ -149,24 +150,32 @@ def parse_qna(idx, html):
 
 
 def scrape(sess, board, view, parser, cap=None):
+    """상세 페이지를 스레드풀로 병렬 수집(18k건이라 순차는 수시간 → 동시 요청으로 단축).
+    세션은 스레드 세이프(pool_maxsize 확대), 폴라이트하게 워커 수는 제한."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     idxs = list_idxs(sess, board, view, cap=cap)
-    print(f"{board}: 상세 {len(idxs)}건 파싱 시작", flush=True)
-    rows, fail = [], 0
-    for n, idx in enumerate(idxs, 1):
+    total = len(idxs)
+    print(f"{board}: 상세 {total}건 파싱 시작(병렬 {WORKERS}워커)", flush=True)
+    rows, fail, done = [], 0, 0
+
+    def _one(idx):
         try:
             html = sess.get(f"{BASE}/{view}.html?idx={idx}", timeout=25).text
-            rec = parser(idx, html)
+            return parser(idx, html)
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=WORKERS) as ex:
+        futs = {ex.submit(_one, idx): idx for idx in idxs}
+        for fut in as_completed(futs):
+            done += 1
+            rec = fut.result()
             if rec:
                 rows.append(rec)
             else:
                 fail += 1
-        except Exception as e:
-            fail += 1
-            if fail <= 20:
-                print(f"  [warn] {view} idx={idx} 실패: {e}", flush=True)
-        if n % 500 == 0 or n == len(idxs):
-            print(f"  {board} 상세 {n}/{len(idxs)} · 성공 {len(rows)} · 스킵 {fail}", flush=True)
-        time.sleep(DELAY)
+            if done % 1000 == 0 or done == total:
+                print(f"  {board} 상세 {done}/{total} · 성공 {len(rows)} · 스킵 {fail}", flush=True)
     return rows
 
 
