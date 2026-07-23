@@ -16,6 +16,10 @@ on:
         description: "출력 상한"
         required: false
         default: "300"
+      probe:
+        description: "프로브 모드(리포트타입/포맷 탐색)? (0/1)"
+        required: false
+        default: "0"
 
 jobs:
   run:
@@ -35,4 +39,5 @@ jobs:
           DAYS:      ${{ inputs.days }}
           REPORT_TP: ${{ inputs.report_tp }}
           TOPN:      ${{ inputs.topn }}
+          PROBE:     ${{ inputs.probe }}
         run: python naver_query_report.py
