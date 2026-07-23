@@ -1,0 +1,38 @@
+name: naver-query-report
+
+# 검색어 보고서(확장 검색어) 조회 — 제외키워드 근거(읽기전용).
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "최근 며칠"
+        required: false
+        default: "3"
+      report_tp:
+        description: "리포트 타입 (기본 EXP_KEYWORD)"
+        required: false
+        default: "EXP_KEYWORD"
+      topn:
+        description: "출력 상한"
+        required: false
+        default: "300"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 검색어 보고서
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          DAYS:      ${{ inputs.days }}
+          REPORT_TP: ${{ inputs.report_tp }}
+          TOPN:      ${{ inputs.topn }}
+        run: python naver_query_report.py
