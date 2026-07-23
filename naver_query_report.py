@@ -179,32 +179,28 @@ def main():
             sample_printed = True
         for ln in lines:
             f = ln.split("\t")
-            n_rows += 1
-            # 동적 컬럼 감지: 검색어=한글 포함 & ID접두 아님 / adgroup=grp-/ 숫자=지표
-            term = None; gid = None
-            nums = []
-            for x in f:
-                xs = x.strip()
-                if xs.startswith("grp-"):
-                    gid = xs
-                elif HANGUL.search(xs) and not xs.startswith(("nkw-", "cmp-", "grp-", "nad-", "bsn-")):
-                    if term is None or len(xs) > len(term):
-                        term = xs
-                elif re.fullmatch(r"\d+(\.\d+)?", xs):
-                    nums.append(float(xs))
-            if term is None:
+            if len(f) < 9:
                 continue
-            # 지표 추정: 큰 값=비용, 그 외 정수들 중 = 노출/클릭 (보수적으로 max/min)
-            cost = max(nums) if nums else 0.0
-            imp = 0; clk = 0
-            ints = [int(n) for n in nums if n == int(n)]
-            if ints:
-                imp = max(ints)
-                small = [n for n in ints if n != imp]
-                clk = max(small) if small else 0
+            n_rows += 1
+            # EXPKEYWORD 고정 컬럼: 0=일자 1=고객 2=캠페인 3=광고그룹 4=검색어
+            #   5=키워드/매체코드(무시) 6=PC/MO 7·8=클릭·노출(노출≥클릭) 9~=비용/전환(대부분0)
+            gid = f[3].strip()
+            term = f[4].strip()
+            if not term:
+                continue
+            def _i(x):
+                try:
+                    return int(float(x))
+                except Exception:
+                    return 0
+            v7, v8 = _i(f[7]), _i(f[8])
+            imp = max(v7, v8); clk = min(v7, v8)
+            cost = 0
+            for j in range(9, len(f)):
+                cost += _i(f[j])
             a = agg[term]
             a[0] += imp; a[1] += clk; a[2] += cost
-            if gid:
+            if gid.startswith("grp-"):
                 a[3].add(gid)
 
     print(f"수집 행 {n_rows} · 고유 검색어 {len(agg)}\n")
