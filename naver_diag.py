@@ -46,7 +46,8 @@ def _on(o):
 
 
 def stat_day(cid, day, breakdown=None):
-    p = {"ids": cid, "fields": json.dumps(["impCnt", "clkCnt", "salesAmt"]),
+    fields = ["impCnt", "clkCnt", "salesAmt", "avgRnk", "ctr", "cpc"]
+    p = {"ids": cid, "fields": json.dumps(fields),
          "timeRange": json.dumps({"since": day, "until": day})}
     if breakdown:
         p["breakdown"] = breakdown
@@ -78,8 +79,10 @@ def main():
                 r = rows[0]
                 imp = int(r.get("impCnt", 0) or 0); clk = int(r.get("clkCnt", 0) or 0)
                 cost = int(r.get("salesAmt", 0) or 0)
+                rnk = float(r.get("avgRnk", 0) or 0); ctr = float(r.get("ctr", 0) or 0)
+                cpc = int(r.get("cpc", 0) or 0)
                 capped = "  ⚠️예산소진가능" if use_bud and cost >= bud * 0.95 and bud else ""
-                print(f"    {day}: 노출 {imp:,} · 클릭 {clk:,} · 비용 {cost:,}{capped}")
+                print(f"    {day}: 노출 {imp:,} · 클릭 {clk:,} · 비용 {cost:,} · 평균순위 {rnk:.1f} · CTR {ctr:.2f}% · CPC {cpc:,}{capped}")
             else:
                 print(f"    {day}: 데이터 없음")
 
