@@ -4180,7 +4180,21 @@ def qna_law_ref():
             })
         if not out:
             raise RuntimeError("행 없음")
-        return out
+        # 번들(qna_laws.json, law.go.kr 확충본)을 기반으로 깔고 시트 행을 위에 더한다(중복 제거).
+        # → 시트가 있어도 번들의 폭넓은 검증 조문이 항상 반영됨(대시보드·autopost 일관).
+        merged = {}
+        for src in (qna_laws(), out):
+            for cat, items in src.items():
+                if not isinstance(items, list):
+                    continue
+                seen = {(str(x.get("law", "")).replace(" ", ""), str(x.get("article", "")).replace(" ", ""))
+                        for x in merged.get(cat, [])}
+                for it in items:
+                    k = (str(it.get("law", "")).replace(" ", ""), str(it.get("article", "")).replace(" ", ""))
+                    if k[0] and k[1] and k not in seen:
+                        seen.add(k)
+                        merged.setdefault(cat, []).append(it)
+        return merged
     except Exception:
         return qna_laws()   # 시트 미설정·장애 시 번들 JSON로 안전 폴백
 
