@@ -5695,22 +5695,12 @@ def _qna_list_tab(corpus):
     deleted = st.session_state.setdefault("qna_deleted", set())
     view = view[~view["wr_id"].astype(str).isin(deleted)]
     rows = list(view.head(200).iterrows())
-    st.caption(f"{len(view)}건 (최대 200건 표시) · 체크한 글을 아래 버튼으로 한꺼번에 삭제")
-    for _, r in rows:
-        wid, title, cat, issue = str(r["wr_id"]), str(r["title"]), str(r["cat"]), str(r["issue"])
-        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
-        c0.checkbox("선택", key=f"lsel_{wid}", label_visibility="collapsed")
-        badge = f" <span style='color:#E5484D;font-size:12px'>{issue}</span>" if issue else ""
-        c1.markdown(f"<span style='font-size:13px'>[{cat}] "
-                    f"<a href='{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wid}' "
-                    f"style='color:{GOLD}' target='_blank'>{title[:60]}</a>{badge}</span>",
-                    unsafe_allow_html=True)
-    # ── 하단: 선택 글 일괄 삭제 ──
-    st.divider()
     sel = [str(r["wr_id"]) for _, r in rows if st.session_state.get(f"lsel_{str(r['wr_id'])}")]
-    st.caption("삭제는 되돌릴 수 없습니다. 체크한 글만 삭제됩니다.")
-    if st.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="qna_bulk_del",
-                 disabled=not (cid and sel)):
+    # ── 선택 글 일괄 삭제(목록 위 — 길어도 스크롤 없이) ──
+    dc1, dc2 = st.columns([3, 1.4], vertical_alignment="center")
+    dc1.caption(f"{len(view)}건 (최대 200건 표시) · 체크한 글만 삭제됩니다 (되돌릴 수 없음)")
+    if dc2.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="qna_bulk_del",
+                  disabled=not (cid and sel), use_container_width=True):
         prog = st.progress(0.0)
         done = fail = 0
         for i, wid in enumerate(sel):
@@ -5726,6 +5716,15 @@ def _qna_list_tab(corpus):
             pass
         st.success(f"{done}건 삭제 완료" + (f" · 실패 {fail}" if fail else ""))
         st.rerun()
+    for _, r in rows:
+        wid, title, cat, issue = str(r["wr_id"]), str(r["title"]), str(r["cat"]), str(r["issue"])
+        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
+        c0.checkbox("선택", key=f"lsel_{wid}", label_visibility="collapsed")
+        badge = f" <span style='color:#E5484D;font-size:12px'>{issue}</span>" if issue else ""
+        c1.markdown(f"<span style='font-size:13px'>[{cat}] "
+                    f"<a href='{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wid}' "
+                    f"style='color:{GOLD}' target='_blank'>{title[:60]}</a>{badge}</span>",
+                    unsafe_allow_html=True)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -6110,20 +6109,12 @@ def _success_list_tab():
     deleted = st.session_state.setdefault("succ_deleted", set())
     view = view[~view["wr_id"].astype(str).isin(deleted)]
     rows = list(view.iterrows())
-    st.caption(f"{len(view)}건 · 체크한 글을 아래 버튼으로 한꺼번에 삭제")
-    for _, r in rows:
-        wid, title, cat, dt = str(r["wr_id"]), str(r["제목"]), str(r["분류"]), str(r["날짜"])
-        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
-        c0.checkbox("선택", key=f"slsel_{wid}", label_visibility="collapsed")
-        c1.markdown(f"<span style='font-size:13px'>{dt} · [{cat}] "
-                    f"<a href='{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={wid}' "
-                    f"style='color:{GOLD}' target='_blank'>{title[:56]}</a></span>",
-                    unsafe_allow_html=True)
-    st.divider()
     sel = [str(r["wr_id"]) for _, r in rows if st.session_state.get(f"slsel_{str(r['wr_id'])}")]
-    st.caption("삭제는 되돌릴 수 없습니다. 체크한 글만 삭제됩니다.")
-    if st.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="succ_bulk_del",
-                 disabled=not (cid and sel)):
+    # ── 선택 글 일괄 삭제(목록 위 — 길어도 스크롤 없이) ──
+    dc1, dc2 = st.columns([3, 1.4], vertical_alignment="center")
+    dc1.caption(f"{len(view)}건 · 체크한 글만 삭제됩니다 (되돌릴 수 없음)")
+    if dc2.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="succ_bulk_del",
+                  disabled=not (cid and sel), use_container_width=True):
         prog = st.progress(0.0)
         done = fail = 0
         for i, wid in enumerate(sel):
@@ -6139,6 +6130,14 @@ def _success_list_tab():
             pass
         st.success(f"{done}건 삭제 완료" + (f" · 실패 {fail}" if fail else ""))
         st.rerun()
+    for _, r in rows:
+        wid, title, cat, dt = str(r["wr_id"]), str(r["제목"]), str(r["분류"]), str(r["날짜"])
+        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
+        c0.checkbox("선택", key=f"slsel_{wid}", label_visibility="collapsed")
+        c1.markdown(f"<span style='font-size:13px'>{dt} · [{cat}] "
+                    f"<a href='{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={wid}' "
+                    f"style='color:{GOLD}' target='_blank'>{title[:56]}</a></span>",
+                    unsafe_allow_html=True)
 
 
 def render_success():
