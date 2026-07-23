@@ -94,10 +94,10 @@ def pick_group(kw, groups, marker):
             best_sc = sc; best = g
     if best is not None:
         return best, best_sc
-    cands = [g for g in groups if marker and marker in g["name"]]
+    cands = sorted([g for g in groups if marker and marker in g["name"]], key=lambda x: str(x["name"]))
     if cands:
         return cands[0], 0
-    return sorted(groups, key=lambda x: x["name"])[0], 0
+    return sorted(groups, key=lambda x: str(x["name"]))[0], 0
 
 
 def main():
@@ -121,15 +121,24 @@ def main():
                 continue
             cat_groups.setdefault(cat, []).append({"name": g.get("name"), "id": g.get("nccAdgroupId")})
 
-    made = skip = fail = 0
+    made = skip = fail = excl = 0
     plan = []  # (cat, kw, group)
+    VICTIM = ("피해", "당함", "고소하고", "고소하려")
     for cat, kws in KW.items():
         groups = cat_groups.get(cat, [])
         if not groups:
             print(f"  [그룹없음] {cat} — 건너뜀({len(kws)}개)"); continue
         marker = DEFAULT_MARKER.get(cat, "")
         for kw in kws:
-            g, sc = pick_group(kw, groups, marker)
+            if "무료" in kw:          # 무료상담 미운영 — 등록 제외
+                excl += 1; print(f"  [제외] {cat} · {kw} (무료 포함)"); continue
+            gpool = groups
+            # 성범죄: 가해자(방어) 의도가 기본 → '여자(피해자)' 그룹 제외(피해 키워드만 예외)
+            if cat == "성범죄" and not any(v in kw for v in VICTIM):
+                filt = [g for g in groups if "여자" not in str(g["name"]) and "피해" not in str(g["name"])]
+                if filt:
+                    gpool = filt
+            g, sc = pick_group(kw, gpool, marker)
             plan.append((cat, kw, g["name"], g["id"], sc))
 
     # 그룹별로 묶어서 등록(있으면 스킵)
@@ -167,7 +176,7 @@ def main():
                 for cat, kw, sc in batch:
                     fail += 1; print(f"{cat}|{kw}|{gname}|{sc}|실패:{e}")
     print("===ADDKW_CSV_END===")
-    print(f"\n{'예정' if not APPLY else '완료'} — 등록 {made} · 멱등 {skip} · 실패 {fail}")
+    print(f"\n{'예정' if not APPLY else '완료'} — 등록 {made} · 멱등 {skip} · 실패 {fail} · 무료제외 {excl}")
     if not APPLY:
         print("드라이런 — apply=yes 로 실제 등록.")
 
