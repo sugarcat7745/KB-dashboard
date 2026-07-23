@@ -875,14 +875,10 @@ def render_landing_status():
         except Exception:
             today = ""
         right_txt = f"{today} 정상작동 중" if fails == 0 else f"{today} 점검 필요 {fails}곳"
-        st.markdown(
-            f'<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;'
-            f'font-size:14px;font-weight:600;color:{TXT};padding:2px 2px 4px;">'
-            f'<span>{dot} 광고 랜딩 {word} ({total_ok}/{total})</span>'
-            f'<span style="color:{MUTED};font-weight:500;font-size:12.5px;white-space:nowrap;">{right_txt}</span>'
-            f'</div>', unsafe_allow_html=True)
-
-        with st.expander("자세히 보기", expanded=False):
+        # 상태 요약을 접이식(expander) 라벨에 넣어 한 줄로 — 탭 위 공간 절약. 색은 :green/:red 마크다운.
+        _clr = "green" if fails == 0 else "red"
+        _label = f":{_clr}[● 광고 랜딩 {word} ({total_ok}/{total})]  ·  {right_txt}"
+        with st.expander(_label, expanded=False):
             # ── ① 문제 우선 ──
             if fails > 0:
                 bad = df[~df["ok"]].copy()
@@ -5542,7 +5538,9 @@ def _qna_auto_tab(corpus):
             for d in dids:
                 st.session_state[f"autochk_{d}"] = False
             st.rerun()
-        h3.markdown(f"**검수 대기 {len(rows)}건** · 체크한 것만 게시됩니다")
+        h3.markdown(f'<div style="font-size:13px;color:{MUTED};font-weight:600;">검수 대기 '
+                    f'<b style="color:{TXT};">{len(rows)}건</b> · 체크한 것만 게시됩니다</div>',
+                    unsafe_allow_html=True)
         for _, r in rows:
             did, cat, title = str(r["id"]), str(r["cat"]), str(r["title"])
             try:
@@ -6430,92 +6428,112 @@ def _success_review_tab(corpus):
     cid, _ = _qna_creds()
     if not cid:
         st.info("게시하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
-    if not os.path.isdir(SUCCESS_IMG_DIR):
-        st.caption("결과 도장 이미지는 아직 없음 → 지금은 **본문만** 게시됩니다. "
-                   "업체 이미지가 `success_img/결과명.png`로 들어오면 자동으로 첨부됩니다.")
     pend = success_pending()
     if pend is None:
         st.error("대기열 조회에 실패했습니다(BigQuery 오류). 잠시 후 새로고침하세요.")
-        return
-    if pend.empty:
-        st.success("검수 대기 중인 성공사례가 없습니다. '원고 생성'에서 만들어 주세요.")
-        return
-    rows = list(pend.iterrows())
-    dids = [str(r["id"]) for _, r in rows]
-    for d in dids:
-        st.session_state.setdefault(f"succhk_{d}", True)
-    h1, h2, h3 = st.columns([1, 1, 5], gap="small", vertical_alignment="center")
-    if h1.button("전체 선택", key="succ_all"):
+    elif pend.empty:
+        st.success("검수 대기 중인 자동 생성 성공사례가 없습니다.")
+    else:
+        rows = list(pend.iterrows())
+        dids = [str(r["id"]) for _, r in rows]
         for d in dids:
-            st.session_state[f"succhk_{d}"] = True
-        st.rerun()
-    if h2.button("전체 해제", key="succ_none"):
-        for d in dids:
-            st.session_state[f"succhk_{d}"] = False
-        st.rerun()
-    h3.markdown(f"**검수 대기 {len(rows)}건** · 체크한 것만 게시/건너뛰기 됩니다")
-    for _, r in rows:
-        did, cat, title = str(r["id"]), str(r["cat"]), str(r["title"])
-        try:
-            item = json.loads(r["payload"])
-        except Exception:
-            continue
-        result = item.get("result", "")
-        has_img = "첨부" if success_image_path(result) else "없음(본문만)"
-        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
-        c0.checkbox("선택", key=f"succhk_{did}", label_visibility="collapsed")
-        with c1.expander(f"[{cat}·{result}]  {title}"):
-            st.caption(f"결과 도장: {result} · {has_img}")
-            laws = item.get("laws", [])
-            vr = qna_laws_for(cat)
-            need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
-            if need:
-                st.warning("미검증 조문: " + ", ".join(map(str, need)) + " — 확인 권장")
-            body = success_detail_html(item, corpus)
-            components.html(
-                f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
-                f"padding:14px;max-height:460px;overflow:auto'>"
-                f"<div style='color:{GOLD};font-weight:700'>[{cat}] · 결과: {result}</div>"
-                f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>"
-                f"{body}</div>", height=480, scrolling=True)
-            if st.button("이 원고 삭제(대기열에서 제거)", key=f"succ_skip_{did}"):
-                success_skip(did)
-                st.rerun()
-    st.divider()
-    sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"succhk_{str(r['id'])}")]
-    b1, b2, _bsp = st.columns([1.4, 1.4, 2], gap="small")
-    if b2.button(f"선택 건너뛰기 ({len(sel)}건)", key="succ_bulk_skip", disabled=not sel):
-        for did, _ in sel:
-            success_skip(did)
-        st.success(f"{len(sel)}건 건너뜀")
-        st.rerun()
-    if b1.button(f"선택 게시글 업로드 ({len(sel)}건)", key="succ_bulk_up",
-                 type="primary", disabled=not (cid and sel)):
-        prog = st.progress(0.0)
-        done = fail = 0
-        for k, (did, r) in enumerate(sel):
+            st.session_state.setdefault(f"succhk_{d}", True)
+        h1, h2, h3 = st.columns([1, 1, 5], gap="small", vertical_alignment="center")
+        if h1.button("전체 선택", key="succ_all"):
+            for d in dids:
+                st.session_state[f"succhk_{d}"] = True
+            st.rerun()
+        if h2.button("전체 해제", key="succ_none"):
+            for d in dids:
+                st.session_state[f"succhk_{d}"] = False
+            st.rerun()
+        h3.markdown(f'<div style="font-size:13px;color:{MUTED};font-weight:600;">검수 대기 '
+                    f'<b style="color:{TXT};">{len(rows)}건</b> · 체크한 것만 게시/건너뛰기 됩니다</div>',
+                    unsafe_allow_html=True)
+        for _, r in rows:
+            did, cat, title = str(r["id"]), str(r["cat"]), str(r["title"])
             try:
                 item = json.loads(r["payload"])
-                title = str(r["title"])
-                cat = str(r["cat"])
-                result = item.get("result", "")
-                detail = success_detail_html(item, corpus)
-                summary = qna_summary_html(item.get("summary_lines", []))
-                wid = success_upload(title, cat, detail, summary, result,
-                                     image_path=success_image_path(result))
-                success_mark_posted(did, wid)
+            except Exception:
+                continue
+            result = item.get("result", "")
+            has_img = "결과 도장 첨부" if success_image_path(result) else "본문만(이미지 없음)"
+            c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
+            c0.checkbox("선택", key=f"succhk_{did}", label_visibility="collapsed")
+            with c1.expander(f"[{cat}·{result}]  {title}"):
+                st.caption(f"결과: {result} · {has_img}")
+                laws = item.get("laws", [])
+                vr = qna_laws_for(cat)
+                need = [l for l in laws if str(l).lstrip().startswith("★") or not qna_law_match(l, vr)]
+                if need:
+                    st.warning("미검증 조문: " + ", ".join(map(str, need)) + " — 확인 권장")
+                body = success_detail_html(item, corpus)
+                components.html(
+                    f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
+                    f"padding:14px;max-height:460px;overflow:auto'>"
+                    f"<div style='color:{GOLD};font-weight:700'>[{cat}] · 결과: {result}</div>"
+                    f"<h3 style='margin:.3rem 0'>{title}</h3><hr style='border-color:{LINE}'>"
+                    f"{body}</div>", height=480, scrolling=True)
+                if st.button("이 원고 삭제(대기열에서 제거)", key=f"succ_skip_{did}"):
+                    success_skip(did)
+                    st.rerun()
+        st.divider()
+        sel = [(str(r["id"]), r) for _, r in rows if st.session_state.get(f"succhk_{str(r['id'])}")]
+        b1, b2, _bsp = st.columns([1.4, 1.4, 2], gap="small")
+        if b2.button(f"선택 건너뛰기 ({len(sel)}건)", key="succ_bulk_skip", disabled=not sel):
+            for did, _ in sel:
+                success_skip(did)
+            st.success(f"{len(sel)}건 건너뜀")
+            st.rerun()
+        if b1.button(f"선택 게시글 업로드 ({len(sel)}건)", key="succ_bulk_up",
+                     type="primary", disabled=not (cid and sel)):
+            prog = st.progress(0.0)
+            done = fail = 0
+            for k, (did, r) in enumerate(sel):
                 try:
-                    log_change(st.session_state.get("auth_user", "admin"), "성공사례",
-                               f"게시: {title}", f"wr_id={wid} 분류={cat} 결과={result}", "생성·검수 후 게시")
-                except Exception:
-                    pass
-                done += 1
-            except Exception as e:
-                fail += 1
-                st.error(f"[{str(r['title'])[:26]}] 게시 실패: {e}")
-            prog.progress((k + 1) / len(sel))
-        st.success(f"{done}건 게시 완료" + (f" · 실패 {fail}" if fail else ""))
-        st.rerun()
+                    item = json.loads(r["payload"])
+                    title = str(r["title"])
+                    cat = str(r["cat"])
+                    result = item.get("result", "")
+                    detail = success_detail_html(item, corpus)
+                    summary = qna_summary_html(item.get("summary_lines", []))
+                    wid = success_upload(title, cat, detail, summary, result,
+                                         image_path=success_image_path(result))
+                    success_mark_posted(did, wid)
+                    try:
+                        log_change(st.session_state.get("auth_user", "admin"), "성공사례",
+                                   f"게시: {title}", f"wr_id={wid} 분류={cat} 결과={result}", "생성·검수 후 게시")
+                    except Exception:
+                        pass
+                    done += 1
+                except Exception as e:
+                    fail += 1
+                    st.error(f"[{str(r['title'])[:26]}] 게시 실패: {e}")
+                prog.progress((k + 1) / len(sel))
+            try:
+                success_board_posts.clear()
+            except Exception:
+                pass
+            st.success(f"{done}건 게시 완료" + (f" · 실패 {fail}" if fail else ""))
+            st.rerun()
+
+    # ── 최근 게시 이력 (QnA 자동 게시 탭과 동일 카드 디자인) ──
+    st.divider()
+    st.markdown('<div class="sec-title">최근 게시 이력</div>', unsafe_allow_html=True)
+    recent = success_board_posts()
+    if not recent:
+        st.caption("아직 게시 이력이 없습니다.")
+    else:
+        cards = ""
+        for p in recent[:12]:
+            url = f"{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={p['wr_id']}"
+            cards += (f'<div class="rank-row" style="grid-template-columns:minmax(0,1fr) auto;">'
+                      f'<div class="rank-main" style="min-width:0;">'
+                      f'<div style="font-size:13px;color:{TXT};overflow:hidden;text-overflow:ellipsis;'
+                      f'white-space:nowrap;">{p["title"][:64]}</div></div>'
+                      f'<div><a href="{url}" target="_blank" style="font-size:12px;color:{GOLD_D};'
+                      f'font-weight:600;text-decoration:none;">열기 →</a></div></div>')
+        st.markdown(f'<div class="kb-card">{cards}</div>', unsafe_allow_html=True)
 
 
 def render_qna():
