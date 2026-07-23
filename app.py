@@ -156,14 +156,18 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .li-right {{ text-align:right; white-space:nowrap; flex:none; }}
 .li-val {{ font-size:14px; font-weight:700; color:{TXT}; font-variant-numeric:tabular-nums; }}
 .li-tag {{ display:inline-block; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:7px; }}
-/* 타이포 위계 */
-.big-section {{ font-size:18px; font-weight:700; color:{TXT};
-    margin:32px 0 8px; display:flex; align-items:center; gap:8px; }}
+/* 타이포 위계 — 대제목/소제목을 마커·크기·구분선으로 확실히 구분 */
+/* 대제목: 크고 굵게 + 아래 구분선(새 섹션 시작). 파란 점 없음 */
+.big-section {{ font-size:19px; font-weight:800; color:{TXT}; letter-spacing:-.01em;
+    margin:38px 0 16px; padding-bottom:11px; border-bottom:1.5px solid {LINE};
+    display:flex; align-items:center; gap:8px; }}
 .big-section i {{ display:none; }}
-.big-section::before {{ content:""; width:7px; height:7px; border-radius:50%; background:{GOLD}; flex:none; }}
-.sec-title {{ font-size:15px; font-weight:700; margin:24px 0 12px; display:flex; align-items:center; gap:8px; color:{TXT}; }}
+.big-section::before {{ display:none; }}
+/* 소제목: 작게 + 왼쪽 파란 세로 막대(대제목과 확실히 구분) */
+.sec-title {{ font-size:14px; font-weight:700; color:{MUTED}; margin:22px 0 10px;
+    display:flex; align-items:center; gap:9px; }}
 .sec-title i {{ display:none; }}
-.sec-title::before {{ content:""; width:6px; height:6px; border-radius:50%; background:{GOLD}; flex:none; }}
+.sec-title::before {{ content:""; width:3px; height:15px; border-radius:2px; background:{GOLD}; flex:none; }}
 .placeholder i {{ font-size:40px; color:{GOLD}; margin-bottom:16px; }}
 /* 탭 — 밑줄 스타일(단촐) */
 .stTabs [data-baseweb="tab-list"] {{ gap:2px; border-bottom:1px solid {LINE}; flex-wrap:wrap; }}
@@ -5662,8 +5666,6 @@ def _qna_list_flags(df):
 def _qna_list_tab(corpus):
     """게시글 목록 탭 — 목록 + 중복/이상 감지 + 정렬 + (확인 후) 삭제."""
     st.markdown('<div class="big-section">게시글 목록</div>', unsafe_allow_html=True)
-    st.caption("홈페이지 QnA 글 목록.중복·이상 글을 찾아 정렬·삭제하기 좋게 표시합니다. "
-               "삭제는 되돌릴 수 없으니 ‘삭제확인’ 체크 후 진행하세요.")
     if corpus is None or corpus.empty:
         st.info("게시글이 없습니다.")
         return
@@ -5672,7 +5674,7 @@ def _qna_list_tab(corpus):
         st.info("삭제하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
     df = _qna_list_flags(corpus)
     n_bad = int((df["issue"] != "").sum())
-    o1, o2, o3 = st.columns([1.4, 1.4, 1.2])
+    o1, o2, o3 = st.columns([1.4, 1.4, 1.2], vertical_alignment="bottom")   # 드롭다운·체크박스 밑선 맞춤
     fcat = o1.selectbox("분야", ["전체"] + list(QNA_CATS), key="qna_list_cat")
     sort = o2.selectbox("정렬", ["최신순", "오래된순", "분야별", "본문 짧은순(이상 찾기)", "중복 많은순"],
                         key="qna_list_sort")
@@ -5692,29 +5694,38 @@ def _qna_list_tab(corpus):
         view = view.sort_values(["dup_n", "cat", "base_kw"], ascending=[False, True, True])
     deleted = st.session_state.setdefault("qna_deleted", set())
     view = view[~view["wr_id"].astype(str).isin(deleted)]
-    st.caption(f"{len(view)}건 (최대 200건 표시)")
-    for _, r in view.head(200).iterrows():
+    rows = list(view.head(200).iterrows())
+    st.caption(f"{len(view)}건 (최대 200건 표시) · 체크한 글을 아래 버튼으로 한꺼번에 삭제")
+    for _, r in rows:
         wid, title, cat, issue = str(r["wr_id"]), str(r["title"]), str(r["cat"]), str(r["issue"])
-        c0, c1, c2 = st.columns([0.66, 0.14, 0.20], vertical_alignment="center")
+        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
+        c0.checkbox("선택", key=f"lsel_{wid}", label_visibility="collapsed")
         badge = f" <span style='color:#E5484D;font-size:12px'>{issue}</span>" if issue else ""
-        c0.markdown(f"<span style='font-size:13px'>[{cat}] "
+        c1.markdown(f"<span style='font-size:13px'>[{cat}] "
                     f"<a href='{QNA_BASE}/bbs/board.php?bo_table=QnA&wr_id={wid}' "
                     f"style='color:{GOLD}' target='_blank'>{title[:60]}</a>{badge}</span>",
                     unsafe_allow_html=True)
-        conf = c1.checkbox("삭제확인", key=f"del_ok_{wid}", label_visibility="collapsed")
-        if c2.button("삭제", key=f"del_{wid}", disabled=not (cid and conf)):
-            with st.spinner("삭제 중…"):
-                ok = qna_delete_post(wid)
-            if ok:
+    # ── 하단: 선택 글 일괄 삭제 ──
+    st.divider()
+    sel = [str(r["wr_id"]) for _, r in rows if st.session_state.get(f"lsel_{str(r['wr_id'])}")]
+    st.caption("삭제는 되돌릴 수 없습니다. 체크한 글만 삭제됩니다.")
+    if st.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="qna_bulk_del",
+                 disabled=not (cid and sel)):
+        prog = st.progress(0.0)
+        done = fail = 0
+        for i, wid in enumerate(sel):
+            if qna_delete_post(wid):
                 deleted.add(wid)
-                try:
-                    qna_corpus.clear()
-                except Exception:
-                    pass
-                st.success(f"삭제됨 (wr_id={wid})")
-                st.rerun()
+                done += 1
             else:
-                st.error("삭제 실패 — 게시판에서 직접 확인하세요.")
+                fail += 1
+            prog.progress((i + 1) / len(sel))
+        try:
+            qna_corpus.clear()
+        except Exception:
+            pass
+        st.success(f"{done}건 삭제 완료" + (f" · 실패 {fail}" if fail else ""))
+        st.rerun()
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -6087,7 +6098,6 @@ def _success_stats_tab():
 def _success_list_tab():
     """게시글 목록 탭 — 게시완료 성공사례 목록 + (확인 후) 삭제."""
     st.markdown('<div class="big-section">게시글 목록</div>', unsafe_allow_html=True)
-    st.caption("홈페이지 성공사례 게시글. 삭제는 되돌릴 수 없으니 ‘삭제확인’ 체크 후 진행하세요.")
     cid, _ = _qna_creds()
     if not cid:
         st.info("삭제하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
@@ -6099,28 +6109,36 @@ def _success_list_tab():
     view = rp if fcat == "전체" else rp[rp["분류"].astype(str) == fcat]
     deleted = st.session_state.setdefault("succ_deleted", set())
     view = view[~view["wr_id"].astype(str).isin(deleted)]
-    st.caption(f"{len(view)}건")
-    for _, r in view.iterrows():
+    rows = list(view.iterrows())
+    st.caption(f"{len(view)}건 · 체크한 글을 아래 버튼으로 한꺼번에 삭제")
+    for _, r in rows:
         wid, title, cat, dt = str(r["wr_id"]), str(r["제목"]), str(r["분류"]), str(r["날짜"])
-        c0, c1, c2 = st.columns([0.66, 0.14, 0.20], vertical_alignment="center")
-        c0.markdown(f"<span style='font-size:13px'>{dt} · [{cat}] "
+        c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
+        c0.checkbox("선택", key=f"slsel_{wid}", label_visibility="collapsed")
+        c1.markdown(f"<span style='font-size:13px'>{dt} · [{cat}] "
                     f"<a href='{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={wid}' "
                     f"style='color:{GOLD}' target='_blank'>{title[:56]}</a></span>",
                     unsafe_allow_html=True)
-        conf = c1.checkbox("삭제확인", key=f"succ_del_ok_{wid}", label_visibility="collapsed")
-        if c2.button("삭제", key=f"succ_del_{wid}", disabled=not (cid and conf)):
-            with st.spinner("삭제 중…"):
-                ok = success_delete_post(wid)
-            if ok:
+    st.divider()
+    sel = [str(r["wr_id"]) for _, r in rows if st.session_state.get(f"slsel_{str(r['wr_id'])}")]
+    st.caption("삭제는 되돌릴 수 없습니다. 체크한 글만 삭제됩니다.")
+    if st.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="succ_bulk_del",
+                 disabled=not (cid and sel)):
+        prog = st.progress(0.0)
+        done = fail = 0
+        for i, wid in enumerate(sel):
+            if success_delete_post(wid):
                 deleted.add(wid)
-                try:
-                    success_recent_posts.clear()
-                except Exception:
-                    pass
-                st.success(f"삭제됨 (wr_id={wid})")
-                st.rerun()
+                done += 1
             else:
-                st.error("삭제 실패 — 게시판에서 직접 확인하세요.")
+                fail += 1
+            prog.progress((i + 1) / len(sel))
+        try:
+            success_recent_posts.clear()
+        except Exception:
+            pass
+        st.success(f"{done}건 삭제 완료" + (f" · 실패 {fail}" if fail else ""))
+        st.rerun()
 
 
 def render_success():
