@@ -173,6 +173,19 @@ table, .kpi .v, .kb-tbl td.num, .tnum {{ font-variant-numeric:tabular-nums; }}
 .stTabs [data-baseweb="tab"]:hover {{ color:{TXT}; background:transparent; }}
 .stTabs [aria-selected="true"] {{ color:{GOLD} !important;
     background:transparent; border-bottom:2px solid {GOLD}; box-shadow:none; }}
+/* 상단 탭 그룹 구분: 분석(1~6) | 콘텐츠(QnA·성공사례, 7~8~). 7개 이상인 최상단 탭에만 적용 */
+.stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:nth-of-type(7) {{
+    margin-left:15px; padding-left:20px; border-left:1px solid {LINE}; }}
+.stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:nth-of-type(7)[aria-selected="true"],
+.stTabs [data-baseweb="tab-list"] button[data-baseweb="tab"]:nth-of-type(8)[aria-selected="true"] {{
+    color:{GOOD} !important; border-bottom-color:{GOOD}; }}
+/* 상단 툴바 버튼 — 라인아이콘+라벨 고스트(내보내기·새로고침·로그아웃) */
+.st-key-export_main button, .st-key-refresh_main button, .st-key-logout_main button {{
+    background:{SURF} !important; border:1px solid {LINE} !important; color:{MUTED} !important;
+    font-weight:600 !important; box-shadow:none; }}
+.st-key-export_main button:hover, .st-key-refresh_main button:hover {{
+    border-color:{GOLD} !important; color:{GOLD} !important; background:{PRIMSOFT} !important; }}
+.st-key-logout_main button:hover {{ border-color:#E5484D !important; color:#E5484D !important; background:transparent !important; }}
 /* 버튼 — 누름 반응(레퍼런스 scale 0.98) + 라운드 통일 */
 .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {{
     border-radius:12px; transition:transform .1s ease-out, background-color .15s, border-color .15s, color .15s; }}
@@ -6114,7 +6127,7 @@ def render_success():
         corpus = qna_corpus()      # 관련글 내부링크용(선택). 없으면 그냥 링크만 생략.
     except Exception:
         corpus = None
-    _s1, _s2, _s3, _s4 = st.tabs(["🤖 자동 게시", "✍️ 원고 생성", "📊 통계·성과", "🗂️ 게시글 목록"])
+    _s1, _s2, _s3, _s4 = st.tabs(["자동 게시", "원고 생성", "통계·성과", "게시글 목록"])
     with _s1:
         _success_review_tab(corpus)
     with _s2:
@@ -6275,7 +6288,7 @@ def render_qna():
         st.warning("QnA 코퍼스(qna_posts)가 아직 없습니다. Actions에서 `qna-sync`(mode=seed)를 1회 실행하세요.")
     cc = corpus["cat"].value_counts() if not corpus.empty else pd.Series(dtype=int)
     existing = corpus["title"].astype(str).tolist() if not corpus.empty else []
-    _t1, _t2, _t3, _t4 = st.tabs(["🤖 자동 게시", "✍️ 원고 생성", "📊 통계·성과", "🗂️ 게시글 목록"])
+    _t1, _t2, _t3, _t4 = st.tabs(["자동 게시", "원고 생성", "통계·성과", "게시글 목록"])
     with _t1:
         _qna_auto_tab(corpus)
     with _t2:
@@ -7089,21 +7102,26 @@ def main():
     else:
         lo = st.columns([3, 1.4, 1, 1])
         _ucol, _xcol, _rcol, _gcol = lo[1], None, lo[2], lo[3]
-    _ucol.markdown(f'<div style="text-align:right;padding-top:7px;font-size:13px;color:#4E5968;">'
-                   f'👤 {user}{"  🛡️" if user == "admin" else ""}</div>', unsafe_allow_html=True)
+    _ucol.markdown(
+        f'<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;padding-top:3px;">'
+        f'<span style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,{GOLD},{GOLD_D});'
+        f'color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;">'
+        f'{str(user)[:1].upper()}</span>'
+        f'<span style="font-size:13px;color:{MUTED};font-weight:600;">{user}</span></div>',
+        unsafe_allow_html=True)
     if _xcol is not None:
         try:
-            _xcol.download_button("📊 내보내기", data=build_export_zip(),
+            _xcol.download_button(":material/download: 내보내기", data=build_export_zip(),
                 file_name=f"KB_분석데이터_{date.today():%Y%m%d}.zip", mime="application/zip",
                 use_container_width=True, key="export_main",
                 help="AI 분석용 데이터 ZIP(README+CSV 10개) · 관리자 전용")
         except Exception:
-            _xcol.button("📊 준비중", use_container_width=True, disabled=True, key="export_err")
-    if _rcol.button("🔄 새로고침", use_container_width=True, key="refresh_main",
+            _xcol.button(":material/hourglass_empty: 준비중", use_container_width=True, disabled=True, key="export_err")
+    if _rcol.button(":material/refresh: 새로고침", use_container_width=True, key="refresh_main",
                     help="시트·BigQuery 최신 데이터를 즉시 다시 불러옵니다"):
         st.cache_data.clear()
         st.rerun()
-    if _gcol.button("🚪 로그아웃", use_container_width=True, key="logout_main"):
+    if _gcol.button(":material/logout: 로그아웃", use_container_width=True, key="logout_main"):
         for k in ("auth_user", "login_id", "login_pw", "chat_history"):
             st.session_state.pop(k, None)
         _clear_login_url()
