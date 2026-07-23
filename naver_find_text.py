@@ -73,7 +73,7 @@ def main():
         print("캠페인 조회 실패:", camps); return
 
     hits_ad = hits_ext = hits_kw = 0
-    del_ad = del_ext = fail = 0
+    del_ad = del_ext = del_kw = fail = 0
     rows = []
     zero_warn = []
     for c in sorted(camps, key=lambda x: str(x.get("name", ""))):
@@ -120,13 +120,19 @@ def main():
                             del_ext += 1
                         else:
                             fail += 1; print(f"  ❌ 확장삭제 {gname}: {er}")
-            # 키워드(리포트만, 삭제 안 함)
+            # 키워드 (APPLY면 삭제)
             kws = _get("/ncc/keywords", {"nccAdgroupId": gid}) or []; time.sleep(0.06)
             for k in (kws if isinstance(kws, list) else []):
                 if TERM in str(k.get("keyword", "")):
                     hits_kw += 1
-                    rows.append([cname, gname, "키워드(참고)", str(k.get("keyword", "")),
+                    rows.append([cname, gname, "키워드", str(k.get("keyword", "")),
                                  "ON" if _on(k) else "OFF", k.get("nccKeywordId")])
+                    if APPLY:
+                        ok, er = _delete(f"/ncc/keywords/{k.get('nccKeywordId')}"); time.sleep(0.15)
+                        if ok:
+                            del_kw += 1
+                        else:
+                            fail += 1; print(f"  ❌ 키워드삭제 {gname}: {er}")
 
     print("===FIND_CSV_START===")
     print("캠페인|그룹|유형|문구|상태|ID")
@@ -134,9 +140,9 @@ def main():
         print("|".join(str(x) for x in r))
     print("===FIND_CSV_END===")
 
-    print(f"\n매칭 — 소재 {hits_ad} · 추가제목/홍보문구 {hits_ext} · 키워드(참고) {hits_kw}")
+    print(f"\n매칭 — 소재 {hits_ad} · 추가제목/홍보문구 {hits_ext} · 키워드 {hits_kw}")
     if APPLY:
-        print(f"삭제 — 소재 {del_ad} · 확장 {del_ext} · 실패 {fail} (키워드는 삭제 안 함)")
+        print(f"삭제 — 소재 {del_ad} · 확장 {del_ext} · 키워드 {del_kw} · 실패 {fail}")
         if zero_warn:
             print("\n⚠️ 소재0 경고(삭제로 노출 불가된 그룹):")
             for w in zero_warn:
