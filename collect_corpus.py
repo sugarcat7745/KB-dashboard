@@ -26,7 +26,8 @@ PROJECT, DATASET = "kb-dashboard-499704", "kb_ads"
 BASE = "https://lawl-crime.co.kr/crime"
 UA = {"User-Agent": "Mozilla/5.0 (compatible; KB-corpus/1.0)"}
 DELAY = float(os.environ.get("CORPUS_DELAY", "0.12"))   # 목록 페이지 순회 간 폴라이트 딜레이(초)
-WORKERS = int(os.environ.get("CORPUS_WORKERS", "12"))   # 상세 병렬 수집 워커 수(폴라이트하게 제한)
+WORKERS = int(os.environ.get("CORPUS_WORKERS", "8"))    # 상세 병렬 수집 워커 수(429 유발 줄이려 보수적)
+BATCH_PAGES = int(os.environ.get("CORPUS_BATCH_PAGES", "40"))  # 목록 N페이지마다 중간 적재(부분 저장)
 
 # ── 카테고리 추론(대시보드 QNA_CATS와 정렬). 형사 전문 사이트라 기본=형사 ──
 QNA_CATS = ["형사", "성범죄", "학교폭력", "음주운전·교통사고", "민사·행정", "이혼·가사",
@@ -73,8 +74,10 @@ def extract_laws(text):
 def make_session():
     s = requests.Session()
     s.headers.update(UA)
-    retry = Retry(total=4, backoff_factor=0.5,
-                  status_forcelist=[429, 500, 502, 503, 504],
+    # 재시도는 가볍게 — 사이트가 429를 자주 내는데 백오프가 크면 오히려 전체가 느려진다.
+    # 실패한 개별 항목은 스킵하고 다음 배치로 넘어가는 게 낫다(멱등 재실행으로 보강).
+    retry = Retry(total=2, backoff_factor=0.3,
+                  status_forcelist=[500, 502, 503, 504],
                   allowed_methods=["GET"])
     ad = HTTPAdapter(max_retries=retry, pool_connections=WORKERS + 4, pool_maxsize=WORKERS + 4)
     s.mount("https://", ad); s.mount("http://", ad)
@@ -149,14 +152,21 @@ def parse_qna(idx, html):
             "answer_len": len(answer), "url": f"{BASE}/intellectualView.html?idx={idx}"}
 
 
-def scrape(sess, board, view, parser, cap=None):
-    """상세 페이지를 스레드풀로 병렬 수집(18k건이라 순차는 수시간 → 동시 요청으로 단축).
-    세션은 스레드 세이프(pool_maxsize 확대), 폴라이트하게 워커 수는 제한."""
+def _scrape_pages(sess, board, view, parser, pages):
+    """주어진 목록 페이지들에서 idx를 모아 상세를 병렬 수집. rows 반환(등장 idx는 seen로 중복 방지는 호출측)."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    idxs = list_idxs(sess, board, view, cap=cap)
-    total = len(idxs)
-    print(f"{board}: 상세 {total}건 파싱 시작(병렬 {WORKERS}워커)", flush=True)
-    rows, fail, done = [], 0, 0
+    idxs = []
+    seen = set()
+    for p in pages:
+        try:
+            html = sess.get(f"{BASE}/{board}.html?page={p}", timeout=25).text
+        except Exception as e:
+            print(f"  [warn] {board} list p{p} 실패: {e}", flush=True)
+            continue
+        for idx in re.findall(view + r"\.html\?idx=(\d+)", html):
+            if idx not in seen:
+                seen.add(idx); idxs.append(idx)
+        time.sleep(DELAY)
 
     def _one(idx):
         try:
@@ -165,21 +175,15 @@ def scrape(sess, board, view, parser, cap=None):
         except Exception:
             return None
 
+    rows = []
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
-        futs = {ex.submit(_one, idx): idx for idx in idxs}
-        for fut in as_completed(futs):
-            done += 1
-            rec = fut.result()
+        for rec in ex.map(_one, idxs):
             if rec:
                 rows.append(rec)
-            else:
-                fail += 1
-            if done % 1000 == 0 or done == total:
-                print(f"  {board} 상세 {done}/{total} · 성공 {len(rows)} · 스킵 {fail}", flush=True)
     return rows
 
 
-def load_bq(rows, table, schema_spec, cols):
+def load_bq(rows, table, schema_spec, cols, disposition="WRITE_TRUNCATE"):
     from google.cloud import bigquery
     from google.oauth2 import service_account
     schema = [bigquery.SchemaField(n, t) for n, t in schema_spec]
@@ -190,9 +194,33 @@ def load_bq(rows, table, schema_spec, cols):
     ref = f"{PROJECT}.{DATASET}.{table}"
     client.load_table_from_dataframe(
         df, ref,
-        job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE", schema=schema),
+        job_config=bigquery.LoadJobConfig(write_disposition=disposition, schema=schema),
     ).result()
-    print(f"→ {ref}: {len(df)}행 적재 완료", flush=True)
+    print(f"→ {ref}: +{len(df)}행 적재({disposition})", flush=True)
+
+
+def scrape_and_load(sess, board, view, parser, table, schema, cols, cap=None):
+    """목록을 BATCH_PAGES 페이지씩 끊어 수집→즉시 적재. 첫 배치만 TRUNCATE, 이후 APPEND.
+    → 사이트가 느려 타임아웃돼도 이미 적재된 배치는 살아남는다(부분 저장·멱등)."""
+    lp = last_page(sess, board)
+    if cap:
+        lp = min(lp, cap)
+    print(f"{board}: 총 {lp}p, {BATCH_PAGES}p 배치로 수집·적재(병렬 {WORKERS}워커)", flush=True)
+    seen, total = set(), 0
+    first = True
+    for start in range(1, lp + 1, BATCH_PAGES):
+        pages = range(start, min(start + BATCH_PAGES, lp + 1))
+        rows = _scrape_pages(sess, board, view, parser, pages)
+        rows = [r for r in rows if r["idx"] not in seen]
+        for r in rows:
+            seen.add(r["idx"])
+        if rows:
+            load_bq(rows, table, schema, cols,
+                    disposition="WRITE_TRUNCATE" if first else "WRITE_APPEND")
+            first = False
+            total += len(rows)
+        print(f"  {board} {min(start + BATCH_PAGES - 1, lp)}/{lp}p · 누적 적재 {total}건", flush=True)
+    return total
 
 
 SCHEMA_SUCCESS = [("idx", "STRING"), ("category", "STRING"), ("result", "STRING"),
@@ -209,27 +237,18 @@ def main():
     cap_s = int(cap_s) if cap_s else None
     cap_q = int(cap_q) if cap_q else None
 
-    print("=== 사건사례 수집 ===", flush=True)
-    succ = scrape(sess, "success", "successView", parse_success, cap=cap_s)
-    print("=== 법률지식인(QnA) 수집 ===", flush=True)
-    qna = scrape(sess, "intellectual", "intellectualView", parse_qna, cap=cap_q)
-
-    if succ:
-        load_bq(succ, "corpus_success", SCHEMA_SUCCESS,
-                ["idx", "category", "result", "title", "laws", "body", "body_len", "n_sections", "url"])
-    if qna:
-        load_bq(qna, "corpus_qna", SCHEMA_QNA,
-                ["idx", "category", "question", "answer", "answer_len", "url"])
-
-    # 카테고리 분포 요약(개인정보 없음 — 로그에 남겨도 안전)
-    def dist(rows):
-        d = {}
-        for r in rows:
-            d[r["category"]] = d.get(r["category"], 0) + 1
-        return dict(sorted(d.items(), key=lambda x: -x[1]))
-    print(f"성공사례 {len(succ)}건 카테고리 분포: {dist(succ)}", flush=True)
-    print(f"QnA {len(qna)}건 카테고리 분포: {dist(qna)}", flush=True)
-    if not succ and not qna:
+    # QnA(작음)를 먼저 — 오래 걸리는 사건사례 도중 타임아웃돼도 QnA는 확보.
+    print("=== 법률지식인(QnA) 수집·적재 ===", flush=True)
+    nq = scrape_and_load(sess, "intellectual", "intellectualView", parse_qna,
+                         "corpus_qna", SCHEMA_QNA,
+                         ["idx", "category", "question", "answer", "answer_len", "url"], cap=cap_q)
+    print("=== 사건사례 수집·적재 ===", flush=True)
+    ns = scrape_and_load(sess, "success", "successView", parse_success,
+                         "corpus_success", SCHEMA_SUCCESS,
+                         ["idx", "category", "result", "title", "laws", "body", "body_len", "n_sections", "url"],
+                         cap=cap_s)
+    print(f"완료: 사건사례 {ns}건 · QnA {nq}건 적재", flush=True)
+    if ns == 0 and nq == 0:
         print("[error] 수집 0건", flush=True); sys.exit(1)
 
 
