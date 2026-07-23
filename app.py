@@ -6194,22 +6194,55 @@ def _success_stats_tab():
         st.caption("아직 게시된 성공사례가 없습니다.")
 
 
+def _success_list_flags(posts):
+    """성공사례 글에 중복/유사 신호를 붙임. 제목만 있으므로 제목 기준:
+    · 중복 = 제목이 (공백 무시) 완전히 같은 글이 2개 이상.
+    · 유사 = 제목의 '|' 앞부분(죄명+결과)이 같은 글이 2개 이상(중복 아님)."""
+    from collections import Counter
+    tnorm = [re.sub(r"\s+", "", p["title"]) for p in posts]
+    heads = [re.sub(r"\s+", "", p["title"].split("|")[0]) for p in posts]
+    tc, hc = Counter(tnorm), Counter(heads)
+    out = []
+    for p, tn, hd in zip(posts, tnorm, heads):
+        if tc[tn] > 1:
+            issue, dupn = "중복", tc[tn]
+        elif hc[hd] > 1:
+            issue, dupn = "유사", hc[hd]
+        else:
+            issue, dupn = "", 1
+        out.append({**p, "issue": issue, "dup_n": dupn, "head": hd})
+    return out
+
+
 def _success_list_tab():
-    """게시글 목록 탭 — 홈페이지 성공사례 게시판 실제 글 목록 + (확인 후) 일괄 삭제."""
+    """게시글 목록 탭 — 홈페이지 성공사례 실제 글 + 중복/유사 감지·정렬 + 일괄 삭제."""
     st.markdown('<div class="big-section">게시글 목록</div>', unsafe_allow_html=True)
     cid, _ = _qna_creds()
     if not cid:
         st.info("삭제하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
-    posts = success_board_posts()      # 홈페이지 성공사례 게시판 실제 글(수기 게시분 포함)
+    raw = success_board_posts()      # 홈페이지 성공사례 게시판 실제 글(수기 게시분 포함)
     deleted = st.session_state.setdefault("succ_deleted", set())
-    posts = [p for p in (posts or []) if p["wr_id"] not in deleted]
-    if not posts:
+    raw = [p for p in (raw or []) if p["wr_id"] not in deleted]
+    if not raw:
         st.info("게시판에서 성공사례 글을 불러오지 못했습니다(글이 없거나 게시판 접근 오류).")
         return
-    sel = [p["wr_id"] for p in posts if st.session_state.get(f"slsel_{p['wr_id']}")]
-    # ── 선택 글 일괄 삭제(목록 위 — 길어도 스크롤 없이) ──
+    flagged = _success_list_flags(raw)
+    n_dup = sum(1 for p in flagged if p["issue"])
+    # ── 필터·정렬 ──
+    o1, o2 = st.columns([1.6, 1.4], vertical_alignment="bottom")
+    sort = o1.selectbox("정렬", ["최신순", "중복·유사 먼저", "제목순"], key="succ_list_sort")
+    only_dup = o2.checkbox(f"중복·유사만 ({n_dup})", key="succ_list_dup")
+    view = [p for p in flagged if (not only_dup or p["issue"])]
+    if sort == "중복·유사 먼저":
+        view = sorted(view, key=lambda p: (0 if p["issue"] else 1, p["head"], -int(p["wr_id"])))
+    elif sort == "제목순":
+        view = sorted(view, key=lambda p: p["title"])
+    else:
+        view = sorted(view, key=lambda p: -int(p["wr_id"]))
+    sel = [p["wr_id"] for p in view if st.session_state.get(f"slsel_{p['wr_id']}")]
+    # ── 선택 글 일괄 삭제(목록 위) ──
     dc1, dc2 = st.columns([3, 1.4], vertical_alignment="center")
-    dc1.caption(f"{len(posts)}건 · 체크한 글만 삭제됩니다 (되돌릴 수 없음)")
+    dc1.caption(f"{len(view)}건 · 중복 {n_dup}건 · 체크한 글만 삭제됩니다 (되돌릴 수 없음)")
     if dc2.button(f"선택 글 삭제 ({len(sel)}건)", type="primary", key="succ_bulk_del",
                   disabled=not (cid and sel), use_container_width=True):
         prog = st.progress(0.0)
@@ -6227,13 +6260,15 @@ def _success_list_tab():
             pass
         st.success(f"{done}건 삭제 완료" + (f" · 실패 {fail}" if fail else ""))
         st.rerun()
-    for p in posts:
-        wid, title = p["wr_id"], p["title"]
+    for p in view:
+        wid, title, issue = p["wr_id"], p["title"], p["issue"]
         c0, c1 = st.columns([0.045, 0.955], vertical_alignment="center")
         c0.checkbox("선택", key=f"slsel_{wid}", label_visibility="collapsed")
+        badge = (f" <span style='color:#E5484D;font-size:12px;font-weight:700'>{issue}</span>"
+                 if issue else "")
         c1.markdown(f"<span style='font-size:13px'>"
                     f"<a href='{QNA_BASE}/bbs/board.php?bo_table={SUCCESS_BO}&wr_id={wid}' "
-                    f"style='color:{GOLD}' target='_blank'>{title[:70]}</a></span>",
+                    f"style='color:{GOLD}' target='_blank'>{title[:70]}</a>{badge}</span>",
                     unsafe_allow_html=True)
 
 
