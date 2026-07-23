@@ -18,7 +18,7 @@ import requests
 
 BASE = "https://api.searchad.naver.com"
 DAYS = int(os.environ.get("DAYS", "3"))
-REPORT_TP = os.environ.get("REPORT_TP", "EXP_KEYWORD")
+REPORT_TP = os.environ.get("REPORT_TP", "EXPKEYWORD")   # 확장 검색어 보고서(언더바 없음)
 TOPN = int(os.environ.get("TOPN", "300"))
 RAW = os.environ.get("RAW", "1") == "1"
 
