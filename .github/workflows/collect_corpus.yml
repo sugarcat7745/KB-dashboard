@@ -13,6 +13,11 @@ on:
         description: "법률지식인 페이지 상한(테스트용, 비우면 전체 ~20p)"
         required: false
         default: ""
+      reset:
+        description: "처음부터 새로(기존 적재분 무시). 비우면 이어받기(이미 받은 idx 건너뜀)"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: bq-corpus-write
@@ -34,4 +39,5 @@ jobs:
           GCP_SA_JSON:                ${{ secrets.GCP_SA_JSON }}
           CORPUS_MAX_PAGES_SUCCESS:   ${{ inputs.max_pages_success }}
           CORPUS_MAX_PAGES_QNA:       ${{ inputs.max_pages_qna }}
+          CORPUS_RESET:               ${{ inputs.reset == true && '1' || '' }}
         run: python collect_corpus.py
