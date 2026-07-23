@@ -199,15 +199,33 @@ def load_bq(rows, table, schema_spec, cols, disposition="WRITE_TRUNCATE"):
     print(f"→ {ref}: +{len(df)}행 적재({disposition})", flush=True)
 
 
+def existing_idxs(table):
+    """이미 적재된 idx 집합(이어받기용). 테이블 없거나 오류면 빈 집합."""
+    try:
+        from google.cloud import bigquery
+        from google.oauth2 import service_account
+        info = json.loads(os.environ["GCP_SA_JSON"])
+        client = bigquery.Client(project=PROJECT,
+                                 credentials=service_account.Credentials.from_service_account_info(info))
+        rows = client.query(f"SELECT idx FROM `{PROJECT}.{DATASET}.{table}`").result()
+        return {str(r["idx"]) for r in rows}
+    except Exception:
+        return set()
+
+
 def scrape_and_load(sess, board, view, parser, table, schema, cols, cap=None):
-    """목록을 BATCH_PAGES 페이지씩 끊어 수집→즉시 적재. 첫 배치만 TRUNCATE, 이후 APPEND.
-    → 사이트가 느려 타임아웃돼도 이미 적재된 배치는 살아남는다(부분 저장·멱등)."""
+    """목록을 BATCH_PAGES 페이지씩 끊어 수집→즉시 적재.
+    이어받기(기본): 이미 적재된 idx는 건너뛰고 WRITE_APPEND로 누적 → 사이트가 느려 여러 번
+      나눠 돌려도 완성됨. CORPUS_RESET=1 이면 첫 배치 TRUNCATE로 새로 시작.
+    → 타임아웃돼도 이미 적재된 배치는 살아남고(부분 저장), 다음 실행이 이어붙인다."""
+    reset = os.environ.get("CORPUS_RESET") == "1"
     lp = last_page(sess, board)
     if cap:
         lp = min(lp, cap)
-    print(f"{board}: 총 {lp}p, {BATCH_PAGES}p 배치로 수집·적재(병렬 {WORKERS}워커)", flush=True)
-    seen, total = set(), 0
-    first = True
+    seen = set() if reset else existing_idxs(table)
+    print(f"{board}: 총 {lp}p, {BATCH_PAGES}p 배치(병렬 {WORKERS}워커) · "
+          f"{'새로 시작(RESET)' if reset else f'이어받기: 기존 {len(seen)}건 건너뜀'}", flush=True)
+    total, first = 0, True
     for start in range(1, lp + 1, BATCH_PAGES):
         pages = range(start, min(start + BATCH_PAGES, lp + 1))
         rows = _scrape_pages(sess, board, view, parser, pages)
@@ -215,11 +233,12 @@ def scrape_and_load(sess, board, view, parser, table, schema, cols, cap=None):
         for r in rows:
             seen.add(r["idx"])
         if rows:
-            load_bq(rows, table, schema, cols,
-                    disposition="WRITE_TRUNCATE" if first else "WRITE_APPEND")
+            # RESET일 때만 첫 적재를 TRUNCATE, 그 외엔 항상 APPEND(이어받기)
+            disp = "WRITE_TRUNCATE" if (reset and first) else "WRITE_APPEND"
+            load_bq(rows, table, schema, cols, disposition=disp)
             first = False
             total += len(rows)
-        print(f"  {board} {min(start + BATCH_PAGES - 1, lp)}/{lp}p · 누적 적재 {total}건", flush=True)
+        print(f"  {board} {min(start + BATCH_PAGES - 1, lp)}/{lp}p · 이번 실행 신규 적재 {total}건", flush=True)
     return total
 
 
