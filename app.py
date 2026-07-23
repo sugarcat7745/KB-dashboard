@@ -7364,7 +7364,9 @@ def main():
 
     is_admin = (user == "admin")
     can_qna = qna_can_see(user)
-    top_labels = ["요약", "광고", "실적", "유입", "변경", "AI"]
+    # '변경'(변경사항 기록) 탭은 숨김 — 잘 안 봐서 제외. render_changelog·log_change는 유지(기록은 계속 쌓임).
+    #   되살리려면: 아래 "AI" 앞에 "변경" 추가 + top[4] 블록에 render_changelog 복원 + 이후 인덱스 +1.
+    top_labels = ["요약", "광고", "실적", "유입", "AI"]
     if can_qna:
         top_labels = top_labels + ["QnA", "성공사례"]
     render_landing_status()   # 모든 탭 위 항상 표시되는 광고 랜딩 실시간 상태 바
@@ -7411,10 +7413,9 @@ def main():
     with top[3]:
         _safe(render_ga4, "유입 분석(GA4)")
 
-    with top[4]:
-        _safe(render_changelog, "변경사항")
+    # (숨김) '변경'(변경사항) 탭 — 되살리려면 여기에 `with top[N]: _safe(render_changelog, "변경사항")` 복원.
 
-    with top[5]:
+    with top[4]:
         if is_admin:
             a = st.radio("AI", ["AI 질의", "AI 로그"], horizontal=True,
                          label_visibility="collapsed", key="nav_ai")
@@ -7425,11 +7426,11 @@ def main():
         else:
             render_ai_chat()
 
-    if can_qna and len(top) > 6:
-        with top[6]:
+    if can_qna and len(top) > 5:
+        with top[5]:
             _safe(render_qna, "QnA 관리")
-        if len(top) > 7:
-            with top[7]:
+        if len(top) > 6:
+            with top[6]:
                 _safe(render_success, "성공사례")
 
 
