@@ -5851,6 +5851,91 @@ def success_gen_case(cat, existing_titles=None, client=None):
     return d
 
 
+def success_gen_titles(cat, n=5, existing_titles=None, client=None):
+    """(1단계) 분야 → 케이스 제목 후보 N개. [{crime,result,situation,title}] 반환. 실패 시 []."""
+    cli = client or _qna_client()
+    prof = _qna_profile(cat)
+    allowed = _success_allowed_results(cat)
+    avoid = ""
+    if existing_titles:
+        recent = [str(t) for t in existing_titles if str(t).strip()][:60]
+        if recent:
+            avoid = "\n[중복 회피] 아래와 겹치지 않는 새 사건·상황으로:\n" + "\n".join("· " + t for t in recent)
+    sysp = (
+        f"너는 법무법인 KB의 콘텐츠 기획자다. '{cat}' 분야에서 충분히 있을 법한 **성공사례 제목 후보** {n}개를 만든다. "
+        "실제 특정 사건이 아니라 이 분야의 전형적 사건을 사실적으로.\n"
+        f"[독자] {prof['reader']}\n"
+        "[제목 형식] `{죄명/사건} {결과} | {상황 요약}, {KB의 핵심 전략·성과}` — "
+        "예: '강제추행 기소유예 | 행사 뒤풀이 후 순간적 신체접촉, 피해회복 노력으로 선처'\n"
+        f"[결과] 각 제목의 결과는 다음 목록에서 사건에 맞는 것 하나: {', '.join(allowed)}\n"
+        "서로 사건 유형·결과가 다양하게 섞이도록. 과장·보증·승소율 표현 금지." + avoid +
+        "\n[출력] JSON 배열만(설명 금지): "
+        '[{"crime":"죄명/사건명","result":"결과(목록 중)","situation":"상황 한 줄","title":"제목(형식 준수)"}, ...]')
+    usr = f"분류: {cat}\n제목 후보 {n}개를 JSON 배열로."
+    try:
+        m = cli.messages.create(model=MODEL_CHAT, max_tokens=1500, system=sysp,
+                                messages=[{"role": "user", "content": usr}])
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
+    except Exception:
+        return []
+    out = []
+    for it in arr if isinstance(arr, list) else []:
+        if isinstance(it, dict) and it.get("title"):
+            it["result"] = success_norm_result(it.get("result"))
+            it["cat"] = cat
+            out.append(it)
+    return out
+
+
+def success_gen_body(cat, title_obj, corpus=None, client=None):
+    """(2단계) 확정된 제목 → 5단 본문 완성(dict). 실패 시 None."""
+    cli = client or _qna_client()
+    crime = title_obj.get("crime", "")
+    result = title_obj.get("result", "")
+    situation = title_obj.get("situation", "")
+    title = title_obj.get("title", "")
+    allowed = _success_allowed_results(cat)
+    global _SUCCESS_LAST_ERR
+    sysp = (
+        f"너는 법무법인 KB의 콘텐츠 작성자다. 아래 **확정된 제목**의 성공사례 본문을 완성한다.\n"
+        f"[제목] {title}\n[죄명/사건] {crime}\n[결과] {result}\n[상황] {situation}\n"
+        f"[분야] {cat}  (결과는 '{result}' 그대로 유지)\n"
+        "[본문 5단 구조(고정)] 각 단락 = 소제목(sub) + 문단들(paras):\n"
+        " 1. 사건 요약 및 결과 — 상황 요약 + KB가 한 일 → 결과(2~3문단)\n"
+        " 2. (사건)으로 KB를 찾아온 의뢰인 — 배경·경위·의뢰 시점\n"
+        " 3. 대응에 나선 KB의 조력 — ①②③④ 로 시작하는 구체 전략 4가지\n"
+        " 4. 대응 결과, (결과) — 의견서/주장 제출 → 판단 근거(불릿형 문단들) → 결정\n"
+        " 5. 이 사건에서 (핵심)이 중요한 이유 — 일반 독자용 교훈\n"
+        "[GEO·정확성] 정확한 법령·조문명·수치·절차를 근거로, 핵심 근거 법령·판례 문구는 따옴표로 한 번 인용. "
+        "[수치 원칙] 일반 법률정보 수치만 구체적으로, 로펌 실적 수치(승소율·처리건수)는 지어내지 마라. "
+        "[표현 제약] '최고·유일·1위·승소 보장·무료'·승소율·前官 영향력 암시·미검증 수상 금지(변호사 광고규정)."
+        + QNA_GEO_RULES + QNA_FIDELITY +
+        "\n[출력] JSON만(설명 금지): "
+        '{"crime":"","result":"","situation":"","title":"","summary_lines":["핵심요약 3줄","",""],'
+        '"sections":[{"sub":"사건 요약 및 결과","paras":["..."]}, ...(정확히 5개)],'
+        '"laws":["형법 제○조"],"faq":[{"q":"","a":""},...(2~3)],'
+        '"table":{"title":"","headers":["열1","열2"],"rows":[["a","b"]]}}')
+    usr = f"위 제목의 본문을 JSON으로 완성하라. 결과 후보 참고: {', '.join(allowed[:12])}"
+    try:
+        m = cli.messages.create(model=MODEL_CHAT, max_tokens=8000, system=sysp,
+                                messages=[{"role": "user", "content": usr}])
+        txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
+        if getattr(m, "stop_reason", "") == "max_tokens":
+            raise RuntimeError("응답이 max_tokens에서 잘림")
+        d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
+    except Exception as e:
+        _SUCCESS_LAST_ERR = f"{type(e).__name__}: {str(e)[:200]}"
+        return None
+    _SUCCESS_LAST_ERR = ""
+    d.setdefault("title", title)
+    d.setdefault("crime", crime)
+    d.setdefault("situation", situation)
+    d["result"] = success_norm_result(d.get("result") or result)
+    d["cat"] = cat
+    return d
+
+
 def success_detail_html(item, corpus=None):
     """성공사례 상세 본문(wr_content) — 5단 목차 + GEO(표·FAQ·법령출처·관련글) + 면책문구."""
     crime = item.get("crime") or item.get("title", "")
@@ -5947,7 +6032,7 @@ def success_upload(title, cat, detail_html, summary_html, result, image_path=Non
         if not nm or el.get("type") in ("submit", "button", "image", "checkbox", "file"):
             continue
         data[nm] = el.get("value", "") if el.name != "textarea" else (el.text or "")
-    data.update({"bo_table": SUCCESS_BO, "w": "", "wr_id": "0",
+    data.update({"bo_table": SUCCESS_BO, "w": "", "wr_id": "0", "ca_name": cat,   # 홈페이지 카테고리(=QNA_CATS)
                  "wr_subject": title, "wr_content": detail_html, "html": "html2"})
     sf = _qna_summary_field(form, soup)
     if sf and summary_html:
@@ -6163,51 +6248,105 @@ def render_success():
     with _s1:
         _success_review_tab(corpus)
     with _s2:
-        _success_gen_tab(corpus)
+        _success_write_tab(corpus)
     with _s3:
         _success_stats_tab()
     with _s4:
         _success_list_tab()
 
 
-def _success_gen_tab(corpus):
-    """카테고리별 성공사례 생성 → 검수 대기열 적재."""
+def _success_write_tab(corpus):
+    """성공사례 원고 생성 — QnA와 동일한 다단계: 분야 → 제목 후보 → 선택 → 본문 → 미리보기 → 게시."""
+    # ── 1) 분야 선택(홈페이지 성공사례 카테고리 = QNA_CATS) ──
     st.markdown('<div class="big-section">1) 분야 선택</div>', unsafe_allow_html=True)
-    cat = st.selectbox("분야(죄명 계열)", QNA_CATS, key="succ_cat")
-    n = st.slider("생성 개수", 1, 5, 2, key="succ_n")
-    allowed = _success_allowed_results(cat)
-    st.caption(f"이 분야 결과 후보: {', '.join(allowed[:10])}{' …' if len(allowed) > 10 else ''}")
-    if st.button(f"{cat} 성공사례 {n}건 생성", type="primary", key="succ_gen"):
-        existing = corpus["title"].astype(str).tolist() if (corpus is not None and not corpus.empty) else []
-        made, fail = [], 0
-        prog = st.progress(0.0)
-        with st.spinner(f"{cat} 성공사례 생성 중… (건당 15~30초)"):
-            for i in range(n):
-                it = success_gen_case(cat, existing_titles=existing + [m.get("title", "") for m in made])
-                if it:
-                    made.append(it)
-                else:
-                    fail += 1
-                prog.progress((i + 1) / n)
-        prog.empty()
-        if made:
-            success_save_drafts(st.session_state.get("auth_user", "admin"), made)
-            st.session_state["succ_made"] = made      # 미리보기 유지(재실행에도)
-            st.success(f"{len(made)}건 생성 완료 — 아래에서 글을 확인하세요. ('검수 대기열' 탭에도 저장됨)"
-                       + (f"  · 실패 {fail}건" if fail else ""))
-        else:
-            st.error("생성에 실패했습니다. 다시 시도해 주세요.")
-            if st.session_state.get("auth_user") == "admin" and _SUCCESS_LAST_ERR:
-                st.caption(f"(관리자 참고) {_SUCCESS_LAST_ERR}")
+    sel = st.session_state.get("succ_sel_cat")
+    ncol = 4
+    for i in range(0, len(QNA_CATS), ncol):
+        cols = st.columns(ncol)
+        for j, c in enumerate(QNA_CATS[i:i + ncol]):
+            typ = "primary" if sel == c else "secondary"
+            if cols[j].button(c, key=f"succ_cb_{c}", use_container_width=True, type=typ):
+                st.session_state["succ_sel_cat"] = c
+                for k in ("succ_titles", "succ_made"):
+                    st.session_state.pop(k, None)
+                for k in [k for k in list(st.session_state.keys()) if k.startswith("succ_t_")]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+    if not sel:
+        st.info("위에서 분야를 선택하세요.")
+        return
 
-    # ── 생성된 원고 미리보기(글 먼저 확인) — 세션 유지 ──
+    # ── 2) 케이스 제목 후보 생성 ──
+    st.markdown('<div class="big-section">2) 케이스 제목 후보</div>', unsafe_allow_html=True)
+    allowed = _success_allowed_results(sel)
+    st.caption(f"분야 {sel} · 결과 후보: {', '.join(allowed[:8])}{' …' if len(allowed) > 8 else ''}")
+    rc1, rc2 = st.columns([1.1, 2.9], vertical_alignment="bottom")
+    n_t = rc1.number_input("추천받을 개수", min_value=1, max_value=10, value=5, step=1, key="succ_tn")
+    if rc2.button("제목 후보 생성 / 새로고침", key="succ_tbtn"):
+        with st.spinner("제목 후보 생성 중…"):
+            existing = [p["title"] for p in (success_board_posts() or [])]
+            st.session_state["succ_titles"] = success_gen_titles(sel, int(n_t), existing)
+        for k in [k for k in list(st.session_state.keys()) if k.startswith("succ_t_")]:
+            st.session_state.pop(k, None)
+        st.session_state.pop("succ_made", None)
+    titles = st.session_state.get("succ_titles", [])
+    picked = []
+    if titles:
+        for i in range(len(titles)):
+            st.session_state.setdefault(f"succ_t_{i}", True)   # 기본 전체 체크
+        st.markdown(f'<div class="sec-title">제목 후보 {len(titles)}개 — 만들 것만 체크</div>', unsafe_allow_html=True)
+        b1, b2, _b3 = st.columns([1, 1, 5], gap="small")
+        if b1.button("전체 선택", key="succ_t_all"):
+            for i in range(len(titles)):
+                st.session_state[f"succ_t_{i}"] = True
+            st.rerun()
+        if b2.button("전체 해제", key="succ_t_none"):
+            for i in range(len(titles)):
+                st.session_state[f"succ_t_{i}"] = False
+            st.rerun()
+        for i, t in enumerate(titles):
+            if st.checkbox(f"[{t.get('result','')}] {t.get('title','')}", key=f"succ_t_{i}"):
+                picked.append(t)
+
+    # ── 3) 선택 제목 → 본문 생성 ──
+    if picked:
+        st.markdown('<div class="big-section">3) 본문 생성</div>', unsafe_allow_html=True)
+        if st.button(f"선택 {len(picked)}개 본문 생성", key="succ_makebody", type="primary"):
+            made, fail = [], 0
+            prog = st.progress(0.0)
+            with st.spinner("본문 생성 중… (건당 15~30초)"):
+                for i, t in enumerate(picked):
+                    it = success_gen_body(sel, t, corpus)
+                    if it:
+                        made.append(it)
+                    else:
+                        fail += 1
+                    prog.progress((i + 1) / len(picked))
+            prog.empty()
+            if made:
+                success_save_drafts(st.session_state.get("auth_user", "admin"), made)   # 다시 불러오기용 저장
+                st.session_state["succ_made"] = made
+                st.success(f"{len(made)}건 본문 생성 완료 — 아래 미리보기 확인 후 게시하세요."
+                           + (f"  · 실패 {fail}건" if fail else ""))
+            else:
+                st.error("본문 생성에 실패했습니다. 다시 시도해 주세요.")
+                if st.session_state.get("auth_user") == "admin" and _SUCCESS_LAST_ERR:
+                    st.caption(f"(관리자 참고) {_SUCCESS_LAST_ERR}")
+    elif titles:
+        st.info("만들 제목을 체크한 뒤 ‘본문 생성’을 누르세요.")
+
+    # ── 4) 미리보기 · 홈페이지 게시 ──
     made = st.session_state.get("succ_made") or []
     if made:
-        st.divider()
-        st.markdown('<div class="big-section">생성된 원고 미리보기</div>', unsafe_allow_html=True)
+        st.markdown('<div class="big-section">4) 미리보기 · 게시</div>', unsafe_allow_html=True)
+        cid, _ = _qna_creds()
+        if not cid:
+            st.info("게시하려면 Streamlit Secrets에 [qna_board] id/pw 가 필요합니다.")
         for it in made:
             cat_i, res_i, title_i = it.get("cat", ""), it.get("result", ""), it.get("title", "")
+            has_img = "결과 도장 첨부" if success_image_path(res_i) else "본문만(이미지 없음)"
             with st.expander(f"[{cat_i}·{res_i}]  {title_i}", expanded=(len(made) == 1)):
+                st.caption(f"결과: {res_i} · {has_img}")
                 body = success_detail_html(it, corpus)
                 components.html(
                     f"<div style='background:{SURF};border:1px solid {LINE};border-radius:8px;"
@@ -6215,7 +6354,36 @@ def _success_gen_tab(corpus):
                     f"<div style='color:{GOLD};font-weight:700'>[{cat_i}] · 결과: {res_i}</div>"
                     f"<h3 style='margin:.3rem 0'>{title_i}</h3><hr style='border-color:{LINE}'>"
                     f"{body}</div>", height=480, scrolling=True)
-        st.caption("게시는 '검수 대기열' 탭에서 승인하세요.")
+        if st.button(f"{len(made)}건 홈페이지 게시", key="succ_write_up", type="primary",
+                     disabled=not cid):
+            prog = st.progress(0.0)
+            done = fail = 0
+            for n, it in enumerate(made):
+                try:
+                    title = it.get("title", "")
+                    catc = it.get("cat", sel)
+                    result = it.get("result", "")
+                    detail = success_detail_html(it, corpus)
+                    summary = qna_summary_html(it.get("summary_lines", []))
+                    wid = success_upload(title, catc, detail, summary, result,
+                                         image_path=success_image_path(result))
+                    try:
+                        log_change(st.session_state.get("auth_user", "admin"), "성공사례",
+                                   f"게시: {title}", f"wr_id={wid} 분류={catc} 결과={result}", "원고 생성·게시")
+                    except Exception:
+                        pass
+                    done += 1
+                except Exception as e:
+                    fail += 1
+                    st.error(f"[{str(it.get('title',''))[:26]}] 게시 실패: {e}")
+                prog.progress((n + 1) / len(made))
+            try:
+                success_board_posts.clear()
+            except Exception:
+                pass
+            st.session_state.pop("succ_made", None)
+            st.success(f"{done}건 게시 완료" + (f" · 실패 {fail}" if fail else ""))
+            st.rerun()
 
 
 def _success_review_tab(corpus):
