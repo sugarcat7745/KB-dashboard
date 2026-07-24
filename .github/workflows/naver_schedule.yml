@@ -1,0 +1,38 @@
+name: naver-schedule
+
+# 그룹 요일/시간 타게팅(스케줄) 조회 — 읽기전용.
+on:
+  workflow_dispatch:
+    inputs:
+      probe:
+        description: "프로브(구조덤프)? (1/0)"
+        required: false
+        default: "1"
+      only_on:
+        description: "켜진 것만? (yes 권장)"
+        required: false
+        default: "yes"
+      sample:
+        description: "프로브 샘플 수"
+        required: false
+        default: "6"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests
+      - name: 스케줄 조회
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          PROBE:   ${{ inputs.probe }}
+          ONLY_ON: ${{ inputs.only_on == 'no' && '0' || '1' }}
+          SAMPLE:  ${{ inputs.sample }}
+        run: python naver_schedule.py
