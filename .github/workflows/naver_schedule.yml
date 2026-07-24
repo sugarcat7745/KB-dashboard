@@ -16,6 +16,10 @@ on:
         description: "프로브 샘플 수"
         required: false
         default: "6"
+      only_camp:
+        description: "특정 캠페인만 (예: 보이스피싱_1117)"
+        required: false
+        default: ""
 
 jobs:
   run:
@@ -35,4 +39,5 @@ jobs:
           PROBE:   ${{ inputs.probe }}
           ONLY_ON: ${{ inputs.only_on == 'no' && '0' || '1' }}
           SAMPLE:  ${{ inputs.sample }}
+          ONLY_CAMP: ${{ inputs.only_camp }}
         run: python naver_schedule.py
