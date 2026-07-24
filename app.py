@@ -4777,7 +4777,16 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
                   system=sysp, messages=[{"role": "user", "content": usr}])
             txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
             arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
-            return [str(x) for x in arr]
+            out = []
+            for x in arr:
+                # 모델이 '키워드 | 질문' 문자열 대신 {keyword,question} 객체로 답하기도 함 → 둘 다 수용
+                if isinstance(x, dict):
+                    _kw = str(x.get("keyword") or x.get("키워드") or "").strip()
+                    _q = str(x.get("question") or x.get("질문") or "").strip()
+                    out.append(f"{_kw} | {_q}" if (_kw and _q) else str(x))
+                else:
+                    out.append(str(x))
+            return out
         except Exception:
             return []
 

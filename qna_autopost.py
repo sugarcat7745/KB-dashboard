@@ -290,7 +290,13 @@ def _gen_question(cli, keyword, cat, existing):
                                     messages=[{"role": "user", "content": f"키워드: {keyword} (분류: {cat})"}])
             txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
             for t in json.loads(txt[txt.find("["):txt.rfind("]") + 1]):
-                t = str(t)
+                # 모델이 '키워드 | 질문' 문자열 대신 {keyword,question} 객체로 답하기도 함 → 둘 다 수용
+                if isinstance(t, dict):
+                    _kw = str(t.get("keyword") or t.get("키워드") or "").strip()
+                    _q = str(t.get("question") or t.get("질문") or "").strip()
+                    t = f"{_kw} | {_q}" if (_kw and _q) else str(t)
+                else:
+                    t = str(t)
                 if "|" in t and not _bad_question(t, prof):
                     return t
                 _log(f"      [제목탈락] {t[:70]}")   # 어떤 제목이 왜 걸리는지 추적용
