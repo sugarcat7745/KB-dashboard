@@ -44,11 +44,25 @@ from google.oauth2 import service_account
 PROJECT, DATASET = "kb-dashboard-499704", "kb_ads"
 
 
+def _load_sa_info(raw):
+    """GCP_SA_JSON 값을 형식에 관계없이 안전하게 dict로. (환경변수 .env가 따옴표를 안 벗기거나
+    base64로 넣어도 동작하도록 방어적으로 파싱.)"""
+    raw = str(raw).strip()
+    # 앞뒤를 감싼 따옴표 제거(.env가 안 벗기는 경우)
+    if len(raw) >= 2 and raw[0] in "'\"" and raw[-1] == raw[0]:
+        raw = raw[1:-1].strip()
+    try:
+        return json.loads(raw)
+    except Exception:
+        import base64
+        return json.loads(base64.b64decode(raw))     # base64로 넣은 경우
+
+
 def _bq(creds_path=None):
     if creds_path:
         info = json.load(open(creds_path, encoding="utf-8"))
     else:
-        info = json.loads(os.environ["GCP_SA_JSON"])
+        info = _load_sa_info(os.environ["GCP_SA_JSON"])
     creds = service_account.Credentials.from_service_account_info(info)
     return bigquery.Client(project=PROJECT, credentials=creds)
 
