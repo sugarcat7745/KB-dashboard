@@ -18,6 +18,7 @@ BID = int(os.environ.get("BID", "23500"))
 ONLY_CAT = os.environ.get("ONLY_CAT", "성범죄").strip()
 REGION_ON = os.environ.get("REGION", "1") == "1"
 ONLY_ON = os.environ.get("ONLY_ON", "1") == "1"
+THRESH = int(os.environ.get("THRESH", "20"))   # 죄명별 기존등록 이 이상이면 '촘촘'→확장 스킵
 CHUNK = 90
 
 # 카테고리 코어 죄명/유형
@@ -128,9 +129,6 @@ def main():
     print(f"=== 대량 조합확장 · {cat} · {'실제등록' if APPLY else '드라이런'} · 입찰 {BID:,} · 지역조합 {'ON' if REGION_ON else 'OFF'} ===\n")
     if cat not in CORE:
         print(f"코어 미정의 카테고리: {cat}"); return
-    cands = build_candidates(cat)
-    print(f"조합 후보 {len(cands):,}개 생성 (중복 제거 후)\n")
-
     camps = _get("/ncc/campaigns")
     if not isinstance(camps, list):
         print("캠페인 조회 실패:", camps); return
@@ -159,6 +157,20 @@ def main():
                 if sub in g["name"] and "여자" not in g["name"] and "피해" not in g["name"]:
                     return g
         return groups[0] if groups else None
+
+    # 죄명별 기존등록 밀도 → '촘촘'(THRESH 이상)은 확장 스킵(근접중복 방지)
+    def dens(core):
+        cn = norm(core)
+        return sum(1 for nk in global_reg if cn in nk)
+    thin_cores, rich_cores = [], []
+    for core in CORE[cat]:
+        (rich_cores if dens(core) >= THRESH else thin_cores).append(core)
+    print(f"죄명 분류(THRESH {THRESH}): 확장대상(빈) {len(thin_cores)} · 스킵(촘촘) {len(rich_cores)}")
+    print(f"  확장대상: {', '.join(thin_cores)}")
+    print(f"  스킵(이미촘촘): {', '.join(rich_cores)}\n")
+
+    cands = [(c, k) for c, k in build_candidates(cat) if c in set(thin_cores)]
+    print(f"조합 후보 {len(cands):,}개 (빈 죄명만)\n")
 
     # 신규만 필터 + 그룹배치
     from collections import defaultdict
