@@ -262,7 +262,7 @@ def _reco_keyword(cli, cat, existing, with_region, focus_qtype=None):
         m = cli.messages.create(model=MODEL, max_tokens=300, system=sysp,
                                 messages=[{"role": "user", "content": usr}])
         txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
-        arr = [str(x).strip() for x in json.loads(txt[txt.find("["):txt.rfind("]") + 1]) if str(x).strip()]
+        arr = [c for c in (_clean_kw(x) for x in json.loads(txt[txt.find("["):txt.rfind("]") + 1])) if c]
         return arr
     except Exception as e:
         _log("  [reco 오류]", e); return []
@@ -270,6 +270,22 @@ def _reco_keyword(cli, cat, existing, with_region, focus_qtype=None):
 
 _TITLE_KW_KEYS = ("keyword", "키워드", "category", "카테고리", "topic", "주제", "title", "제목", "subject")
 _TITLE_Q_KEYS = ("question", "질문", "q", "질의")
+
+
+def _clean_kw(x):
+    """추천 키워드를 깨끗한 짧은 명사구로 정규화(모델이 객체·'키워드|질문'·'?' 등으로 흐트러뜨려도).
+    dict면 키워드 필드, 문자열이면 '|' 왼쪽만, '?'·'변호사' 제거."""
+    if isinstance(x, dict):
+        for k in _TITLE_KW_KEYS:
+            v = str(x.get(k, "") or "").strip()
+            if v:
+                x = v; break
+        else:
+            vals = [str(v).strip() for v in x.values() if str(v).strip()]
+            x = vals[0] if vals else ""
+    s = str(x).split("|")[0]                     # '키워드 | 질문'이 섞여오면 왼쪽만
+    s = re.sub(r"\s*변호사\s*$", "", s.replace("?", "").replace("？", "")).strip()
+    return s
 
 
 def _title_from_item(t):
@@ -305,9 +321,8 @@ def _gen_question(cli, keyword, cat, existing):
             "넓은 법률 상식보다 '특정 상황의 문제를 해결하는' 실무형을 우선하라(생성형 AI가 인용하기 좋다). "
             "예: '~할 때 반드시 확인할 N가지', '~하기 전에 넣어야 할 항목', '~가 무효가 되는 경우', "
             "'~일 때 민사·형사 쟁점 비교'처럼 좁고 구체적인 문제해결형. " + ft + QNA_FIDELITY +
-            "\n[출력] JSON 배열. 각 항목은 객체: "
-            '{"keyword":"짧은 명사구(5~18자, 상황서술문·물음표·분류명 금지)","question":"구체 정황이 담긴 질문?"}. '
-            "keyword는 사건 주제를 가리키는 짧은 명사구, question에 상황·정황을 담아라. 설명 없이 JSON만.")
+            "\n각 항목은 '키워드 | 질문?' 형식의 한 줄 문자열(키워드=짧은 명사구, 질문=구체 정황). "
+            "JSON 문자열 배열만 출력하라(설명·객체 금지). 예: [\"음주운전 재범 처벌 | 2회 적발 시 형량은 어떻게 되나요?\"]")
     for _ in range(3):
         try:
             m = cli.messages.create(model=MODEL, max_tokens=600, system=sysp,

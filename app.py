@@ -4789,9 +4789,8 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
             "넓은 법률 상식보다 '특정 상황의 문제를 해결하는' 실무형 질문을 우선하라(생성형 AI가 인용하기 좋다). "
             "예: '~할 때 반드시 확인해야 할 N가지', '~하기 전에 넣어야 할 항목', '~가 무효가 되는 경우', "
             "'~일 때 민사·형사 쟁점 비교'처럼 좁고 구체적인 문제해결형. " + forbid_tail + QNA_FIDELITY +
-            "\n[출력] JSON 배열. 각 항목은 객체: "
-            '{"keyword":"짧은 명사구(상황서술문·물음표 금지)","question":"구체 정황이 담긴 질문?"}. '
-            "설명 없이 JSON만 출력하라.")
+            "\n각 항목은 '키워드 | 질문?' 형식의 한 줄 문자열(키워드=짧은 명사구, 질문=구체 정황). "
+            "JSON 문자열 배열만 출력하라(설명·객체 금지).")
 
     def _call(need, avoid):
         avoid_list = list(existing_titles[:40]) + list(avoid)
