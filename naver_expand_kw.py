@@ -163,10 +163,18 @@ def main():
                 groups.append({"name": str(g.get("name", "")), "id": gid, "kwset": kwset})
 
     def target_groups(core):
-        """세부주제 베이스에 매칭되는 ON 그룹 전부(남자·여자 양쪽)."""
+        """성별분리 세부주제(성범죄/아청/의제)는 남자·여자 양쪽. 성별없는(디지털/성매매)은 대표 1곳."""
         base = route_base(core)
-        subs = BASE_MATCH.get(base, [base])
-        out = [g for g in groups if any(s in g["name"] for s in subs)]
+        if base in ("성범죄", "아청법", "의제강간"):
+            want = [base + "_남자", base + "_여자"]
+            out = [g for g in groups if any(w in g["name"] for w in want)]
+        else:
+            cands = [g for g in groups if base in g["name"]]
+            main = [g for g in cands if "메인" in g["name"]]
+            if not main:
+                main = [g for g in cands if not any(x in g["name"]
+                        for x in ["_정보", "_지역", "_상담", "_소송", "_변호사"])]
+            out = main[:1] or cands[:1]
         return out or ([groups[0]] if groups else [])
 
     # 죄명별 기존등록 밀도 → '촘촘'(THRESH 이상)은 확장 스킵(근접중복 방지)
