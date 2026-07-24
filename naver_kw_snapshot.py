@@ -5,7 +5,12 @@
       이게 '신규 키워드 확인 + 롤백'의 기반이다. 켜는 날부터 쌓이며, 과거는 소급 불가.
 
 동작: 캠페인→광고그룹→키워드 전체를 순회, 각 키워드를 snapshot_date와 함께 적재(멱등: 같은 날
-      재실행 시 그 날짜분을 지우고 다시 넣음 → WRITE_TRUNCATE 아님, 날짜 파티션 개념으로 관리).
+      이미 있으면 스킵, FORCE=1이면 강제 추가 — 무료티어 DML 금지라 DELETE 미사용).
+
+컬럼: 존재(kwid·keyword·category·campaign·adgroup) + 상태(on·grp_on) + 예산·입찰(bid_amt·
+      use_grp_bid·grp_bid·grp_budget·grp_use_budget·camp_budget·camp_use_budget).
+      → 전날 대비 diff로 '추가/삭제 키워드'뿐 아니라 '입찰가·예산·ON/OFF 변경'까지 추적·롤백 가능.
+      (신규 컬럼은 load append autodetect가 자동 추가; 과거 행은 NULL로 채워짐)
 
 env: NAVER_API_KEY/SECRET/CUSTOMER_ID, GCP_SA_JSON
 """
@@ -20,9 +25,13 @@ PROJECT, DATASET, TABLE = "kb-dashboard-499704", "kb_ads", "naver_kw_snapshot"
 CAT_PREFIX = [
     ("A.메인", "메인"), ("B.일반형사", "형사"), ("C.폭행", "폭행"), ("D.상해", "상해"),
     ("E.부동산", "부동산"), ("F.성범죄", "성범죄"), ("G.금융", "금융"),
-    ("H.보이스피싱", "보피"), ("J.외국인", "외국인"), ("K.건설", "건설"), ("L.학교폭력", "학폭"),
+    ("H.보이스피싱", "보피"), ("I.음주운전", "음주운전"), ("J.외국인", "외국인"),
+    ("K.건설", "건설"), ("L.학교폭력", "학폭"),
     ("XX.교통사고", "교통사고"), ("XX.군범죄", "군범죄"), ("XX.도박", "도박"),
     ("XX.이혼", "이혼"), ("XX.의료분쟁", "의료분쟁"), ("XX.하자", "하자보수"),
+    ("XX.회생파산", "회생파산"),
+    ("00.자사명", "자사"), ("00.브검", "브랜드검색"), ("00.브랜드", "브랜드검색"),
+    ("00.플레이스", "플레이스"),
 ]
 
 
@@ -69,15 +78,27 @@ def main():
     if not isinstance(camps, list):
         print("캠페인 조회 실패:", camps); return
 
+    def _i(v):  # 정수화(None/빈값은 None 유지 → 롤백 시 '값 없음'과 0을 구분)
+        try:
+            return int(v) if v is not None and v != "" else None
+        except Exception:
+            return None
+
     rows = []
     for c in camps:
         cname = str(c.get("name", "")).strip()
         cat = cat_of(cname)
         cid = c.get("nccCampaignId")
+        camp_budget = _i(c.get("dailyBudget"))            # 캠페인 일예산(0=무제한이 아니라 미사용일 수 있음)
+        camp_use_budget = bool(c.get("useDailyBudget"))
         gs = _get("/ncc/adgroups", {"nccCampaignId": cid}) or []; time.sleep(0.05)
         for g in (gs if isinstance(gs, list) else []):
             gid = g.get("nccAdgroupId")
             gname = str(g.get("name", "")).strip()
+            grp_bid = _i(g.get("bidAmt"))                 # 광고그룹 기본입찰가
+            grp_budget = _i(g.get("dailyBudget"))         # 광고그룹 일예산
+            grp_use_budget = bool(g.get("useDailyBudget"))
+            grp_on = 0 if g.get("userLock") else 1        # 그룹 ON/OFF
             kws = _get("/ncc/keywords", {"nccAdgroupId": gid}) or []; time.sleep(0.04)
             for k in (kws if isinstance(kws, list) else []):
                 rows.append({
@@ -89,9 +110,20 @@ def main():
                     "adgroup": gname,
                     "on": 0 if k.get("userLock") else 1,           # 1=on, 0=off(userLock)
                     "reg_date": str(k.get("regTm", ""))[:10],       # 참고용(신뢰 낮음)
+                    # --- 예산·입찰 변경추적/롤백용(전 계층 현재값 스냅샷) ---
+                    "bid_amt": _i(k.get("bidAmt")),                 # 키워드 입찰가(그룹입찰 사용시 None일 수 있음)
+                    "use_grp_bid": bool(k.get("useGroupBidAmt")),   # 그룹입찰가 사용 여부
+                    "grp_bid": grp_bid,                             # 소속 그룹 기본입찰가
+                    "grp_budget": grp_budget,                       # 소속 그룹 일예산
+                    "grp_use_budget": grp_use_budget,
+                    "grp_on": grp_on,                              # 소속 그룹 ON/OFF
+                    "camp_budget": camp_budget,                     # 소속 캠페인 일예산
+                    "camp_use_budget": camp_use_budget,
                 })
-    df = pd.DataFrame(rows, columns=["snapshot_date", "kwid", "keyword", "category",
-                                     "campaign", "adgroup", "on", "reg_date"])
+    df = pd.DataFrame(rows, columns=[
+        "snapshot_date", "kwid", "keyword", "category", "campaign", "adgroup",
+        "on", "reg_date", "bid_amt", "use_grp_bid", "grp_bid", "grp_budget",
+        "grp_use_budget", "grp_on", "camp_budget", "camp_use_budget"])
     print(f"키워드 {len(df):,}개 수집")
     if df.empty:
         print("⚠️ 0건 — 적재 생략(빈 스냅샷 방지)"); return
@@ -109,7 +141,11 @@ def main():
         print(f"이미 {snap} 스냅샷 {exists:,}행 존재 → 스킵(FORCE=1로 강제 가능)"); return
     bq.load_table_from_dataframe(
         df, table_id,
-        job_config=bigquery.LoadJobConfig(write_disposition="WRITE_APPEND", autodetect=True),
+        # 기존 테이블(구 8컬럼)에 신규 컬럼 추가 append → ALLOW_FIELD_ADDITION 필수(없으면 스키마불일치 실패).
+        job_config=bigquery.LoadJobConfig(
+            write_disposition="WRITE_APPEND", autodetect=True,
+            schema_update_options=[bigquery.SchemaUpdateOption.ALLOW_FIELD_ADDITION],
+        ),
     ).result()
     print(f"✅ {table_id} · {snap} {len(df):,}행 적재")
 
