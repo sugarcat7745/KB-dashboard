@@ -7453,93 +7453,88 @@ def render_changelog():
 
 
 def render_newkw_track():
-    """관리자 전용 — 최근 추가한 신규 키워드의 일별 노출·소진·전환 추적.
-    대상 목록은 BQ new_kw(매일 자동 적재: 등록일 기준 신규 키워드)에서 읽고,
-    성과는 ad_keyword와 JOIN. 앞으로 키워드를 더 추가해도 자동 반영."""
-    tab_header("fa-seedling", "신규 키워드 추적",
-               "최근 추가 키워드 · 일별 노출·소진·전환", color="#C8A24B", rgb="200,162,75")
+    """관리자 전용 — 최근 내가 추가한 키워드가 '잘 들어갔나 + 성과가 어떤가'를 키워드별로 확인.
+    new_kw(등록일 기준 신규) LEFT JOIN ad_keyword → 노출 안 된 키워드까지 전부 표시(들어갔는지 검증)."""
+    tab_header("fa-seedling", "신규 키워드 성과",
+               "최근 추가한 키워드가 잘 들어갔나 · 노출·클릭·소진 확인", color="#C8A24B", rgb="200,162,75")
 
     try:
-        nk = bq(f"SELECT keyword, category FROM `{BQ_PROJECT}.{BQ_DATASET}.new_kw`")
-    except Exception as e:
-        nk = pd.DataFrame()
-        if st.session_state.get("auth_user") == "admin":
-            st.caption(f"(관리자 참고) new_kw 조회 오류: {type(e).__name__}: {e}")
-    if nk is None or nk.empty:
-        st.info("신규 키워드 테이블(new_kw)이 아직 없습니다. "
-                "적재 워크플로(naver-newkw-to-bq)가 한 번 실행되면 표시됩니다.")
-        return
-    regcnt = nk.groupby("category")["keyword"].nunique()
-    total_reg = int(nk["keyword"].nunique())
-    st.caption(f"추적 대상: 신규 키워드 {total_reg:,}개(네이버, 자동 적재). "
-               "검수 통과·노출이 시작되면 일별로 쌓입니다. 전환은 네이버 전환추적 설정 시 집계.")
-
-    try:
-        df = bq(f"SELECT k.date AS date, k.keyword AS keyword, n.category AS category, "
-                f"SUM(k.impressions) AS imp, SUM(k.clicks) AS clk, "
-                f"SUM(k.cost) AS cost, SUM(k.conversions) AS conv "
-                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` k "
-                f"JOIN `{BQ_PROJECT}.{BQ_DATASET}.new_kw` n ON k.keyword = n.keyword "
-                f"WHERE k.media='네이버' "
-                f"GROUP BY date, keyword, category")
+        # LEFT JOIN: 성과 없어도(=아직 노출 전) 신규 키워드는 전부 나온다.
+        df = bq(f"SELECT n.keyword AS keyword, n.category AS category, CAST(n.reg_date AS STRING) AS reg_date, "
+                f"IFNULL(SUM(k.impressions),0) AS imp, IFNULL(SUM(k.clicks),0) AS clk, "
+                f"IFNULL(SUM(k.cost),0) AS cost, IFNULL(SUM(k.conversions),0) AS conv "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.new_kw` n "
+                f"LEFT JOIN `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` k "
+                f"  ON k.keyword = n.keyword AND k.media='네이버' "
+                f"GROUP BY keyword, category, reg_date")
     except Exception as e:
         df = pd.DataFrame()
         if st.session_state.get("auth_user") == "admin":
             st.caption(f"(관리자 참고) 조회 오류: {type(e).__name__}: {e}")
-
     if df is None or df.empty:
-        st.info("아직 노출된 신규 키워드가 없습니다. 검수 통과 후 노출이 시작되면 "
-                "일별 노출·소진·전환이 여기에 표시됩니다.")
+        st.info("신규 키워드 데이터(new_kw)가 아직 없습니다. 적재 워크플로(naver-newkw-to-bq) 실행 후 표시됩니다.")
         return
 
     for c in ["imp", "clk", "cost", "conv"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    df["exposed"] = df["imp"] > 0
+    total = len(df); exposed = int(df["exposed"].sum())
 
+    # ── 요약 ──
     k = st.columns(5)
-    kpi(k[0], "fa-eye", "총 노출", f"{int(df['imp'].sum()):,}")
-    kpi(k[1], "fa-arrow-pointer", "총 클릭", f"{int(df['clk'].sum()):,}")
-    kpi(k[2], "fa-won-sign", "총 소진", f"{int(df['cost'].sum()):,}", "원")
-    kpi(k[3], "fa-bullseye", "총 전환", f"{int(df['conv'].sum()):,}")
-    kpi(k[4], "fa-key", "노출된 키워드", f"{df['keyword'].nunique():,}", f"/{total_reg:,}")
+    kpi(k[0], "fa-key", "신규 키워드", f"{total:,}", "개", desc="최근 등록분 전체")
+    kpi(k[1], "fa-eye", "노출된 키워드", f"{exposed:,}", "개", desc=f"미노출 {total-exposed:,}개")
+    kpi(k[2], "fa-chart-simple", "노출", f"{int(df['imp'].sum()):,}")
+    kpi(k[3], "fa-won-sign", "소진", f"{int(df['cost'].sum()):,}", "원")
+    kpi(k[4], "fa-bullseye", "전환", f"{int(df['conv'].sum()):,}")
+    st.caption(f"등록일 {df['reg_date'].min()} ~ {df['reg_date'].max()} · "
+               "LEFT JOIN이라 아직 노출 전(미노출) 키워드도 표에 나옵니다 → '잘 들어갔는지' 확인용.")
 
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 추세</div>',
-                unsafe_allow_html=True)
-    daily = (df.groupby("date").agg(imp=("imp", "sum"), cost=("cost", "sum"),
-             conv=("conv", "sum")).reset_index().sort_values("date"))
-    fig = go.Figure()
-    fig.add_bar(x=daily["date"], y=daily["cost"], name="소진(원)", marker_color="#C8A24B")
-    fig.add_scatter(x=daily["date"], y=daily["imp"], name="노출", yaxis="y2",
-                    mode="lines+markers", line=dict(color="#3182F6", width=2))
-    fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False))
-    st.plotly_chart(fig_theme(fig, 300), use_container_width=True,
-                    config={"displayModeBar": False})
+    # ── 필터 ──
+    f1, f2, f3 = st.columns([1.2, 1.2, 2.6])
+    cats = ["전체"] + df.groupby("category")["cost"].sum().sort_values(ascending=False).index.tolist()
+    fcat = f1.selectbox("카테고리", cats, key="newkw_cat")
+    fexp = f2.selectbox("노출 여부", ["전체", "노출된 것만", "미노출만"], key="newkw_exp")
+    fkw = f3.text_input("키워드 검색(포함)", key="newkw_kw", placeholder="예: 특수강간 / 보이스피싱")
 
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 카테고리별</div>',
-                unsafe_allow_html=True)
-    g = (df.groupby("category").agg(imp=("imp", "sum"), clk=("clk", "sum"), cost=("cost", "sum"),
-         conv=("conv", "sum"), kws=("keyword", "nunique")).reset_index().sort_values("cost", ascending=False))
-    cols = ["카테고리", "등록수", "노출된KW", "노출", "클릭", "소진(원)", "전환"]
-    rows = []
-    for _, r in g.iterrows():
-        rn = int(regcnt.get(r["category"], 0))
-        rows.append([(r["category"], r["category"]), (f"{rn:,}", rn),
-                     (f"{int(r['kws']):,}", int(r['kws'])), (f"{int(r['imp']):,}", int(r['imp'])),
-                     (f"{int(r['clk']):,}", int(r['clk'])), (f"{int(r['cost']):,}", int(r['cost'])),
-                     (f"{int(r['conv']):,}", int(r['conv']))])
-    sortable_table(cols, rows, height=min(420, 70 + len(rows) * 38))
+    view = df
+    if fcat != "전체":
+        view = view[view["category"] == fcat]
+    if fexp == "노출된 것만":
+        view = view[view["exposed"]]
+    elif fexp == "미노출만":
+        view = view[~view["exposed"]]
+    if fkw.strip():
+        view = view[view["keyword"].astype(str).str.contains(fkw.strip(), case=False, na=False)]
 
-    st.markdown('<div class="sec-title"><i class="fa-solid fa-ranking-star"></i> 키워드 상위(소진순 100)</div>',
+    # ── 카테고리별 요약(노출/미노출 개수) ──
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 카테고리별 (들어간 개수 · 노출 시작 여부)</div>',
                 unsafe_allow_html=True)
-    kwg = (df.groupby(["keyword", "category"]).agg(imp=("imp", "sum"), clk=("clk", "sum"),
-           cost=("cost", "sum"), conv=("conv", "sum")).reset_index()
-           .sort_values("cost", ascending=False).head(100))
-    cols2 = ["키워드", "카테고리", "노출", "클릭", "소진(원)", "전환"]
+    g = df.groupby("category").agg(n=("keyword", "count"), exp=("exposed", "sum"),
+                                   imp=("imp", "sum"), cost=("cost", "sum")).reset_index().sort_values("n", ascending=False)
+    crows = [[(r["category"], r["category"]), (f"{int(r['n']):,}", int(r['n'])),
+              (f"{int(r['exp']):,}", int(r['exp'])), (f"{int(r['n']-r['exp']):,}", int(r['n']-r['exp'])),
+              (f"{int(r['imp']):,}", int(r['imp'])), (f"{int(r['cost']):,}", int(r['cost']))] for _, r in g.iterrows()]
+    sortable_table(["카테고리", "신규", "노출됨", "미노출", "노출", "소진(원)"], crows, height=min(400, 70 + len(crows) * 36))
+
+    # ── 키워드별 성과 표 ──
+    st.markdown(f'<div class="sec-title"><i class="fa-solid fa-list"></i> 키워드별 성과 '
+                f'<span style="color:{MUTED};font-weight:600;font-size:12px;">— 필터 결과 {len(view):,}개'
+                f'{" (소진순 상위 500만 표시)" if len(view) > 500 else ""}</span></div>', unsafe_allow_html=True)
+    vv = view.sort_values(["cost", "imp"], ascending=False).head(500)
+    cols2 = ["키워드", "카테고리", "등록일", "노출", "클릭", "CTR(%)", "소진(원)", "CPC", "전환"]
     rows2 = []
-    for _, r in kwg.iterrows():
-        rows2.append([(r["keyword"], r["keyword"]), (r["category"], r["category"]),
-                      (f"{int(r['imp']):,}", int(r['imp'])), (f"{int(r['clk']):,}", int(r['clk'])),
-                      (f"{int(r['cost']):,}", int(r['cost'])), (f"{int(r['conv']):,}", int(r['conv']))])
-    sortable_table(cols2, rows2, height=min(520, 70 + len(rows2) * 38))
+    for _, r in vv.iterrows():
+        imp, clk, cost = int(r["imp"]), int(r["clk"]), int(r["cost"])
+        ctr = (clk / imp * 100) if imp else 0.0
+        cpc = (cost / clk) if clk else 0
+        kw_disp = r["keyword"] if imp else f'🕘 {r["keyword"]}'   # 미노출은 시계 표시(들어갔지만 아직 노출 전)
+        rows2.append([(kw_disp, str(r["keyword"])), (r["category"], r["category"]),
+                      (str(r["reg_date"]), str(r["reg_date"])),
+                      (f"{imp:,}", imp), (f"{clk:,}", clk), (f"{ctr:.1f}", ctr),
+                      (f"{cost:,}", cost), (f"{int(cpc):,}", int(cpc)), (f"{int(r['conv']):,}", int(r["conv"]))])
+    sortable_table(cols2, rows2, height=min(620, 70 + len(rows2) * 34))
+    st.caption("🕘 = 등록은 됐으나 아직 노출 전. 헤더 클릭으로 정렬. 전환은 네이버 전환추적 설정 시 집계.")
 
 
 def main():
