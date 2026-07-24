@@ -4698,6 +4698,36 @@ def _qna_related_html(cat, cur_title, cur_core, corpus, n=3):
         return ""
 
 
+# ── 작성·감수 변호사 표기(E-E-A-T·YMYL 신뢰신호) ─────────────────────────
+#  검색·생성형 AI는 법률(YMYL) 콘텐츠에서 '실명·자격 저자'를 신뢰신호로 크게 반영한다.
+#  분야별로 전문분야가 맞는 대표변호사를 작성·감수자로 표기(전문가소개 페이지 기준).
+KB_LAWYERS = {
+    "이성기": "건설·부동산·형사",
+    "홍민호": "형사·금융·건설",
+    "안진우": "형사·암호화폐·금융사기",
+}
+KB_CAT_LAWYER = {
+    "형사": "홍민호", "성범죄": "이성기", "소년범죄": "안진우",
+    "금융범죄": "안진우", "건설·부동산분쟁": "이성기", "회생·파산": "홍민호",
+    "민사·행정": "홍민호", "이혼·가사": "이성기", "행정소송": "홍민호",
+    "소액및손해배상": "이성기", "학교폭력": "안진우",
+    "음주운전·교통사고": "안진우", "외국인·출입국": "홍민호",
+}
+KB_LAWYER_DEFAULT = "이성기"   # 광고책임변호사
+
+
+def _qna_byline_html(cat):
+    """게시 본문 하단 '작성·감수 변호사 + 최종확인일' 블록(신뢰신호). 분야별 담당 대표변호사."""
+    name = KB_CAT_LAWYER.get(str(cat).strip(), KB_LAWYER_DEFAULT)
+    spec = KB_LAWYERS.get(name, "")
+    today = datetime.now().strftime("%Y년 %m월 %d일")
+    S = "font-size: 18px;"
+    return (f'<h2><span style="{S}">작성·감수 변호사</span></h2><br /><p>&nbsp;</p><br />'
+            f'<p><span style="font-size:16px;color:#555;">본 글은 법무법인 KB '
+            f'<strong>{name} 대표변호사</strong>({spec})가 검토·감수했습니다. '
+            f'· 최종 확인일 {today}</span></p><br /><p>&nbsp;</p><br />')
+
+
 def qna_detail_html(keyword, sections, faq=None, table=None, cat=None, laws=None, related_html=""):
     """상세 답변 필드(wr_content) 본문 — 소제목+문단(+표+FAQ+관련법령+관련질문). 정상글 포맷 유지.
     개행문자를 넣지 않는다: 게시판이 자동 줄바꿈(nl2br)을 적용해도 <br> 이중이 안 되도록.
@@ -4721,6 +4751,7 @@ def qna_detail_html(keyword, sections, faq=None, table=None, cat=None, laws=None
     out.append(_qna_faq_html(faq))                 # FAQ
     out.append(_qna_lawlinks_html(cat, laws))      # 관련 법령(출처) 링크
     out.append(related_html or "")                 # 관련 질문(내부 링크)
+    out.append(_qna_byline_html(cat))              # 작성·감수 변호사 + 최종확인일(신뢰신호)
     return "".join(out)
 
 
