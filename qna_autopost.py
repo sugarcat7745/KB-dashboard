@@ -153,7 +153,8 @@ def _bad_question(title, prof):
     # 왼쪽(키워드)이 '짧은 명사구'가 아니라 상황 서술문으로 새는 것 차단:
     #   너무 길거나('변호사' 접미 제외 22자 초과), 물음표/서술어미가 들어간 경우.
     kw_core = re.sub(r"\s*변호사$", "", kw).strip()
-    if len(kw_core) > 22 or "?" in kw or re.search(r"(했는데|하는데|인데|어요|아요|나요|까요|됐|됩니다|습니다)", kw):
+    # 명백한 '상황 서술문'만 차단(길이 넉넉히 35자, 물음표, 서술형 어미). 짧은 명사구는 통과.
+    if len(kw_core) > 35 or "?" in kw or re.search(r"(했는데|하는데|였는데|당했|드렸|었어요|어요|아요)", kw):
         return True
     if ("처벌과 대응" in q) or ("처벌 및 대응" in q) or ("처벌및대응" in q):
         return True
@@ -245,9 +246,9 @@ def _reco_keyword(cli, cat, existing, with_region, focus_qtype=None):
         reg_rule = f"키워드 맨 앞에 '{region}'을 자연스럽게 붙인 지역형 키워드로 만들어라(예: '{region} ○○'). "
     else:
         reg_rule = "지역명(도시·구 이름)을 붙이지 말고 지역 없는 일반 키워드로만 만들어라. "
-    # 각도 강제: 이번 회차는 지정된 질문유형만 다루고 다른 각도(특히 합의)는 피하게 한다.
-    angle_rule = (f"[이번 각도] 반드시 '{focus_qtype}' 관점의 주제만 뽑아라. 이 각도에서 벗어난 주제"
-                  "(특히 다른 회차에서 다룰 합의·처벌수위 등)는 피해라. " if focus_qtype else "")
+    # 각도 다양화(강제 아님·선호): 이번 회차는 지정 각도를 우선으로, 특히 합의로 쏠리지 않게.
+    angle_rule = (f"[이번 각도] '{focus_qtype}' 관점을 우선으로 뽑아라(합의 등 다른 회차 주제와 겹치지 않게). "
+                  if focus_qtype else "")
     seed = random.randint(1000, 9999)
     sysp = (f"너는 법무법인 KB QnA 게시판 '{cat}' 분야에 올릴 검색형 키워드를 뽑는다. 독자는 {prof['reader']}다. "
             f"규칙: 하나의 명확한 사건 주제만, 서로 다른 개념을 억지로 붙이지 말 것(예: '상간남'+'남편폭행' 금지). "
@@ -544,12 +545,14 @@ def main():
             core = re.sub(r"\s*변호사$", "", str(kw)).strip()
             title = _gen_question(cli, kw, cat, existing)
             if not title:
+                _log(f"  [{cat}] 후보 '{str(kw)[:18]}' → 제목 형식 탈락")
                 continue
             # 본문 소제목 키워드를 '제목의 왼쪽'과 일치시킨다(제목≠본문 키워드 불일치 방지).
             if "|" in title:
                 core = re.sub(r"\s*변호사\s*$", "", title.split("|")[0]).strip() or core
             ans = _gen_answer(cli, title, core, cat, verified)
             if not ans:
+                _log(f"  [{cat}] 후보 '{str(kw)[:18]}' → 답변 생성 실패")
                 continue
             # ── 자동 품질 게이트 ──
             secs = ans.get("sections") or []
