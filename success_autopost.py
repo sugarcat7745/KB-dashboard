@@ -107,8 +107,10 @@ def _allowed_results(cat):
     return out
 
 
-def _gen_case(cli, cat, existing_titles):
-    """완전생성 성공사례 1건(dict). 실패 시 None. (app.py success_gen_case 사본)"""
+def _gen_case(cli, cat, existing_titles, focus_result=None):
+    """완전생성 성공사례 1건(dict). 실패 시 None. (app.py success_gen_case 사본)
+    focus_result: 이번 사례가 낼 결과(같은 분야가 하루에 여러 번 나올 때 결과를 돌려
+                  집행유예·합의 등 한 결과로 쏠리지 않게)."""
     reader = READER.get(cat, "해당 분야 법률 문제를 겪는 의뢰인")
     allowed = _allowed_results(cat)
     avoid = ""
@@ -116,6 +118,9 @@ def _gen_case(cli, cat, existing_titles):
         recent = [str(t) for t in existing_titles if str(t).strip()][:40]
         if recent:
             avoid = "\n[중복 회피] 아래와 겹치지 않는 새 사례로:\n" + "\n".join("· " + t for t in recent)
+    # 결과·각도 다양성: 이번 사례는 지정 결과가 나오도록 사건을 구성(다른 회차와 결과가 겹치지 않게)
+    div = (f"\n[이번 결과·다양성] 이번 사례의 결과는 '{focus_result}'가 되도록 사건을 구성하라. "
+           "다른 회차에서 다룰 결과(특히 집행유예·합의)로 몰지 말고, 죄명·상황·전략도 새롭게 잡아라. " if focus_result else "")
     sysp = (
         f"너는 법무법인 KB의 콘텐츠 작성자다. '{cat}' 분야의 **성공사례(업무사례)** 한 건을 만든다. "
         "실제 특정 사건이 아니라, 이 분야에서 충분히 있을 법한 사건을 사실적으로 구성하라.\n"
@@ -130,7 +135,7 @@ def _gen_case(cli, cat, existing_titles):
         " 4. 대응 결과, (결과) — 의견서/주장 제출 → 판단 근거(불릿형 문단들) → 결정\n"
         " 5. 이 사건에서 (핵심)이 중요한 이유 — 일반 독자용 교훈\n"
         "[표현 제약] '최고·유일·1위·승소 보장·무료' 단정·보장 표현, 승소율·석방률 등 성과율, "
-        "'반드시 이긴다'식 보증, 前官(판·검사 출신) 영향력 암시, 미검증 수상·순위 표현 금지(변호사 광고규정)." + GEO_RULES + FIDELITY +
+        "'반드시 이긴다'식 보증, 前官(판·검사 출신) 영향력 암시, 미검증 수상·순위 표현 금지(변호사 광고규정)." + div + GEO_RULES + FIDELITY +
         "\n[출력] 아래 JSON만 출력(설명·코드블록 금지):\n"
         '{"crime":"죄명/사건명","result":"결과(목록 중 하나)","situation":"상황 한 줄(카드 캡션용)",'
         '"title":"제목(형식 준수)","summary_lines":["핵심요약 3줄","",""],'
@@ -215,8 +220,13 @@ def main():
     _log("오늘 분야:", cats)
     batch = uuid.uuid4().hex[:12]
     ok = skip = 0
+    cat_seen = {}                       # 분야별 등장 횟수(결과 순환용)
+    day_off = datetime.date.today().toordinal()   # 날짜별로 시작 결과를 돌려 매일 골고루
     for idx, cat in enumerate(cats):
-        item = _gen_case(cli, cat, existing)
+        allowed = _allowed_results(cat)
+        k = cat_seen.get(cat, 0); cat_seen[cat] = k + 1
+        focus = allowed[(k + day_off) % len(allowed)] if allowed else None
+        item = _gen_case(cli, cat, existing, focus_result=focus)
         good, why = _quality_ok(item, cat)
         if not good:
             skip += 1
