@@ -68,15 +68,14 @@ def main():
             gid = g.get("nccAdgroupId")
             if n >= SAMPLE:
                 print("\n(샘플 종료)"); return
-            tgts = g.get("targets") or []
-            # 시간/스케줄류 타겟(알려진 타입 외) 추출
-            other = [t for t in tgts if t.get("targetTp") not in KNOWN_TP]
             n += 1
+            tgts = _get(f"/ncc/adgroups/{gid}/targets"); time.sleep(0.12)
+            tgts = tgts if isinstance(tgts, list) else []
             print(f"■ {cname} > {g.get('name')} ({gid})")
             print(f"   targetTp들: {[t.get('targetTp') for t in tgts]}")
-            print(f"   targetSummary: {json.dumps(g.get('targetSummary'), ensure_ascii=False)}")
-            for t in other:
-                print(f"   ★비표준타겟 {t.get('targetTp')}: {json.dumps(t.get('target'), ensure_ascii=False)[:800]}")
+            for t in tgts:
+                if t.get("targetTp") not in ("MEDIA_TARGET",):
+                    print(f"   · {t.get('targetTp')}: {json.dumps(t.get('target'), ensure_ascii=False)[:900]}")
             print()
 
 
