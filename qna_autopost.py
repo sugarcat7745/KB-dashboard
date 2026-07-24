@@ -268,6 +268,32 @@ def _reco_keyword(cli, cat, existing, with_region, focus_qtype=None):
         _log("  [reco 오류]", e); return []
 
 
+_TITLE_KW_KEYS = ("keyword", "키워드", "category", "카테고리", "topic", "주제", "title", "제목", "subject")
+_TITLE_Q_KEYS = ("question", "질문", "q", "질의")
+
+
+def _title_from_item(t):
+    """모델이 문자열('키워드 | 질문') 또는 객체({keyword|category|...:..., question:...})로
+    답하는 경우를 모두 '키워드 | 질문' 문자열로 정규화. 실패 시 ''."""
+    if isinstance(t, str):
+        return t.strip()
+    if isinstance(t, dict):
+        def pick(keys):
+            for k in keys:
+                v = str(t.get(k, "") or "").strip()
+                if v:
+                    return v
+            return ""
+        kw, q = pick(_TITLE_KW_KEYS), pick(_TITLE_Q_KEYS)
+        if not (kw and q):  # 키 이름이 예상 밖이면 값 순서로(문자열 값 2개)
+            vals = [str(v).strip() for v in t.values() if str(v).strip()]
+            if len(vals) >= 2:
+                kw, q = vals[0], vals[-1]
+        if kw and q:
+            return f"{kw} | {q}"
+    return ""
+
+
 def _gen_question(cli, keyword, cat, existing):
     prof = _profile(cat)
     ft = ("특히 금지: '처벌과 대응은?' 및 '처벌·형량·구속·기소·전과·벌금·징역' 등 형사 개념(이 분야는 형사가 아니다), "
@@ -279,27 +305,20 @@ def _gen_question(cli, keyword, cat, existing):
             "넓은 법률 상식보다 '특정 상황의 문제를 해결하는' 실무형을 우선하라(생성형 AI가 인용하기 좋다). "
             "예: '~할 때 반드시 확인할 N가지', '~하기 전에 넣어야 할 항목', '~가 무효가 되는 경우', "
             "'~일 때 민사·형사 쟁점 비교'처럼 좁고 구체적인 문제해결형. " + ft + QNA_FIDELITY +
-            "\n[형식] 반드시 '키워드 | 질문?' 한 줄. "
-            f"'|' 왼쪽(키워드)은 주어진 키워드 '{keyword}'를 그대로 쓰거나 5~18자 짧은 명사구로만 다듬어라 "
-            "— 상황을 서술하는 문장(‘~했는데’,‘~어요’,‘~인데’ 등)이나 물음표를 왼쪽에 넣지 마라(그건 오른쪽 질문 자리다). "
-            f"왼쪽에 분류명('{cat}')을 반복하지 마라. 상황·정황은 전부 '|' 오른쪽 질문에 담아라. "
-            "JSON 배열(문자열)만.")
+            "\n[출력] JSON 배열. 각 항목은 객체: "
+            '{"keyword":"짧은 명사구(5~18자, 상황서술문·물음표·분류명 금지)","question":"구체 정황이 담긴 질문?"}. '
+            "keyword는 사건 주제를 가리키는 짧은 명사구, question에 상황·정황을 담아라. 설명 없이 JSON만.")
     for _ in range(3):
         try:
-            m = cli.messages.create(model=MODEL, max_tokens=500, system=sysp,
+            m = cli.messages.create(model=MODEL, max_tokens=600, system=sysp,
                                     messages=[{"role": "user", "content": f"키워드: {keyword} (분류: {cat})"}])
             txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
             for t in json.loads(txt[txt.find("["):txt.rfind("]") + 1]):
-                # 모델이 '키워드 | 질문' 문자열 대신 {keyword,question} 객체로 답하기도 함 → 둘 다 수용
-                if isinstance(t, dict):
-                    _kw = str(t.get("keyword") or t.get("키워드") or "").strip()
-                    _q = str(t.get("question") or t.get("질문") or "").strip()
-                    t = f"{_kw} | {_q}" if (_kw and _q) else str(t)
-                else:
-                    t = str(t)
-                if "|" in t and not _bad_question(t, prof):
+                t = _title_from_item(t)
+                if t and "|" in t and not _bad_question(t, prof):
                     return t
-                _log(f"      [제목탈락] {t[:70]}")   # 어떤 제목이 왜 걸리는지 추적용
+                if t:
+                    _log(f"      [제목탈락] {t[:70]}")
         except Exception:
             pass
     return None

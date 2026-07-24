@@ -4742,6 +4742,32 @@ def _qna_client():
     return anthropic.Anthropic(api_key=key)
 
 
+_QNA_TITLE_KW_KEYS = ("keyword", "키워드", "category", "카테고리", "topic", "주제", "title", "제목", "subject")
+_QNA_TITLE_Q_KEYS = ("question", "질문", "q", "질의")
+
+
+def _qna_title_from_item(t):
+    """모델이 문자열('키워드 | 질문') 또는 객체({keyword|category|...:..., question:...})로
+    답해도 '키워드 | 질문' 문자열로 정규화. 실패 시 ''."""
+    if isinstance(t, str):
+        return t.strip()
+    if isinstance(t, dict):
+        def pick(keys):
+            for k in keys:
+                v = str(t.get(k, "") or "").strip()
+                if v:
+                    return v
+            return ""
+        kw, q = pick(_QNA_TITLE_KW_KEYS), pick(_QNA_TITLE_Q_KEYS)
+        if not (kw and q):
+            vals = [str(v).strip() for v in t.values() if str(v).strip()]
+            if len(vals) >= 2:
+                kw, q = vals[0], vals[-1]
+        if kw and q:
+            return f"{kw} | {q}"
+    return ""
+
+
 def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
     """공백 키워드 → 다양한 말투의 Q n개. 뻔한 템플릿('처벌과 대응은?'·'○○란?')과
     비형사 분야의 형사 개념을 코드로 걸러내고, 모자라면 재생성해 채운다(하이쿠가 지시를 자주 무시함).
@@ -4763,8 +4789,9 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
             "넓은 법률 상식보다 '특정 상황의 문제를 해결하는' 실무형 질문을 우선하라(생성형 AI가 인용하기 좋다). "
             "예: '~할 때 반드시 확인해야 할 N가지', '~하기 전에 넣어야 할 항목', '~가 무효가 되는 경우', "
             "'~일 때 민사·형사 쟁점 비교'처럼 좁고 구체적인 문제해결형. " + forbid_tail + QNA_FIDELITY +
-            "\n각 질문은 반드시 '키워드 변호사 | 질문?' 형식 한 줄이고, 실제 사건 상황이 드러나야 한다. "
-            "JSON 배열(문자열)만 출력하라.")
+            "\n[출력] JSON 배열. 각 항목은 객체: "
+            '{"keyword":"짧은 명사구(상황서술문·물음표 금지)","question":"구체 정황이 담긴 질문?"}. '
+            "설명 없이 JSON만 출력하라.")
 
     def _call(need, avoid):
         avoid_list = list(existing_titles[:40]) + list(avoid)
@@ -4777,16 +4804,7 @@ def qna_gen_questions(keyword, cat, existing_titles, n=10, client=None):
                   system=sysp, messages=[{"role": "user", "content": usr}])
             txt = "".join(b.text for b in m.content if getattr(b, "type", "") == "text")
             arr = json.loads(txt[txt.find("["): txt.rfind("]") + 1])
-            out = []
-            for x in arr:
-                # 모델이 '키워드 | 질문' 문자열 대신 {keyword,question} 객체로 답하기도 함 → 둘 다 수용
-                if isinstance(x, dict):
-                    _kw = str(x.get("keyword") or x.get("키워드") or "").strip()
-                    _q = str(x.get("question") or x.get("질문") or "").strip()
-                    out.append(f"{_kw} | {_q}" if (_kw and _q) else str(x))
-                else:
-                    out.append(str(x))
-            return out
+            return [t for t in (_qna_title_from_item(x) for x in arr) if t]
         except Exception:
             return []
 
