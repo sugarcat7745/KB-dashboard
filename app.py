@@ -3103,6 +3103,110 @@ def render_ai_chat():
         st.caption("아직 질문이 없습니다.")
 
 
+NEWKW_START = "2026-07-23"   # 신규 키워드 등록 시작일(추적 시작 기준)
+
+
+@st.cache_data(ttl=3600)
+def _load_new_keywords():
+    """레포에 커밋된 new_keywords.csv(오늘 추가한 키워드+카테고리) 로드 → {키워드: 카테고리}."""
+    import os as _os, csv as _csv
+    for p in (_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "new_keywords.csv"),
+              "new_keywords.csv"):
+        try:
+            out = {}
+            with open(p, encoding="utf-8") as f:
+                rd = _csv.reader(f); next(rd, None)
+                for row in rd:
+                    if len(row) >= 2 and row[0].strip():
+                        out[row[0].strip()] = row[1].strip()
+            if out:
+                return out
+        except Exception:
+            continue
+    return {}
+
+
+def render_newkw_track():
+    """관리자 전용 — 최근 추가한 신규 키워드의 일별 노출·소진·전환 추적."""
+    tab_header("fa-seedling", "신규 키워드 추적",
+               "최근 추가 키워드 · 일별 노출·소진·전환", color="#C8A24B", rgb="200,162,75")
+    kw2cat = _load_new_keywords()
+    if not kw2cat:
+        st.caption("신규 키워드 목록(new_keywords.csv)을 불러오지 못했습니다.")
+        return
+    from collections import Counter as _Counter
+    regcnt = _Counter(kw2cat.values())
+    st.caption(f"추적 대상: {NEWKW_START} 이후 등록한 신규 키워드 {len(kw2cat):,}개(네이버). "
+               "검수 통과·노출이 시작되면 일별로 쌓입니다. 전환은 네이버 전환추적 설정 시 집계.")
+
+    try:
+        vals = ",".join("'" + k.replace("'", "''") + "'" for k in kw2cat.keys())
+        df = bq(f"SELECT date, keyword, SUM(impressions) imp, SUM(clicks) clk, "
+                f"SUM(cost) cost, SUM(conversions) conv "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
+                f"WHERE media='네이버' AND date >= '{NEWKW_START}' AND keyword IN ({vals}) "
+                f"GROUP BY date, keyword")
+    except Exception as e:
+        df = pd.DataFrame()
+        if st.session_state.get("auth_user") == "admin":
+            st.caption(f"(관리자 참고) 조회 오류: {type(e).__name__}: {e}")
+
+    if df is None or df.empty:
+        st.info("아직 노출된 신규 키워드가 없습니다. 검수 통과 후 노출이 시작되면 "
+                "일별 노출·소진·전환이 여기에 표시됩니다.")
+        return
+
+    df["category"] = df["keyword"].map(kw2cat).fillna("기타")
+    for c in ["imp", "clk", "cost", "conv"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+
+    k = st.columns(5)
+    kpi(k[0], "fa-eye", "총 노출", f"{int(df['imp'].sum()):,}")
+    kpi(k[1], "fa-arrow-pointer", "총 클릭", f"{int(df['clk'].sum()):,}")
+    kpi(k[2], "fa-won-sign", "총 소진", f"{int(df['cost'].sum()):,}", "원")
+    kpi(k[3], "fa-bullseye", "총 전환", f"{int(df['conv'].sum()):,}")
+    kpi(k[4], "fa-key", "노출된 키워드", f"{df['keyword'].nunique():,}", f"/{len(kw2cat):,}")
+
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 추세</div>',
+                unsafe_allow_html=True)
+    daily = (df.groupby("date").agg(imp=("imp", "sum"), cost=("cost", "sum"),
+             conv=("conv", "sum")).reset_index().sort_values("date"))
+    fig = go.Figure()
+    fig.add_bar(x=daily["date"], y=daily["cost"], name="소진(원)", marker_color="#C8A24B")
+    fig.add_scatter(x=daily["date"], y=daily["imp"], name="노출", yaxis="y2",
+                    mode="lines+markers", line=dict(color="#3182F6", width=2))
+    fig.update_layout(yaxis2=dict(overlaying="y", side="right", showgrid=False))
+    st.plotly_chart(fig_theme(fig, 300), use_container_width=True,
+                    config={"displayModeBar": False})
+
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-layer-group"></i> 카테고리별</div>',
+                unsafe_allow_html=True)
+    g = (df.groupby("category").agg(imp=("imp", "sum"), clk=("clk", "sum"), cost=("cost", "sum"),
+         conv=("conv", "sum"), kws=("keyword", "nunique")).reset_index().sort_values("cost", ascending=False))
+    cols = ["카테고리", "등록수", "노출된KW", "노출", "클릭", "소진(원)", "전환"]
+    rows = []
+    for _, r in g.iterrows():
+        rn = int(regcnt.get(r["category"], 0))
+        rows.append([(r["category"], r["category"]), (f"{rn:,}", rn),
+                     (f"{int(r['kws']):,}", int(r['kws'])), (f"{int(r['imp']):,}", int(r['imp'])),
+                     (f"{int(r['clk']):,}", int(r['clk'])), (f"{int(r['cost']):,}", int(r['cost'])),
+                     (f"{int(r['conv']):,}", int(r['conv']))])
+    sortable_table(cols, rows, height=min(420, 70 + len(rows) * 38))
+
+    st.markdown('<div class="sec-title"><i class="fa-solid fa-ranking-star"></i> 키워드 상위(소진순 100)</div>',
+                unsafe_allow_html=True)
+    kwg = (df.groupby(["keyword", "category"]).agg(imp=("imp", "sum"), clk=("clk", "sum"),
+           cost=("cost", "sum"), conv=("conv", "sum")).reset_index()
+           .sort_values("cost", ascending=False).head(100))
+    cols2 = ["키워드", "카테고리", "노출", "클릭", "소진(원)", "전환"]
+    rows2 = []
+    for _, r in kwg.iterrows():
+        rows2.append([(r["keyword"], r["keyword"]), (r["category"], r["category"]),
+                      (f"{int(r['imp']):,}", int(r['imp'])), (f"{int(r['clk']):,}", int(r['clk'])),
+                      (f"{int(r['cost']):,}", int(r['cost'])), (f"{int(r['conv']):,}", int(r['conv']))])
+    sortable_table(cols2, rows2, height=min(520, 70 + len(rows2) * 38))
+
+
 def render_admin_log():
     """관리자(admin) 전용 — 로그인 이력 + AI 사용 로그 + 토큰/비용 집계."""
     tab_header("fa-shield-halved", "관리자 로그", "로그인 이력 · AI 사용 · 토큰/비용", color="#6E6E66", rgb="110,110,102")
@@ -6455,6 +6559,8 @@ def main():
     top_labels = ["요약", "광고", "실적", "유입", "변경", "AI"]
     if can_qna:
         top_labels = top_labels + ["QnA"]
+    if is_admin:
+        top_labels = top_labels + ["신규KW"]   # 관리자 전용, 항상 맨 뒤
     render_landing_status()   # 모든 탭 위 항상 표시되는 광고 랜딩 실시간 상태 바
     top = st.tabs(top_labels)
 
@@ -6516,6 +6622,10 @@ def main():
     if can_qna and len(top) > 6:
         with top[6]:
             _safe(render_qna, "QnA 관리")
+
+    if is_admin:                              # 신규KW = 항상 맨 뒤 탭
+        with top[len(top_labels) - 1]:
+            _safe(render_newkw_track, "신규 키워드 추적")
 
 
 try:
