@@ -15,6 +15,8 @@ BASE = "https://api.searchad.naver.com"
 PROBE = os.environ.get("PROBE", "1") == "1"
 ONLY_ON = os.environ.get("ONLY_ON", "1") == "1"
 SAMPLE = int(os.environ.get("SAMPLE", "6"))
+ONLY_CAMP = os.environ.get("ONLY_CAMP", "").strip()
+KNOWN_TP = {"MEDIA_TARGET", "PC_MOBILE_TARGET", "REGION_TARGET"}
 
 
 def _hdr(method, uri):
@@ -57,30 +59,25 @@ def main():
         cname = str(c.get("name", "")).strip()
         if ONLY_ON and not _on(c):
             continue
+        if ONLY_CAMP and ONLY_CAMP not in cname:
+            continue
         groups = _get("/ncc/adgroups", {"nccCampaignId": c.get("nccCampaignId")}) or []; time.sleep(0.1)
         for g in (groups if isinstance(groups, list) else []):
             if ONLY_ON and not _on(g):
                 continue
             gid = g.get("nccAdgroupId")
-            if PROBE:
-                if n >= SAMPLE:
-                    print("\n(샘플 종료)"); return
-                n += 1
-                print(f"■ {cname} > {g.get('name')} ({gid})")
-                # 1) 그룹 객체에 스케줄/타겟 관련 키가 있나
-                full = _get(f"/ncc/adgroups/{gid}"); time.sleep(0.1)
-                if isinstance(full, dict):
-                    keys = [k for k in full.keys()]
-                    print(f"   그룹키: {keys}")
-                    for k in keys:
-                        if any(w in k.lower() for w in ["target", "schedule", "time", "week", "day"]):
-                            print(f"     · {k} = {json.dumps(full.get(k), ensure_ascii=False)[:400]}")
-                # 2) 별도 타겟 엔드포인트 시도
-                for ep in [f"/ncc/adgroups/{gid}/targets", "/ncc/targets"]:
-                    params = {"ownerId": gid} if ep == "/ncc/targets" else None
-                    d = _get(ep, params); time.sleep(0.1)
-                    print(f"   [{ep}] → {json.dumps(d, ensure_ascii=False)[:500]}")
-                print()
+            if n >= SAMPLE:
+                print("\n(샘플 종료)"); return
+            tgts = g.get("targets") or []
+            # 시간/스케줄류 타겟(알려진 타입 외) 추출
+            other = [t for t in tgts if t.get("targetTp") not in KNOWN_TP]
+            n += 1
+            print(f"■ {cname} > {g.get('name')} ({gid})")
+            print(f"   targetTp들: {[t.get('targetTp') for t in tgts]}")
+            print(f"   targetSummary: {json.dumps(g.get('targetSummary'), ensure_ascii=False)}")
+            for t in other:
+                print(f"   ★비표준타겟 {t.get('targetTp')}: {json.dumps(t.get('target'), ensure_ascii=False)[:800]}")
+            print()
 
 
 if __name__ == "__main__":
