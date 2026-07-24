@@ -46,17 +46,27 @@ REGIONS = [
 
 CAT_PREFIX = {"성범죄": "F.성범죄"}
 
-# 성범죄 세부그룹 라우팅: 코어 → 그룹 마커
-def route_marker(core):
+# 성범죄 세부주제 라우팅: 코어 → 세부주제 베이스명(성별 남자·여자 양쪽에 등록)
+def route_base(core):
     if any(t in core for t in ["아청", "아동", "성착취물"]):
-        return ["아청법_남자", "아청법"]
+        return "아청법"
     if any(t in core for t in ["촬영", "몰카", "카촬", "딥페이크", "허위영상물", "디지털", "통매음", "통신매체"]):
-        return ["디지털성범죄"]
+        return "디지털성범죄"
     if "성매매" in core or "조건만남" in core:
-        return ["성매매"]
+        return "성매매"
     if "의제강간" in core or "미성년자" in core:
-        return ["의제강간_남자", "의제강간", "성범죄_남자"]
-    return ["성범죄_남자"]
+        return "의제강간"
+    return "성범죄"
+
+
+# 세부주제 베이스 → 그룹명에 포함될 후보(성별 양쪽). 매칭되는 ON 그룹 전부에 등록.
+BASE_MATCH = {
+    "성범죄": ["성범죄_남자", "성범죄_여자"],
+    "아청법": ["아청법_남자", "아청법_여자"],
+    "의제강간": ["의제강간_남자", "의제강간_여자"],
+    "디지털성범죄": ["디지털성범죄"],
+    "성매매": ["성매매"],
+}
 
 
 def norm(k):
@@ -133,9 +143,9 @@ def main():
     if not isinstance(camps, list):
         print("캠페인 조회 실패:", camps); return
 
-    # 전 계정 등록분(제외용) + 대상 카테고리 ON 그룹
+    # 전 계정 등록분(밀도판정용) + 대상 카테고리 ON 그룹(그룹별 키워드셋: 그룹단위 중복판정)
     global_reg = set()
-    groups = []
+    groups = []          # {name,id,kwset}
     pre = CAT_PREFIX[cat]
     for c in camps:
         cname = str(c.get("name", "")).strip()
@@ -144,19 +154,20 @@ def main():
         for g in (gs if isinstance(gs, list) else []):
             gid = g.get("nccAdgroupId")
             kws = _get("/ncc/keywords", {"nccAdgroupId": gid}) or []; time.sleep(0.04)
+            kwset = set()
             for k in (kws if isinstance(kws, list) else []):
                 nk = norm(k.get("keyword", ""))
                 if nk:
-                    global_reg.add(nk)
+                    global_reg.add(nk); kwset.add(nk)
             if is_cat and (not ONLY_ON or (_on(c) and _on(g))):
-                groups.append({"name": str(g.get("name", "")), "id": gid})
+                groups.append({"name": str(g.get("name", "")), "id": gid, "kwset": kwset})
 
-    def find_group(core):
-        for sub in route_marker(core):
-            for g in groups:
-                if sub in g["name"] and "여자" not in g["name"] and "피해" not in g["name"]:
-                    return g
-        return groups[0] if groups else None
+    def target_groups(core):
+        """세부주제 베이스에 매칭되는 ON 그룹 전부(남자·여자 양쪽)."""
+        base = route_base(core)
+        subs = BASE_MATCH.get(base, [base])
+        out = [g for g in groups if any(s in g["name"] for s in subs)]
+        return out or ([groups[0]] if groups else [])
 
     # 죄명별 기존등록 밀도 → '촘촘'(THRESH 이상)은 확장 스킵(근접중복 방지)
     def dens(core):
@@ -172,18 +183,24 @@ def main():
     cands = [(c, k) for c, k in build_candidates(cat) if c in set(thin_cores)]
     print(f"조합 후보 {len(cands):,}개 (빈 죄명만)\n")
 
-    # 신규만 필터 + 그룹배치
+    # 신규만 필터(그룹단위 중복판정) + 남자·여자 양쪽 그룹 배치
     from collections import defaultdict
     bygroup = defaultdict(list)
     n_new = n_exist = 0
     for core, kw in cands:
-        if norm(kw) in global_reg:
-            n_exist += 1; continue
-        g = find_group(core)
-        if not g:
-            continue
-        n_new += 1
-        bygroup[(g["id"], g["name"])].append(kw)
+        nk = norm(kw)
+        tgs = target_groups(core)
+        placed = False
+        for g in tgs:
+            if nk in g["kwset"]:
+                continue                       # 그 그룹에 이미 있으면 스킵
+            bygroup[(g["id"], g["name"])].append(kw)
+            g["kwset"].add(nk)
+            placed = True
+        if placed:
+            n_new += 1
+        else:
+            n_exist += 1
 
     print(f"신규 {n_new:,} · 기존제외 {n_exist:,} · 배치그룹 {len(bygroup)}")
     print("그룹별 신규 개수:")
