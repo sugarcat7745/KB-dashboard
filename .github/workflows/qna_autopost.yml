@@ -18,8 +18,12 @@ on:
         description: "특정 카테고리만 생성(쉼표구분, 빠진 분야 보충용). 비우면 계획대로."
         required: false
         default: ""
-  # ⚠️ GitHub schedule은 무료플랜에서 정각(:00) 수 시간 지연 → 사용 안 함.
-  # 매일 정시 실행은 Claude Routine이 이 워크플로를 workflow_dispatch로 눌러서 처리한다.
+  # 주력: GitHub 자체 스케줄(서버측 실행 → Claude 세션 의존 없음, '안 도는 날' 방지).
+  # 무료플랜은 지연될 수 있으나 원고는 검수 대기열에 쌓이므로 몇 시간 늦어도 무방.
+  # 정각(:00)이 지연이 가장 심해 :20에 건다. 이중 안전망으로 Claude Routine이
+  # 몇 시간 뒤 '오늘 실행 없으면 그때만' 눌러 보강한다(중복은 검수에서 걸러냄).
+  schedule:
+    - cron: "20 0 * * *"   # 매일 00:20 UTC ≒ 09:20 KST 근방
 
 concurrency:
   group: qna-autopost
