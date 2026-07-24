@@ -80,6 +80,30 @@ SUCCESS_SCHEMA_HINT = {
 }
 
 
+import re as _re
+
+
+def _norm_tokens(s):
+    # 공백을 지우지 말고 '단어' 단위(한글 2자 이상)로 토큰화해야 제목 간 겹침 비교가 의미 있다.
+    return set(_re.findall(r"[가-힣]{2,}", str(s or "")))
+
+
+def _is_dup(title, kw, existing, thresh=0.70):
+    """제목+키워드의 한글 단어 자카드 유사도가 임계 이상인 기존 글이 있으면 그 제목 반환(유사중복).
+    지역·표현만 바꾼 사실상 같은 글(자카드 매우 높음)을 잡되, 주제만 같은 다른 질문은 통과시킨다."""
+    toks = _norm_tokens(f"{kw} {title}")
+    if not toks:
+        return None
+    for t in existing:
+        et = _norm_tokens(t)
+        if not et:
+            continue
+        j = len(toks & et) / len(toks | et)
+        if j >= thresh:
+            return t
+    return None
+
+
 def _today_ordinal():
     return datetime.date.today().toordinal()
 
@@ -143,6 +167,16 @@ def cmd_plan(args):
         "date": datetime.date.today().isoformat(),
         "rules": {
             "geo": QA.QNA_GEO_RULES.strip(),
+            "capsule": ("[자기완결 답변 캡슐] 각 섹션(sub) 첫 문단은 그 문단만 떼어 읽어도 완결되는 "
+                        "40~70자 직답으로 시작하라(정의/결론 + 핵심 수치 + 근거 조문). 생성형 AI는 글 전체가 "
+                        "아니라 '문단(청크)'을 통째로 뽑아 인용하므로, 문단마다 독립적으로 답이 되게 쓴다. "
+                        "그리고 사실·수치 문장에는 근거 조문을 문장 안에 붙여라(예: '…2년 이하 징역이며, 근거는 "
+                        "성폭력처벌법 제13조입니다'). 각주·목록으로 미루지 말 것."),
+            "definition": ("[정의형 문장] 각 글에 핵심 용어를 한 문장으로 정의하는 '정의형 문장'을 최소 1개 "
+                           "포함하라(예: '무고죄란 타인으로 하여금 형사처분을 받게 할 목적으로 허위 사실을 "
+                           "신고하는 죄를 말합니다'). '○○가 뭐야' 류 검색·AI 발췌의 1순위 타깃이 된다."),
+            "no_duplicate": ("[유사중복 금지] avoid_titles 와 핵심 키워드·주제가 겹치지 않는 '새로운 사건 구도'로 "
+                             "생성하라. 지역·표현만 바꾼 사실상 같은 글은 저장 단계에서 '유사중복'으로 거부된다."),
             "fidelity": QA.QNA_FIDELITY.strip(),
             "ad_law": ("[변호사 광고규정] '최고·유일·1위·승소 보장·무료' 단정·보장 표현, 승소율·석방률 등 "
                        "성과율, '반드시 이긴다'식 보증, 前官(판·검사 출신) 영향력 암시, 미검증 수상·순위 금지."),
@@ -192,16 +226,23 @@ def cmd_save(args):
     batch = uuid.uuid4().hex[:12]
     ok_q = ok_s = 0
     rej = []
+    q_seen = _qna_existing(bq)          # 유사중복 판정용(게시글+최근 초안)
+    s_seen = SC._existing_titles(bq)
 
     for it in (data.get("qna") or []):
         reasons = _qna_validate(it, bundle, rsch)
         if reasons:
             rej.append(("QnA", str(it.get("title", ""))[:40], ",".join(reasons)))
             continue
+        dup = _is_dup(it.get("title", ""), it.get("kw", ""), q_seen)
+        if dup:
+            rej.append(("QnA", str(it.get("title", ""))[:40], f"유사중복(≈{dup[:24]})"))
+            continue
         did = uuid.uuid4().hex[:12]
         it.setdefault("core", str(it.get("kw", "")))
         it["_did"] = did
         QA._save_draft(bq, did, batch, str(it.get("cat", "")), it)
+        q_seen.append(str(it.get("title", "")))       # 배치 내 유사중복도 차단
         ok_q += 1
         print(f"  [QnA/{it.get('cat')}] 저장: {str(it.get('title',''))[:50]}", flush=True)
 
@@ -218,9 +259,14 @@ def cmd_save(args):
         if not good:
             rej.append(("성공사례", str(it.get("title", ""))[:40], why))
             continue
+        dup = _is_dup(it.get("title", ""), it.get("crime", ""), s_seen)
+        if dup:
+            rej.append(("성공사례", str(it.get("title", ""))[:40], f"유사중복(≈{dup[:24]})"))
+            continue
         it["result"] = SC._norm_result(it.get("result"))
         did = uuid.uuid4().hex[:12]
         SC._save_draft(bq, did, batch, cat, it)
+        s_seen.append(str(it.get("title", "")))
         ok_s += 1
         print(f"  [성공/{cat}] 저장·결과={it.get('result')}: {str(it.get('title',''))[:50]}", flush=True)
 
