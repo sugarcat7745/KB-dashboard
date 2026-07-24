@@ -55,28 +55,40 @@ def main():
         print("캠페인 조회 실패:", camps); return
 
     n = 0
+    tp_counter = {}
+    sched_groups = 0
     for c in sorted(camps, key=lambda x: str(x.get("name", ""))):
         cname = str(c.get("name", "")).strip()
         if ONLY_ON and not _on(c):
             continue
         if ONLY_CAMP and ONLY_CAMP not in cname:
             continue
-        groups = _get("/ncc/adgroups", {"nccCampaignId": c.get("nccCampaignId")}) or []; time.sleep(0.1)
+        groups = _get("/ncc/adgroups", {"nccCampaignId": c.get("nccCampaignId")}) or []; time.sleep(0.08)
         for g in (groups if isinstance(groups, list) else []):
             if ONLY_ON and not _on(g):
                 continue
             gid = g.get("nccAdgroupId")
-            if n >= SAMPLE:
+            if PROBE and n >= SAMPLE:
                 print("\n(샘플 종료)"); return
-            n += 1
-            tgts = _get(f"/ncc/adgroups/{gid}/targets"); time.sleep(0.12)
+            tgts = _get(f"/ncc/adgroups/{gid}/targets"); time.sleep(0.1)
             tgts = tgts if isinstance(tgts, list) else []
-            print(f"■ {cname} > {g.get('name')} ({gid})")
-            print(f"   targetTp들: {[t.get('targetTp') for t in tgts]}")
-            for t in tgts:
-                if t.get("targetTp") not in ("MEDIA_TARGET",):
+            tps = [t.get("targetTp") for t in tgts]
+            for tp in tps:
+                tp_counter[tp] = tp_counter.get(tp, 0) + 1
+            special = [t for t in tgts if t.get("targetTp") not in ("MEDIA_TARGET", "PC_MOBILE_TARGET")]
+            if PROBE:
+                n += 1
+                print(f"■ {cname} > {g.get('name')} · {tps}")
+                for t in special:
                     print(f"   · {t.get('targetTp')}: {json.dumps(t.get('target'), ensure_ascii=False)[:900]}")
-            print()
+            elif special:      # find 모드: 시간/스케줄 등 특수타겟 있는 그룹만
+                sched_groups += 1
+                print(f"■ {cname} > {g.get('name')} ({gid})")
+                for t in special:
+                    print(f"   · {t.get('targetTp')}: {json.dumps(t.get('target'), ensure_ascii=False)}")
+    if not PROBE:
+        print(f"\n=== targetTp 분포: {tp_counter}")
+        print(f"특수(비-미디어/PC모바일) 타겟 보유 그룹: {sched_groups}개")
 
 
 if __name__ == "__main__":
