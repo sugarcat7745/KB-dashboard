@@ -4106,7 +4106,14 @@ def _qna_bad_question(title, prof):
     """재생성해야 할 나쁜 질문이면 True.
     ① '처벌과 대응은?'·'○○란?' 같은 상투 템플릿(강동현 지적) ② 처벌-금지(비형사) 분야에 형사 개념."""
     s = str(title)
-    q = s.split("|")[-1].strip()          # '키워드 변호사 | 질문?' 에서 질문부만
+    if "|" not in s:
+        return True
+    kw = s.split("|")[0].strip()          # '키워드 변호사 | 질문?' 에서 키워드부
+    q = s.split("|")[-1].strip()          # 질문부만
+    # 왼쪽(키워드)이 짧은 명사구가 아니라 상황 서술문으로 새면 재생성(제목 형식 붕괴 방지)
+    kw_core = re.sub(r"\s*변호사$", "", kw).strip()
+    if len(kw_core) > 22 or "?" in kw or re.search(r"(했는데|하는데|인데|어요|아요|나요|까요|됐|됩니다|습니다)", kw):
+        return True
     if ("처벌과 대응" in q) or ("처벌 및 대응" in q) or ("처벌및대응" in q):
         return True
     if _QNA_Q_TAIL.search(q):

@@ -146,7 +146,15 @@ def _forbid(prof):
 
 def _bad_question(title, prof):
     s = str(title)
+    if "|" not in s:
+        return True
+    kw = s.split("|")[0].strip()
     q = s.split("|")[-1].strip()
+    # 왼쪽(키워드)이 '짧은 명사구'가 아니라 상황 서술문으로 새는 것 차단:
+    #   너무 길거나('변호사' 접미 제외 22자 초과), 물음표/서술어미가 들어간 경우.
+    kw_core = re.sub(r"\s*변호사$", "", kw).strip()
+    if len(kw_core) > 22 or "?" in kw or re.search(r"(했는데|하는데|인데|어요|아요|나요|까요|됐|됩니다|습니다)", kw):
+        return True
     if ("처벌과 대응" in q) or ("처벌 및 대응" in q) or ("처벌및대응" in q):
         return True
     if _QNA_Q_TAIL.search(q):
@@ -262,7 +270,11 @@ def _gen_question(cli, keyword, cat, existing):
             "넓은 법률 상식보다 '특정 상황의 문제를 해결하는' 실무형을 우선하라(생성형 AI가 인용하기 좋다). "
             "예: '~할 때 반드시 확인할 N가지', '~하기 전에 넣어야 할 항목', '~가 무효가 되는 경우', "
             "'~일 때 민사·형사 쟁점 비교'처럼 좁고 구체적인 문제해결형. " + ft + QNA_FIDELITY +
-            "\n'키워드 변호사 | 질문?' 형식 한 줄. JSON 배열(문자열)만.")
+            "\n[형식] 반드시 '키워드 | 질문?' 한 줄. "
+            f"'|' 왼쪽(키워드)은 주어진 키워드 '{keyword}'를 그대로 쓰거나 5~18자 짧은 명사구로만 다듬어라 "
+            "— 상황을 서술하는 문장(‘~했는데’,‘~어요’,‘~인데’ 등)이나 물음표를 왼쪽에 넣지 마라(그건 오른쪽 질문 자리다). "
+            f"왼쪽에 분류명('{cat}')을 반복하지 마라. 상황·정황은 전부 '|' 오른쪽 질문에 담아라. "
+            "JSON 배열(문자열)만.")
     for _ in range(3):
         try:
             m = cli.messages.create(model=MODEL, max_tokens=500, system=sysp,
@@ -511,7 +523,7 @@ def main():
     batch = uuid.uuid4().hex[:12]
     ok, skip = 0, 0
     for idx, cat in enumerate(cats):
-        want_region = (idx % 2 == 0)   # 짝수=지역형, 홀수=일반 → N=4면 2:2 (지역 2건·일반 2건)
+        want_region = (idx % 4 == 0)   # 4건당 1건만 지역형(지역SEO는 살리되 목록이 지역명으로 범벅되지 않게)
         prof = _profile(cat)
         verified = _laws_for(cat, bundle, rsch)
         kws = _reco_keyword(cli, cat, existing, want_region)
