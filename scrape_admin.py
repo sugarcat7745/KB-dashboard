@@ -81,6 +81,35 @@ def scan_boards():
         print("  게시판 스캔 실패:", str(e)[:150])
 
 
+def scan_counsel():
+    """상담 게시판(counsel) 스캔 — 모든 '센터'가 이 한 게시판에 모이는지 확인(도메인 통합 여부).
+    목록에서 제목의 [XX 센터] 분포 + 샘플 본문(이름·전화·시각)."""
+    from collections import Counter
+    print("\n[상담 게시판 counsel 스캔]")
+    r = S.get(f"{BASE}/bbs/board.php?bo_table=counsel", timeout=30)
+    html = r.text
+    print(f"  목록 HTTP {r.status_code} · 길이 {len(html)}")
+    low = html.lower()
+    if "mb_password" in low or ("로그인" in html and "counsel" not in low):
+        print("  ⛔ 로그인/권한 문제로 목록 안 보임"); return
+    ids = sorted({int(i) for i in re.findall(r'bo_table=counsel[^"\']*?wr_id=(\d+)', html)}, reverse=True)
+    print(f"  게시글 수(이 페이지) {len(ids)} · 최신 wr_id {ids[:8]}")
+    centers = re.findall(r'\[\s*([^\]]{1,20}?센터)\s*\]', html)
+    print("  센터 분포(목록 제목 기준):", dict(Counter(c.strip() for c in centers)))
+    print("  --- 샘플 본문 5건 ---")
+    for wid in ids[:5]:
+        try:
+            t = S.get(f"{BASE}/bbs/board.php?bo_table=counsel&wr_id={wid}", timeout=30).text
+            ce = re.search(r'센터\s*[:：]\s*([^\s<]{1,20}센터)', t)
+            nm = re.search(r'이름\s*[:：]\s*([^\s<]{1,20})', t)
+            ph = re.search(r'연락처\s*[:：]\s*([0-9][0-9\-]{7,14})', t)
+            dt = re.search(r'(20\d\d[-.]\d\d[-.]\d\d[ T]\d\d:\d\d)', t)
+            print(f"    wr_id={wid} · 센터={ce.group(1) if ce else '?'} · 이름={nm.group(1) if nm else '?'} · 전화={ph.group(1) if ph else '?'} · 시각={dt.group(1) if dt else '?'}")
+        except Exception as e:
+            print(f"    wr_id={wid} 조회 실패: {str(e)[:80]}")
+        time.sleep(0.1)
+
+
 def scan_visits():
     days = int(os.environ.get("DAYS", "7"))
     maxp = int(os.environ.get("MAXPAGE", "400"))
@@ -116,6 +145,7 @@ def main():
     login()
     check_admin()
     scan_boards()
+    scan_counsel()
     scan_visits()
 
 
