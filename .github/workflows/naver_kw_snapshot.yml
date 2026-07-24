@@ -1,0 +1,32 @@
+name: naver-kw-snapshot
+
+# 매일 네이버 '전체 키워드' 스냅샷 → BQ naver_kw_snapshot(WRITE_APPEND).
+# 전날 대비 추가/삭제 키워드 추적(신규확인·롤백 기반). regTm 불신 → nccKeywordId 스냅샷 diff가 정답.
+on:
+  schedule:
+    - cron: "40 21 * * *"   # 매일 06:40 KST(21:40 UTC) — 광고수집 이후
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "오늘 스냅샷이 이미 있어도 강제 재적재? (1이면 강제)"
+        required: false
+        default: "0"
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install requests pandas google-cloud-bigquery google-auth pyarrow db-dtypes
+      - name: 키워드 스냅샷 적재
+        env:
+          NAVER_API_KEY:     ${{ secrets.NAVER_API_KEY }}
+          NAVER_SECRET_KEY:  ${{ secrets.NAVER_SECRET_KEY }}
+          NAVER_CUSTOMER_ID: ${{ secrets.NAVER_CUSTOMER_ID }}
+          GCP_SA_JSON:       ${{ secrets.GCP_SA_JSON }}
+          FORCE:             ${{ github.event.inputs.force || '0' }}
+        run: python naver_kw_snapshot.py
