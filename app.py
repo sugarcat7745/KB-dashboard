@@ -3103,49 +3103,36 @@ def render_ai_chat():
         st.caption("아직 질문이 없습니다.")
 
 
-NEWKW_START = "2026-07-23"   # 신규 키워드 등록 시작일(추적 시작 기준)
-
-
-@st.cache_data(ttl=3600)
-def _load_new_keywords():
-    """레포에 커밋된 new_keywords.csv(오늘 추가한 키워드+카테고리) 로드 → {키워드: 카테고리}."""
-    import os as _os, csv as _csv
-    for p in (_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "new_keywords.csv"),
-              "new_keywords.csv"):
-        try:
-            out = {}
-            with open(p, encoding="utf-8") as f:
-                rd = _csv.reader(f); next(rd, None)
-                for row in rd:
-                    if len(row) >= 2 and row[0].strip():
-                        out[row[0].strip()] = row[1].strip()
-            if out:
-                return out
-        except Exception:
-            continue
-    return {}
-
-
 def render_newkw_track():
-    """관리자 전용 — 최근 추가한 신규 키워드의 일별 노출·소진·전환 추적."""
+    """관리자 전용 — 최근 추가한 신규 키워드의 일별 노출·소진·전환 추적.
+    대상 목록은 BQ new_kw(매일 자동 적재: 등록일 기준 신규 키워드)에서 읽고,
+    성과는 ad_keyword와 JOIN. 앞으로 키워드를 더 추가해도 자동 반영."""
     tab_header("fa-seedling", "신규 키워드 추적",
                "최근 추가 키워드 · 일별 노출·소진·전환", color="#C8A24B", rgb="200,162,75")
-    kw2cat = _load_new_keywords()
-    if not kw2cat:
-        st.caption("신규 키워드 목록(new_keywords.csv)을 불러오지 못했습니다.")
+
+    try:
+        nk = bq(f"SELECT keyword, category FROM `{BQ_PROJECT}.{BQ_DATASET}.new_kw`")
+    except Exception as e:
+        nk = pd.DataFrame()
+        if st.session_state.get("auth_user") == "admin":
+            st.caption(f"(관리자 참고) new_kw 조회 오류: {type(e).__name__}: {e}")
+    if nk is None or nk.empty:
+        st.info("신규 키워드 테이블(new_kw)이 아직 없습니다. "
+                "적재 워크플로(naver-newkw-to-bq)가 한 번 실행되면 표시됩니다.")
         return
-    from collections import Counter as _Counter
-    regcnt = _Counter(kw2cat.values())
-    st.caption(f"추적 대상: {NEWKW_START} 이후 등록한 신규 키워드 {len(kw2cat):,}개(네이버). "
+    regcnt = nk.groupby("category")["keyword"].nunique()
+    total_reg = int(nk["keyword"].nunique())
+    st.caption(f"추적 대상: 신규 키워드 {total_reg:,}개(네이버, 자동 적재). "
                "검수 통과·노출이 시작되면 일별로 쌓입니다. 전환은 네이버 전환추적 설정 시 집계.")
 
     try:
-        vals = ",".join("'" + k.replace("'", "''") + "'" for k in kw2cat.keys())
-        df = bq(f"SELECT date, keyword, SUM(impressions) imp, SUM(clicks) clk, "
-                f"SUM(cost) cost, SUM(conversions) conv "
-                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` "
-                f"WHERE media='네이버' AND date >= '{NEWKW_START}' AND keyword IN ({vals}) "
-                f"GROUP BY date, keyword")
+        df = bq(f"SELECT k.date AS date, k.keyword AS keyword, n.category AS category, "
+                f"SUM(k.impressions) AS imp, SUM(k.clicks) AS clk, "
+                f"SUM(k.cost) AS cost, SUM(k.conversions) AS conv "
+                f"FROM `{BQ_PROJECT}.{BQ_DATASET}.ad_keyword` k "
+                f"JOIN `{BQ_PROJECT}.{BQ_DATASET}.new_kw` n ON k.keyword = n.keyword "
+                f"WHERE k.media='네이버' "
+                f"GROUP BY date, keyword, category")
     except Exception as e:
         df = pd.DataFrame()
         if st.session_state.get("auth_user") == "admin":
@@ -3156,7 +3143,6 @@ def render_newkw_track():
                 "일별 노출·소진·전환이 여기에 표시됩니다.")
         return
 
-    df["category"] = df["keyword"].map(kw2cat).fillna("기타")
     for c in ["imp", "clk", "cost", "conv"]:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
@@ -3165,7 +3151,7 @@ def render_newkw_track():
     kpi(k[1], "fa-arrow-pointer", "총 클릭", f"{int(df['clk'].sum()):,}")
     kpi(k[2], "fa-won-sign", "총 소진", f"{int(df['cost'].sum()):,}", "원")
     kpi(k[3], "fa-bullseye", "총 전환", f"{int(df['conv'].sum()):,}")
-    kpi(k[4], "fa-key", "노출된 키워드", f"{df['keyword'].nunique():,}", f"/{len(kw2cat):,}")
+    kpi(k[4], "fa-key", "노출된 키워드", f"{df['keyword'].nunique():,}", f"/{total_reg:,}")
 
     st.markdown('<div class="sec-title"><i class="fa-solid fa-chart-line"></i> 일별 추세</div>',
                 unsafe_allow_html=True)
