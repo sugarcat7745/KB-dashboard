@@ -574,8 +574,12 @@ def main():
                 reasons.append(f"섹션{len(secs)}개")
             if not (ans.get("faq")):
                 reasons.append("FAQ없음")
-            if len(hits) != len([l for l in laws if not str(l).lstrip().startswith("★")]) or not hits:
+            need = [l for l in laws if not str(l).lstrip().startswith("★")]
+            unmatched = [str(l) for l in need if not _law_match(l, verified)]
+            if len(hits) != len(need) or not hits:
                 reasons.append("미검증조문")
+                if unmatched:
+                    _log(f"      [미검증] {cat}: " + " | ".join(unmatched))
             if prof.get("punish") == "no" and _QNA_CRIME_WORDS.search(json.dumps(ans, ensure_ascii=False)):
                 reasons.append("비형사에형사어")
             if reasons:
