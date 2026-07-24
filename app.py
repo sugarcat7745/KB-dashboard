@@ -5875,15 +5875,6 @@ def corpus_qna_arch():
         return pd.DataFrame()
 
 
-@st.cache_data(ttl=6 * 3600, show_spinner=False)
-def corpus_case_titles():
-    """아카이브 사건사례 제목의 (공백 무시) 정규화 집합 — 생성 시 기존 게시분과 중복 회피용."""
-    df = corpus_cases()
-    if df.empty or "title" not in df:
-        return set()
-    return {re.sub(r"\s+", "", str(t)) for t in df["title"].tolist()}
-
-
 def corpus_case_ref(cat, max_chars=1500):
     """같은 분야 실제 사례 1건의 골격(제목·결과·소제목+첫문장·인용법령) + 분야 빈출 법령.
     생성기에 '이 형식·전개·법령인용 톤으로 쓰라'는 참고로 주입. 없으면 ''."""
@@ -6396,11 +6387,9 @@ def _success_write_tab(corpus):
     n_t = rc1.number_input("추천받을 개수", min_value=1, max_value=10, value=5, step=1, key="succ_tn")
     if rc2.button("제목 후보 생성 / 새로고침", key="succ_tbtn"):
         with st.spinner("제목 후보 생성 중…"):
+            # 아카이브(코퍼스)는 '참고용'이라 중복 회피에 넣지 않는다(유사 사례 생성 허용).
+            # 현재 게시판에 실제 올라온 글만 가벼운 중복 회피 목록으로.
             existing = [p["title"] for p in (success_board_posts() or [])]
-            # 홈페이지 아카이브(18k) 같은 분야 제목도 중복 회피 목록에 반영
-            arch = corpus_cases()
-            if not arch.empty and "category" in arch:
-                existing += arch[arch["category"].astype(str) == str(sel)]["title"].astype(str).tolist()
             st.session_state["succ_titles"] = success_gen_titles(sel, int(n_t), existing)
         for k in [k for k in list(st.session_state.keys()) if k.startswith("succ_t_")]:
             st.session_state.pop(k, None)

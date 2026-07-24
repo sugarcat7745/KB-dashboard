@@ -29,7 +29,7 @@
 | `collect_naver_master.py` | 네이버 키워드 ID→이름 매핑(약 15만) → `naver_kw_master` | GitHub Actions(주 1회) |
 | `KB_캠페인예산_수집.py` | 네이버 캠페인별 예산·소진 스냅샷 → `ad_budget` | GitHub Actions(매시간) |
 | `collect_mail.py` | 상담메일(네이버 IMAP '온라인상담문의' 폴더) 파싱 → `consult_raw`(이름·전화·상담내용) | GitHub Actions(collect_all) |
-| `collect_corpus.py` | 홈페이지 공개 아카이브(사건사례·법률지식인) 스크랩 → `corpus_success`/`corpus_qna`. QnA·성공사례 생성기의 문체·법령 참고 + 중복대조용 학습 코퍼스 | GitHub Actions(collect_corpus, 수동) |
+| `collect_corpus.py` | 홈페이지 공개 아카이브(사건사례·법률지식인) 스크랩 → `corpus_success`/`corpus_qna`. QnA·성공사례 생성기의 문체·법령 **참고용** 학습 코퍼스(중복대조 아님 — 유사 사례 생성 허용) | GitHub Actions(collect_corpus, 수동) |
 | `.github/workflows/*.yml` | 위 스크립트들의 스케줄 정의 | — |
 | `secrets_template.toml` | Streamlit Secrets 양식(실값 없음) | — |
 
@@ -49,7 +49,7 @@
 | `login_log` / `ai_usage_log` / `ai_chat_history` | 로그인·AI 사용·AI 대화 이력 | load job(WRITE_APPEND) |
 | `consult_raw` | 상담메일 원문(이름·전화·지역·상담내용). '상담 품질·보안' 탭의 전화·내용 스팸탐지 원천 | WRITE_TRUNCATE(UID 증분) |
 | `consult_block` | 상담 차단 목록(번호/이름). 대시보드에서 저장 → 탭에 '차단됨' 배지 | WRITE_TRUNCATE(app 저장) |
-| `corpus_success` | 홈페이지 사건사례 아카이브(결과·제목·카테고리·법령·본문, 약 18k건). 성공사례 생성기 few-shot 참고·중복대조 | WRITE_TRUNCATE(collect_corpus) |
+| `corpus_success` | 홈페이지 사건사례 아카이브(결과·제목·카테고리·법령·본문, 약 10.5k건). 성공사례 생성기 few-shot **문체·법령 참고용**(중복대조 아님) | WRITE_TRUNCATE(collect_corpus) |
 | `corpus_qna` | 홈페이지 법률지식인 Q&A 아카이브(질문·변호사답변·카테고리) | WRITE_TRUNCATE(collect_corpus) |
 
 ### Google Sheets (app.py 상단 상수의 ID)
