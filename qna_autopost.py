@@ -153,8 +153,10 @@ def _bad_question(title, prof):
     # 왼쪽(키워드)이 '짧은 명사구'가 아니라 상황 서술문으로 새는 것 차단:
     #   너무 길거나('변호사' 접미 제외 22자 초과), 물음표/서술어미가 들어간 경우.
     kw_core = re.sub(r"\s*변호사$", "", kw).strip()
-    # 명백한 '상황 서술문'만 차단(길이 넉넉히 35자, 물음표, 서술형 어미). 짧은 명사구는 통과.
-    if len(kw_core) > 35 or "?" in kw or re.search(r"(했는데|하는데|였는데|당했|드렸|었어요|어요|아요)", kw):
+    # 왼쪽(키워드)이 '명백한 상황 서술문'일 때만 차단(과도한 탈락 방지):
+    #   물음표가 왼쪽에 있거나 · 아주 길거나(45자↑) · 길면서(28자↑) 서술형 어미가 있는 경우.
+    if "?" in kw or len(kw_core) > 45 or (len(kw_core) > 28 and
+            re.search(r"(했는데|하는데|였는데|당했|었어요|어요|아요|습니다|됐는데)", kw)):
         return True
     if ("처벌과 대응" in q) or ("처벌 및 대응" in q) or ("처벌및대응" in q):
         return True
@@ -291,6 +293,7 @@ def _gen_question(cli, keyword, cat, existing):
                 t = str(t)
                 if "|" in t and not _bad_question(t, prof):
                     return t
+                _log(f"      [제목탈락] {t[:70]}")   # 어떤 제목이 왜 걸리는지 추적용
         except Exception:
             pass
     return None
