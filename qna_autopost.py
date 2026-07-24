@@ -533,6 +533,9 @@ def main():
             title = _gen_question(cli, kw, cat, existing)
             if not title:
                 continue
+            # 본문 소제목 키워드를 '제목의 왼쪽'과 일치시킨다(제목≠본문 키워드 불일치 방지).
+            if "|" in title:
+                core = re.sub(r"\s*변호사\s*$", "", title.split("|")[0]).strip() or core
             ans = _gen_answer(cli, title, core, cat, verified)
             if not ans:
                 continue

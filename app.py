@@ -4933,6 +4933,9 @@ def qna_make_one(keyword, cat, existing, client=None, ref=None):
         core = re.sub(r"\s*변호사$", "", str(keyword)).strip()
         qs = qna_gen_questions(keyword, cat, existing, n=3, client=client)
         title = next((q for q in qs if "|" in q), None) or f"{keyword} 변호사 | 어떻게 대응해야 하나요?"
+        # 본문 소제목 키워드를 '제목의 왼쪽'과 일치시킨다(제목≠본문 키워드 불일치 방지).
+        if "|" in title:
+            core = re.sub(r"\s*변호사\s*$", "", title.split("|")[0]).strip() or core
         ans = qna_gen_answer(title, core, cat, client=client, verified=qna_laws_for(cat), ref=ref)
         # 답변 생성 모델은 qna_gen_answer 기본값(하이쿠)을 따름 — 비용 1/3
         if not ans:
