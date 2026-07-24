@@ -31,6 +31,20 @@ CORE = {
         "통신매체이용음란", "통매음", "딥페이크", "허위영상물", "디지털성범죄", "공연음란",
         "성매매", "성매매알선", "조건만남", "아청법", "아동성범죄", "아동청소년성착취물",
     ],
+    "보피": [
+        "보이스피싱", "전화금융사기", "메신저피싱", "대포통장", "통장대여", "통장양도",
+        "통장판매", "통장매매", "체크카드양도", "체크카드대여", "작업대출", "인출책", "수거책",
+        "현금수거책", "전달책", "대포폰", "계좌명의대여", "전자금융거래법", "사기이용계좌",
+        "몸캠피싱", "개인정보매매", "범죄수익은닉", "사기방조", "전기통신금융사기",
+        "보이스피싱개인회생", "보이스피싱환급", "통장협박", "지급정지",
+    ],
+    "금융": [
+        "사기", "특수사기", "상습사기", "컴퓨터등사용사기", "보험사기", "투자사기", "전세사기",
+        "대출사기", "취업사기", "중고거래사기", "부동산사기", "계약사기", "소송사기", "온라인사기",
+        "중고나라사기", "당근사기", "미끼상품사기", "로맨스스캠", "리딩방사기", "리딩사기",
+        "유사수신", "다단계", "폰지사기", "코인사기", "가상자산사기", "비트코인사기",
+        "선물거래사기", "자본시장법", "주가조작", "부정거래", "스미싱", "파밍",
+    ],
 }
 # 의뢰의도 접미(정보성 제외: 뜻/양식/판례 등 안 넣음)
 SUFFIX = [
@@ -44,10 +58,10 @@ REGIONS = [
     "서울", "강남", "수원", "성남", "분당", "용인", "부천", "안양",
 ]
 
-CAT_PREFIX = {"성범죄": "F.성범죄"}
+CAT_PREFIX = {"성범죄": "F.성범죄", "보피": "H.보이스피싱", "금융": "G.금융"}
 
-# 성범죄 세부주제 라우팅: 코어 → 세부주제 베이스명(성별 남자·여자 양쪽에 등록)
-def route_base(core):
+# 성범죄 세부주제 라우팅: 코어 → 세부주제 베이스명(성별 남자·여자 양쪽)
+def route_base_sex(core):
     if any(t in core for t in ["아청", "아동", "성착취물"]):
         return "아청법"
     if any(t in core for t in ["촬영", "몰카", "카촬", "딥페이크", "허위영상물", "디지털", "통매음", "통신매체"]):
@@ -58,15 +72,17 @@ def route_base(core):
         return "의제강간"
     return "성범죄"
 
+# 금융 세부주제: 리딩/코인/사기
+def route_base_fin(core):
+    if "리딩" in core:
+        return "리딩"
+    if any(t in core for t in ["코인", "가상자산", "비트코인", "선물거래"]):
+        return "코인"
+    return "사기"
+
 
 # 세부주제 베이스 → 그룹명에 포함될 후보(성별 양쪽). 매칭되는 ON 그룹 전부에 등록.
-BASE_MATCH = {
-    "성범죄": ["성범죄_남자", "성범죄_여자"],
-    "아청법": ["아청법_남자", "아청법_여자"],
-    "의제강간": ["의제강간_남자", "의제강간_여자"],
-    "디지털성범죄": ["디지털성범죄"],
-    "성매매": ["성매매"],
-}
+SEX_GENDERED = {"성범죄", "아청법", "의제강간"}   # 남자·여자 양쪽 등록 대상
 
 
 def norm(k):
@@ -162,19 +178,29 @@ def main():
             if is_cat and (not ONLY_ON or (_on(c) and _on(g))):
                 groups.append({"name": str(g.get("name", "")), "id": gid, "kwset": kwset})
 
+    def pick_main(cands):
+        """정보/지역/세부/조합 등 파생 제외하고 메인/주력 1곳."""
+        main = [g for g in cands if any(x in g["name"] for x in ["메인", "주력"])]
+        if not main:
+            main = [g for g in cands if not any(x in g["name"] for x in
+                    ["_정보", "_지역", "_세부", "_조합", "_강남", "_수원", "_상담", "_소송", "_변호사"])]
+        return main or cands
+
     def target_groups(core):
-        """성별분리 세부주제(성범죄/아청/의제)는 남자·여자 양쪽. 성별없는(디지털/성매매)은 대표 1곳."""
-        base = route_base(core)
-        if base in ("성범죄", "아청법", "의제강간"):
-            want = [base + "_남자", base + "_여자"]
-            out = [g for g in groups if any(w in g["name"] for w in want)]
+        if cat == "성범죄":
+            base = route_base_sex(core)
+            if base in SEX_GENDERED:            # 성범죄/아청/의제 → 남자·여자 양쪽
+                want = [base + "_남자", base + "_여자"]
+                out = [g for g in groups if any(w in g["name"] for w in want)]
+            else:                               # 디지털/성매매 → 대표 1곳
+                out = pick_main([g for g in groups if base in g["name"]])[:1]
+        elif cat == "보피":                      # 메인 보이스피싱(정보 제외), 시간대 양쪽
+            out = [g for g in groups if "보이스피싱" in g["name"] and "정보" not in g["name"]]
+        elif cat == "금융":                      # 사기/리딩/코인 판별 → 각 메인/주력 1곳
+            base = route_base_fin(core)
+            out = pick_main([g for g in groups if base in g["name"]])[:1]
         else:
-            cands = [g for g in groups if base in g["name"]]
-            main = [g for g in cands if "메인" in g["name"]]
-            if not main:
-                main = [g for g in cands if not any(x in g["name"]
-                        for x in ["_정보", "_지역", "_상담", "_소송", "_변호사"])]
-            out = main[:1] or cands[:1]
+            out = [groups[0]] if groups else []
         return out or ([groups[0]] if groups else [])
 
     # 죄명별 기존등록 밀도 → '촘촘'(THRESH 이상)은 확장 스킵(근접중복 방지)
